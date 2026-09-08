@@ -1,3 +1,4 @@
+import 'package:signer/services/push/push_registration_runtime.dart';
 import 'dart:io';
 
 import 'package:dio/dio.dart';
@@ -181,9 +182,11 @@ Future<String?> getToken() async {
   return prefs.getString('jwtToken') != null ? prefs.getString('jwtToken') : '';
 }
 
-saveToken(token) async {
-  final SharedPreferences prefs = await SharedPreferences.getInstance();
-  await prefs.setString('jwtToken', token);
+Future<bool> saveToken(String token, {int? generation}) async {
+  if (!await PushRegistrationRuntime.persistToken(
+      token, generation ?? PushRegistrationRuntime.sessionGeneration)) {
+    return false;
+  }
   
   // Immediately update button states after saving JWT token
   final appController = getX.Get.find<AppController>();
@@ -192,9 +195,11 @@ saveToken(token) async {
   // Also get user profile to set scan button based on authCode
   final apiService = ApiService();
   await apiService.getUserProfile();
+  return true;
 }
 
 Future<String> refreshToken() async {
+  final generation = PushRegistrationRuntime.sessionGeneration;
   final FlutterSecureStorage _storage = const FlutterSecureStorage();
 
   // 1. Get logged-in email
@@ -237,8 +242,8 @@ Future<String> refreshToken() async {
 
   // 5. Handle response
   if (response != null && response.statusCode == 200 && response.data != null) {
-    await saveToken(response.data['access_token']);
-    return 'OK';
+    return await saveToken(response.data['access_token'], generation: generation)
+        ? 'OK' : 'FAILED';
   } else {
     return 'FAILED';
   }

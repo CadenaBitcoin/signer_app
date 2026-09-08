@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:signer/services/push/push_registration_runtime.dart';
 import 'package:get/get.dart';
 import 'package:signer/services/app_minimize_service.dart';
 import 'package:signer/services/auto_signing_service.dart';
@@ -20,6 +21,7 @@ void main() async {
   Get.put(AutoSigningService());
   Get.put(AppMinimizeService());
   Get.put(secureStorageService); // Make secure storage service globally available
+  PushRegistrationRuntime.initialize(AppController.API_BASE_URL);
 
   // OR Option 2: From wallet file
   // final path = await getWalletPath();
@@ -50,6 +52,9 @@ class _MyAppState extends State<MyApp> with WidgetsBindingObserver {
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
     super.didChangeAppLifecycleState(state);
+    if (state == AppLifecycleState.resumed) {
+      PushRegistrationRuntime.authenticated();
+    }
     
     // Handle app lifecycle changes globally
     try {

@@ -383,16 +383,8 @@ class _HomeScreenState extends State<HomeScreen> {
       // Set xpub mismatch flag to block API calls
       appController.setXpubMismatchDetected();
 
-      // Clear all user data from StorageService
-      await StorageService.clearAllUsers();
-
-      // Clear SharedPreferences
-      final SharedPreferences prefs = await SharedPreferences.getInstance();
-      await prefs.clear();
-
-      // Clear FlutterSecureStorage
-      const FlutterSecureStorage storage = FlutterSecureStorage();
-      await storage.deleteAll();
+      // Deactivate the installation before credentials are destroyed.
+      await StorageService.resetUserData();
 
       print("All data wiped successfully - API calls will be blocked until next login");
 

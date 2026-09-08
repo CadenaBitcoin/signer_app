@@ -1,0 +1,91 @@
+import 'dart:async';
+import 'dart:convert';
+import 'package:flutter/foundation.dart';
+import 'package:flutter_secure_storage/flutter_secure_storage.dart';
+import 'package:shared_preferences/shared_preferences.dart';
+import 'firebase_installation_service.dart';
+import 'push_registration_api.dart';
+import 'push_registration_lifecycle.dart';
+
+/// The single bridge from existing authentication/storage hooks to push services.
+class PushRegistrationRuntime {
+  static PushRegistrationLifecycle? lifecycle;
+  static int sessionGeneration = 0;
+  static bool _tearingDown = false;
+
+  static void initialize(String baseUrl) {
+    final platform = installationPlatform(defaultTargetPlatform, web: kIsWeb);
+    final firebase = platform == null
+        ? null
+        : FirebaseInstallationService.forPlatform(platform);
+    lifecycle = PushRegistrationLifecycle(
+      readToken: authenticatedToken,
+      readFid: () => firebase!.getId(),
+      platform: platform,
+      api: PushRegistrationApi(baseUrl),
+      log: (event) => debugPrint(event),
+    );
+    authenticated();
+  }
+
+  static Future<String?> authenticatedToken() async {
+    const storage = FlutterSecureStorage();
+    if (await storage.read(key: 'isLoggedIn') != 'true') return null;
+    final prefs = await SharedPreferences.getInstance();
+    final token = prefs.getString('jwtToken');
+    if (token == null) return null;
+    try {
+      // Local freshness check only; backend remains the authority on identity.
+      final parts = token.split('.');
+      if (parts.length != 3) return null;
+      final claims = jsonDecode(
+          utf8.decode(base64Url.decode(base64Url.normalize(parts[1]))));
+      final exp = claims['exp'];
+      return exp is num && exp * 1000 > DateTime.now().millisecondsSinceEpoch
+          ? token
+          : null;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  static void authenticated() {
+    if (!_tearingDown) unawaited(lifecycle?.register() ?? Future<void>.value());
+  }
+
+  /// Token writers use a generation captured before their login/refresh request.
+  /// A response arriving after logout must not resurrect that old session.
+  static Future<bool> persistToken(String token, int generation) async {
+    if (_tearingDown || generation != sessionGeneration) return false;
+    final prefs = await SharedPreferences.getInstance();
+    if (_tearingDown || generation != sessionGeneration) return false;
+    await prefs.setString('jwtToken', token);
+    if (_tearingDown || generation != sessionGeneration) {
+      if (prefs.getString('jwtToken') == token) await prefs.remove('jwtToken');
+      return false;
+    }
+    authenticated();
+    return true;
+  }
+
+  static Future<void> disconnect(Future<void> Function() clearSession) async {
+    _tearingDown = true;
+    sessionGeneration++;
+    Future<void> clear() async {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.remove('jwtToken');
+      await clearSession();
+    }
+
+    try {
+      final service = lifecycle;
+      if (service == null) {
+        await clear();
+      } else {
+        await service.disconnect(clear);
+      }
+    } finally {
+      _tearingDown = false;
+    }
+  }
+}

@@ -1,3 +1,4 @@
+import 'package:signer/services/push/push_registration_runtime.dart';
 import 'package:get/get.dart' as getX;
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:signer/models/appVersionEPModel.dart';
@@ -15,6 +16,7 @@ class ApiService {
   final appController = getX.Get.find<AppController>();
 
   Future<String> login({String? email, String? pass}) async {
+    final generation = PushRegistrationRuntime.sessionGeneration;
     // Check if API calls should be blocked due to xpub mismatch
     if (appController.shouldBlockApiCalls()) {
       print("API call blocked due to xpub mismatch - data reset required");
@@ -50,7 +52,9 @@ class ApiService {
         response.data != null) {
       // Clear xpub mismatch flag BEFORE saving token to ensure getUserProfile works
       appController.clearXpubMismatchDetected();
-      saveToken(response.data['access_token']);
+      if (!await saveToken(response.data['access_token'], generation: generation)) {
+        return 'FAILED';
+      }
       // appController.user.value = user;
       return 'OK';
     } else {
@@ -58,15 +62,18 @@ class ApiService {
     }
   }
 
-  saveToken(token) async {
-    final SharedPreferences prefs = await SharedPreferences.getInstance();
-    await prefs.setString('jwtToken', token);
+  Future<bool> saveToken(String token, {int? generation}) async {
+    if (!await PushRegistrationRuntime.persistToken(
+        token, generation ?? PushRegistrationRuntime.sessionGeneration)) {
+      return false;
+    }
     
     // Immediately update button states after saving JWT token
     appController.checkJwtTokenAndUpdateButtons();
     
     // Also get user profile to set scan button based on authCode
     await getUserProfile();
+    return true;
   }
 
   /// Register new user - returns 'OK' if successful, 'FAILED' if user already exists

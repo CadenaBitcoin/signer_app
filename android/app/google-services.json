@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "140533905494",
+    "project_id": "signer-app-ca780",
+    "storage_bucket": "signer-app-ca780.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:140533905494:android:057c25c2d851a7b31463f7",
+        "android_client_info": {
+          "package_name": "com.app.cadenabitcoin"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyBuR3pY--p_WYcwTHH4Hi_yULXYfRfKmdk"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

@@ -1,4 +1,6 @@
 import 'dart:convert';
+import 'package:shared_preferences/shared_preferences.dart';
+import 'package:signer/services/push/push_registration_runtime.dart';
 
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:get/get.dart';
@@ -90,6 +92,13 @@ class StorageService {
 
   /// Clear all users (optional for reset)
   static Future<void> clearAllUsers() async {
+    await PushRegistrationRuntime.disconnect(() async {
+      await _storage.write(key: 'isLoggedIn', value: 'false');
+      await _clearAllUsers();
+    });
+  }
+
+  static Future<void> _clearAllUsers() async {
     final userListRaw = await _storage.read(key: _userListKey);
     if (userListRaw != null) {
       final List<String> userList = List<String>.from(jsonDecode(userListRaw));
@@ -102,7 +111,16 @@ class StorageService {
 
   static Future<void> logoutUser() async {
     // Don't delete user data, just set isLoggedIn to false
-    await _storage.write(key: 'isLoggedIn', value: 'false');
+    await PushRegistrationRuntime.disconnect(() =>
+        _storage.write(key: 'isLoggedIn', value: 'false'));
+  }
+
+  static Future<void> resetUserData() async {
+    await PushRegistrationRuntime.disconnect(() async {
+      await _storage.deleteAll();
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.clear();
+    });
   }
 
   static Future<String?> getLoggedInEmail() async {
@@ -120,7 +138,9 @@ class StorageService {
   }
 
   static Future<void> setLoginStatus(bool isLoggedIn) async {
+    if (!isLoggedIn) return logoutUser();
     await _storage.write(key: 'isLoggedIn', value: isLoggedIn.toString());
+    PushRegistrationRuntime.authenticated();
   }
 
   static Future<bool> getLoginStatus() async {

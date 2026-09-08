@@ -74,7 +74,8 @@ class AppController extends GetxController {
   static const String NETWORK_ENVIRONMENT = "bitcoin";
   
   /// API Base URL - change this for different environments
-  static const String API_BASE_URL = "http://cadenabitcoin.com/app";
+  static const String API_BASE_URL = String.fromEnvironment(
+    'API_BASE_URL', defaultValue: 'http://cadenabitcoin.com/app');
   // For staging: "http://staging.purabitcoin.com/app"
   
   // ========================================

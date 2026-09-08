@@ -1,4 +1,5 @@
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
+import 'package:signer/services/push/push_registration_runtime.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 /// Enhanced Secure Storage Service with first-launch check and data clearing
@@ -64,7 +65,7 @@ class SecureStorageService {
   /// Delete all data from secure storage
   Future<void> deleteAll() async {
     try {
-      await _storage.deleteAll();
+      await PushRegistrationRuntime.disconnect(() => _storage.deleteAll());
     } catch (e) {
       rethrow;
     }
@@ -102,7 +103,7 @@ class SecureStorageService {
   /// Force clear all data and reset first launch flag (useful for testing)
   Future<void> forceReset() async {
     try {
-      await _storage.deleteAll();
+      await deleteAll();
       await resetFirstLaunchFlag();
     } catch (e) {
       rethrow;

@@ -1,0 +1,106 @@
+= Firebase installation registration (#297)
+
+== Scope and lifecycle
+
+The client uses `firebase_core` and `firebase_app_installations` only. It does
+not request notification permission, obtain an FCM token, receive messages, or
+handle notification taps. Firebase Installation IDs are passed unchanged.
+
+`FirebaseInstallationService` initializes the default Firebase app lazily using
+explicit client options and obtains the SDK's FID. `PushRegistrationApi` uses
+the existing API base URL and bearer JWT, without the UI-oriented DataService
+logging/interceptors. Requests contain only `firebase_installation_id` and
+`platform`; DELETE URL-encodes the FID and accepts an empty 204 response.
+
+`PushRegistrationRuntime` connects the existing token-save paths (backend login
+and token refresh), local unlock, startup, and app resume to the lifecycle
+service. Registration requires the local login flag and a nonexpired JWT.
+The backend verifies the JWT and derives ownership. An expired JWT waits for
+the existing authentication flow; this feature does not refresh credentials
+independently. Successful registration is throttled for five minutes for the
+same token; changed credentials register immediately. Failed attempts retry
+on a later lifecycle event, without a retry loop.
+
+Logout, user-data reset, clear-all-users and secure-storage reset drain pending
+registration and attempt DELETE before clearing credentials. Logout now removes
+the backend JWT as well as clearing the local login flag; wallet records remain.
+Late login/refresh responses from before teardown cannot restore that session.
+Network/Firebase operations are bounded (12 seconds each); failure does not
+block local teardown. An in-flight operation followed by DELETE can take up to
+24 seconds. Cancellation cannot undo a request already accepted by the server:
+an offline logout or timeout may leave a registration active until a subsequent
+registration or future backend cleanup policy. No automatic cleanup is added.
+
+Only diagnostic event names are logged by these services, never JWTs, FIDs,
+wallet material, request bodies or exception objects. A 409 is logged as
+`push_registration_platform_conflict`; the platform is never rewritten.
+
+== Required external Firebase configuration
+
+Android client configuration is included in `android/app/google-services.json`
+for Firebase project `signer-app-ca780` and package `com.app.cadenabitcoin`.
+The current initialization code does not read that file automatically: explicit
+Dart defines listed below are still required. No GoogleService-Info.plist or
+firebase_options.dart is included. Both native application identifiers are
+`com.app.cadenabitcoin`.
+
+An authorized Firebase project owner must select the staging project and register
+Android and iOS applications with that identifier, then supply these actual
+client configuration values from Firebase (do not invent them):
+
+* `FIREBASE_PROJECT_ID`
+* `FIREBASE_MESSAGING_SENDER_ID` (Firebase project number; required FirebaseOptions
+  metadata, not an implementation of message sending)
+* `FIREBASE_ANDROID_APP_ID` and `FIREBASE_ANDROID_API_KEY` for Android
+* `FIREBASE_IOS_APP_ID` and `FIREBASE_IOS_API_KEY` for iOS
+
+Pass these as Flutter Dart defines, or in an externally supplied JSON file via
+`--dart-define-from-file=/path/to/actual-firebase-client-config.json`.
+The file must also set `API_BASE_URL` to
+`https://staging.purabitcoin.com/app` for staging. This HTTPS hostname was checked
+without credentials and the registration route advertises POST. The existing
+production URL remains the default; a staging build must explicitly select staging.
+Do not change wallet network settings merely to select this API endpoint.
+
+Explicit FirebaseOptions are used rather than generated/native project files.
+No Google Services Gradle plugin is required for this options-based initialization.
+Do not include backend service-account credentials. Missing options safely fail
+registration while the rest of the app remains usable. Android's minimum SDK is
+23, as required by the resolved FlutterFire package; iOS already targets 15.5.
+The committed pubspec.lock records the tested dependency resolution.
+
+Example command, using a file containing real values supplied by the project owner:
+
+[source,shell]
+----
+flutter run -d <android-or-ios-device> \
+  --dart-define-from-file=/path/to/actual-firebase-client-config.json
+----
+
+== Verification
+
+CI installs Flutter 3.35.3, enforces the dependency lockfile, analyzes the new
+services/tests and runs every Flutter test. Service/API tests use fake Firebase
+callbacks, a recording Dio adapter and platform storage mocks; they do not claim
+to prove native Firebase or remote database behavior.
+
+For staging acceptance, use an actual configured Android/iOS installation:
+
+. Authenticate and confirm POST returns 200.
+. Through authorized backend DB inspection, confirm one active row with the
+  SDK FID, platform and authenticated user's UUID.
+. Restart the app with the session retained; confirm 200 and that the same row
+  and created_at remain while last_registered_at advances.
+. Log out/reset; confirm DELETE returns 204 and the row becomes inactive without
+  changing last_registered_at.
+. Log in again; confirm reactivation. Repeat with another account if available
+  to verify backend reassociation of the same installation row.
+
+Runtime acceptance remains pending: the Android client configuration file alone
+does not establish a successful native initialization or backend registration.
+Real-device testing with explicit Firebase options and an authenticated staging
+test account/DB inspection context is still required. No real FID, POST/DELETE
+mutation, or DB result is claimed by the service tests.
+The full-app analyzer also reports a pre-existing case-sensitive import defect:
+secretPhrase.dart imports app_text_styles.dart, while the tracked filename is
+app_Text_Styles.dart. That unrelated defect is unchanged.
