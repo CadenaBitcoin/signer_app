@@ -7,7 +7,8 @@ not request notification permission, obtain an FCM token, receive messages, or
 handle notification taps. Firebase Installation IDs are passed unchanged.
 
 `FirebaseInstallationService` initializes the default Firebase app lazily using
-explicit client options and obtains the SDK's FID. `PushRegistrationApi` uses
+native Google Services resources on Android and explicit client options on iOS,
+then obtains the SDK's FID. `PushRegistrationApi` uses
 the existing API base URL and bearer JWT, without the UI-oriented DataService
 logging/interceptors. Requests contain only `firebase_installation_id` and
 `platform`; DELETE URL-encodes the FID and accepts an empty 204 response.
@@ -39,41 +40,51 @@ wallet material, request bodies or exception objects. A 409 is logged as
 
 Android client configuration is included in `android/app/google-services.json`
 for Firebase project `signer-app-ca780` and package `com.app.cadenabitcoin`.
-The current initialization code does not read that file automatically: explicit
-Dart defines listed below are still required. No GoogleService-Info.plist or
+The Google Services Gradle plugin processes that file into Android resources;
+FlutterFire initializes the default Android app using those native resources.
+Android Firebase Dart defines are not required or used. No GoogleService-Info.plist or
 firebase_options.dart is included. Both native application identifiers are
 `com.app.cadenabitcoin`.
 
-An authorized Firebase project owner must select the staging project and register
-Android and iOS applications with that identifier, then supply these actual
-client configuration values from Firebase (do not invent them):
+For iOS, an authorized Firebase project owner must register an application with
+that identifier and supply these actual client configuration values from Firebase:
 
 * `FIREBASE_PROJECT_ID`
 * `FIREBASE_MESSAGING_SENDER_ID` (Firebase project number; required FirebaseOptions
   metadata, not an implementation of message sending)
-* `FIREBASE_ANDROID_APP_ID` and `FIREBASE_ANDROID_API_KEY` for Android
 * `FIREBASE_IOS_APP_ID` and `FIREBASE_IOS_API_KEY` for iOS
 
 Pass these as Flutter Dart defines, or in an externally supplied JSON file via
 `--dart-define-from-file=/path/to/actual-firebase-client-config.json`.
-The file must also set `API_BASE_URL` to
+For staging on either platform, set `API_BASE_URL` to
 `https://staging.purabitcoin.com/app` for staging. This HTTPS hostname was checked
 without credentials and the registration route advertises POST. The existing
 production URL remains the default; a staging build must explicitly select staging.
 Do not change wallet network settings merely to select this API endpoint.
 
-Explicit FirebaseOptions are used rather than generated/native project files.
-No Google Services Gradle plugin is required for this options-based initialization.
-Do not include backend service-account credentials. Missing options safely fail
-registration while the rest of the app remains usable. Android's minimum SDK is
+Android uses `android/app/google-services.json` as its Firebase configuration
+source. Use a configuration file for the intended Firebase project when building
+for another environment; `API_BASE_URL` changes only the backend destination.
+iOS continues to use explicit FirebaseOptions.
+Do not include backend service-account credentials. Missing iOS options safely
+fail registration while the rest of the app remains usable. Missing or mismatched
+Android JSON configuration fails the Google Services build task. Android's minimum SDK is
 23, as required by the resolved FlutterFire package; iOS already targets 15.5.
 The committed pubspec.lock records the tested dependency resolution.
 
-Example command, using a file containing real values supplied by the project owner:
+Android staging example (Firebase values come from google-services.json):
 
 [source,shell]
 ----
-flutter run -d <android-or-ios-device> \
+flutter run -d <android-device> \
+  --dart-define=API_BASE_URL=https://staging.purabitcoin.com/app
+----
+
+iOS example, using a file containing real values supplied by the project owner:
+
+[source,shell]
+----
+flutter run -d <ios-device> \
   --dart-define-from-file=/path/to/actual-firebase-client-config.json
 ----
 
@@ -98,7 +109,7 @@ For staging acceptance, use an actual configured Android/iOS installation:
 
 Runtime acceptance remains pending: the Android client configuration file alone
 does not establish a successful native initialization or backend registration.
-Real-device testing with explicit Firebase options and an authenticated staging
+Real-device testing with native Android resources (or explicit iOS options) and an authenticated staging
 test account/DB inspection context is still required. No real FID, POST/DELETE
 mutation, or DB result is claimed by the service tests.
 The full-app analyzer also reports a pre-existing case-sensitive import defect:

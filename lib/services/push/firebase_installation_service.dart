@@ -12,15 +12,14 @@ String? installationPlatform(TargetPlatform platform, {bool web = false}) {
 }
 
 /// Client configuration only. No service-account credentials belong in the app.
-FirebaseOptions installationOptions(String platform) {
+FirebaseOptions? installationOptions(String platform) {
+  // Android loads the resources generated from google-services.json. Keep one
+  // source of configuration for the native default app and FlutterFire.
+  if (platform == 'android') return null;
   const project = String.fromEnvironment('FIREBASE_PROJECT_ID');
   const sender = String.fromEnvironment('FIREBASE_MESSAGING_SENDER_ID');
-  final appId = platform == 'android'
-      ? const String.fromEnvironment('FIREBASE_ANDROID_APP_ID')
-      : const String.fromEnvironment('FIREBASE_IOS_APP_ID');
-  final apiKey = platform == 'android'
-      ? const String.fromEnvironment('FIREBASE_ANDROID_API_KEY')
-      : const String.fromEnvironment('FIREBASE_IOS_API_KEY');
+  const appId = String.fromEnvironment('FIREBASE_IOS_APP_ID');
+  const apiKey = String.fromEnvironment('FIREBASE_IOS_API_KEY');
   if ([project, sender, appId, apiKey].any((value) => value.isEmpty)) {
     throw StateError('Firebase client configuration is missing');
   }

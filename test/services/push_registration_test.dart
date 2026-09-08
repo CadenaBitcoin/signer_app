@@ -134,8 +134,11 @@ void main() {
         initialize: () async {}, readId: () async => ' \t');
     await expectLater(firebase.getId(), throwsStateError);
   });
-  test('missing real Firebase configuration fails explicitly', () {
-    expect(() => installationOptions('android'), throwsStateError);
+  test('Android initialization uses native Google Services resources', () {
+    expect(installationOptions('android'), isNull);
+  });
+  test('missing iOS Firebase configuration fails explicitly', () {
+    expect(() => installationOptions('ios'), throwsStateError);
   });
   for (final platform in [TargetPlatform.android, TargetPlatform.iOS]) {
     test('platform maps ${platform.name}', () {
