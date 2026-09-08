@@ -30,7 +30,8 @@ dependencies:
   shared_preferences: ^2.5.3
   dio: ^5.8.0+1
   firebase_core: ^4.12.1
-  firebase_app_installations: ^0.4.2+6
+  fcm_registration:
+    path: packages/fcm_registration
   fluttertoast: ^8.2.12
   decimal: ^3.2.4
   bech32: ^0.2.2

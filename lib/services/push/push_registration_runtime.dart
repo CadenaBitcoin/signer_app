@@ -12,20 +12,71 @@ class PushRegistrationRuntime {
   static PushRegistrationLifecycle? lifecycle;
   static int sessionGeneration = 0;
   static bool _tearingDown = false;
+  static FirebaseInstallationService? _firebase;
 
   static void initialize(String baseUrl) {
+    unawaited(_firebase?.dispose() ?? Future<void>.value());
     final platform = installationPlatform(defaultTargetPlatform, web: kIsWeb);
-    final firebase = platform == null
+    late final FirebaseInstallationService? firebase;
+    firebase = platform == null
         ? null
-        : FirebaseInstallationService.forPlatform(platform);
+        : FirebaseInstallationService.forPlatform(platform, onRegistered: () {
+            if (identical(_firebase, firebase)) authenticated(force: true);
+          });
+    _firebase = firebase;
     lifecycle = PushRegistrationLifecycle(
       readToken: authenticatedToken,
       readFid: () => firebase!.getId(),
       platform: platform,
       api: PushRegistrationApi(baseUrl),
+      loadState: (token) => loadRegistrationState(baseUrl, token),
+      saveState: (token, state) => saveRegistrationState(baseUrl, token, state),
       log: (event) => debugPrint(event),
     );
     authenticated();
+  }
+
+  // Scope durable cleanup state by backend and authenticated subject, never by
+  // JWT bytes (which rotate). Use the app's existing secure-storage facility.
+  static String _registrationKey(String baseUrl, String token) {
+    final claims = jsonDecode(utf8
+        .decode(base64Url.decode(base64Url.normalize(token.split('.')[1]))));
+    final subject = claims['sub'];
+    if (subject is! String || subject.isEmpty) {
+      throw StateError('Missing authenticated subject');
+    }
+    return 'push_registration:${jsonEncode([
+          baseUrl.replaceFirst(RegExp(r'/$'), ''),
+          subject,
+        ])}';
+  }
+
+  static Future<BackendRegistrationState> loadRegistrationState(
+      String baseUrl, String token) async {
+    const storage = FlutterSecureStorage();
+    final raw = await storage.read(key: _registrationKey(baseUrl, token));
+    if (raw == null) return BackendRegistrationState();
+    final data = jsonDecode(raw) as Map<String, dynamic>;
+    return BackendRegistrationState(
+      registeredFid: data['registered_fid'] as String?,
+      pending: (data['pending_cleanup'] as List).cast<String>(),
+    );
+  }
+
+  static Future<void> saveRegistrationState(
+      String baseUrl, String token, BackendRegistrationState state) async {
+    const storage = FlutterSecureStorage();
+    final key = _registrationKey(baseUrl, token);
+    if (state.registeredFid == null && state.pendingCleanup.isEmpty) {
+      await storage.delete(key: key);
+    } else {
+      await storage.write(
+          key: key,
+          value: jsonEncode({
+            'registered_fid': state.registeredFid,
+            'pending_cleanup': state.pendingCleanup.toList(),
+          }));
+    }
   }
 
   static Future<String?> authenticatedToken() async {
@@ -49,8 +100,10 @@ class PushRegistrationRuntime {
     }
   }
 
-  static void authenticated() {
-    if (!_tearingDown) unawaited(lifecycle?.register() ?? Future<void>.value());
+  static void authenticated({bool force = false}) {
+    if (!_tearingDown) {
+      unawaited(lifecycle?.register(force: force) ?? Future<void>.value());
+    }
   }
 
   /// Token writers use a generation captured before their login/refresh request.

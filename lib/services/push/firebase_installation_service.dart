@@ -1,4 +1,5 @@
-import 'package:firebase_app_installations/firebase_app_installations.dart';
+import 'dart:async';
+import 'package:fcm_registration/fcm_registration.dart';
 import 'package:firebase_core/firebase_core.dart';
 import 'package:flutter/foundation.dart';
 
@@ -35,33 +36,74 @@ FirebaseOptions? installationOptions(String platform) {
 class FirebaseInstallationService {
   FirebaseInstallationService({
     required this.initialize,
-    required this.readId,
+    required this.register,
+    required this.registeredFids,
+    this.onRegistered,
+    this.timeout = const Duration(seconds: 10),
   });
 
-  factory FirebaseInstallationService.forPlatform(String platform) {
+  factory FirebaseInstallationService.forPlatform(String platform,
+      {void Function()? onRegistered}) {
     return FirebaseInstallationService(
       initialize: () async {
         if (Firebase.apps.isEmpty) {
           await Firebase.initializeApp(options: installationOptions(platform));
         }
       },
-      readId: () => FirebaseInstallations.instance.getId(),
+      register: FcmRegistration.register,
+      registeredFids: FcmRegistration.registeredFids,
+      onRegistered: onRegistered,
     );
   }
 
   final Future<void> Function() initialize;
-  final Future<String> Function() readId;
+  final Future<void> Function() register;
+  final Stream<String> registeredFids;
+  final void Function()? onRegistered;
+  final Duration timeout;
   Future<void>? _initializing;
+  StreamSubscription<String>? _subscription;
+  String? _registeredFid;
+  Completer<String>? _waiting;
+
+  Future<void> _start() async {
+    await initialize();
+    _subscription ??= registeredFids.listen((fid) {
+      if (fid.trim().isEmpty) return;
+      _registeredFid = fid;
+      final waiting = _waiting;
+      if (waiting != null && !waiting.isCompleted) waiting.complete(fid);
+      onRegistered?.call();
+    }, onError: (Object _) {
+      // Sanitized diagnostics only. A later authenticated lifecycle may retry.
+      debugPrint('fcm_registration_callback_failed');
+      _initializing = null;
+      _registeredFid = null;
+    });
+    await register();
+  }
 
   Future<String> getId() async {
     try {
-      await (_initializing ??= initialize());
+      await (_initializing ??= _start()).timeout(timeout);
     } catch (_) {
       _initializing = null; // A later lifecycle event may retry initialization.
       rethrow;
     }
-    final fid = await readId();
-    if (fid.trim().isEmpty) throw StateError('Firebase returned an empty FID');
-    return fid; // Opaque: never normalize or substitute another identifier.
+    if (_registeredFid != null) return _registeredFid!;
+    final waiting = _waiting ??= Completer<String>();
+    try {
+      return await waiting.future.timeout(timeout);
+    } catch (_) {
+      _initializing = null;
+      rethrow;
+    } finally {
+      if (identical(_waiting, waiting)) _waiting = null;
+    }
+  }
+
+  Future<void> dispose() async {
+    await _subscription?.cancel();
+    _subscription = null;
   }
 }

@@ -1,14 +1,19 @@
-= Firebase installation registration (#297)
+= Firebase installation registration (Signer App issue #27)
 
 == Scope and lifecycle
 
-The client uses `firebase_core` and `firebase_app_installations` only. It does
-not request notification permission, obtain an FCM token, receive messages, or
-handle notification taps. Firebase Installation IDs are passed unchanged.
+The client uses `firebase_core` and a local `fcm_registration` native Messaging
+bridge. This bridge does not introduce notification-permission UI, obtain a
+legacy FCM token, implement message handlers, or handle notification taps.
+The application has separate existing notification-permission code.
+Firebase Installation IDs are passed unchanged.
 
 `FirebaseInstallationService` initializes the default Firebase app lazily using
 native Google Services resources on Android and explicit client options on iOS,
-then obtains the SDK's FID. `PushRegistrationApi` uses
+then requests FCM registration. Only Android `onRegistered(installationId)` or
+iOS `messaging(_:didReceiveRegistration:)` can supply the uploadable FID.
+Neither raw Firebase Installations IDs nor legacy registration tokens are read.
+`PushRegistrationApi` uses
 the existing API base URL and bearer JWT, without the UI-oriented DataService
 logging/interceptors. Requests contain only `firebase_installation_id` and
 `platform`; DELETE URL-encodes the FID and accepts an empty 204 response.
@@ -20,15 +25,67 @@ The backend verifies the JWT and derives ownership. An expired JWT waits for
 the existing authentication flow; this feature does not refresh credentials
 independently. Successful registration is throttled for five minutes for the
 same token; changed credentials register immediately. Failed attempts retry
-on a later lifecycle event, without a retry loop.
+on a later lifecycle event, without a retry loop. Native registered-FID callbacks
+also request a backend refresh, bypassing the five-minute throttle. These callbacks
+remain subject to current authentication and teardown guards. Late callbacks after
+a timeout may retry registration; callbacks while logged out do not upload anything.
+
+`packages/fcm_registration` bridges native `register()` and registered-FID events
+because published FlutterFire `firebase_messaging` 16.6.0 exposes only the legacy
+token lifecycle, not these FID APIs. It pins Android Firebase BoM 34.18.0 (Messaging
+25.1.2) and iOS Firebase/Messaging 12.18.0, aligned with firebase_core 4.14.0.
+Both released native SDKs contain the required callback and registration methods.
+The plugin enables Messaging FID mode and auto-initialization. It listens before
+requesting registration, keeps only callback-confirmed IDs in process memory,
+and forwards automatic refresh callbacks. A successful register() completion
+alone is insufficient: without a nonblank callback FID, backend POST is skipped.
+
+The iOS bridge enrolls with APNs and maps the APNs device token into Messaging;
+it does not expose that token to Dart or the backend. iOS runtime verification
+requires the registered Firebase iOS app, APNs key uploaded to that Firebase
+project, and a provisioning profile with Push Notifications capability and the
+appropriate aps-environment entitlement. These external signing/configuration
+requirements are not fabricated here. No notification permission prompt, message
+handler, notification display or tap routing is added by this change.
+
+References: https://firebase.google.com/docs/cloud-messaging/android/get-started[Android FID registration],
+https://firebase.google.com/docs/cloud-messaging/ios/get-started[iOS FID registration].
+
+The latest callback-confirmed candidate FID is distinct from the last FID
+successfully POSTed to the backend. Only a successful POST advances the latter.
+On rotation from A to B, POST B must succeed before B becomes authoritative and
+best-effort DELETE A is attempted. Failed POST B leaves A authoritative and does
+not delete it. Failed DELETE A does not undo B; A remains pending cleanup, retried
+on later authenticated lifecycle events even if POST is throttled.
+
+The backend-confirmed FID and retired FIDs pending cleanup use the application's
+existing FlutterSecureStorage, scoped by normalized backend URL and JWT `sub`.
+JWT refresh and app restart retain the record; another backend or account does
+not inherit it. No JWT is stored in this record. The candidate remains only in
+the native/Dart callback cache. State is saved after POST success and before
+rotation cleanup. Storage failures are nonfatal and retain in-memory state for
+retry; a crash between server acknowledgement and durable local storage remains
+an unavoidable failure window without a different backend protocol.
 
 Logout, user-data reset, clear-all-users and secure-storage reset drain pending
-registration and attempt DELETE before clearing credentials. Logout now removes
+registration and deactivate the backend-confirmed FID first, then retired IDs,
+before clearing credentials. Teardown never acquires a candidate FID. A callback
+B that has not been POSTed successfully cannot replace A as the cleanup target.
+If an already in-flight POST B succeeds while logout drains it, cleanup targets
+B and then A. Late callbacks cannot start another POST during teardown or while
+logged out. Successful DELETE removes its local tracking entry. Failed cleanup
+survives ordinary logout for a later authenticated retry, but a full secure-storage
+reset/reinstall clears that local history. Definitive-Unregistered cleanup in the
+backend sender remains the backstop; this change adds no backend protocol/schema.
+
+Logout removes
 the backend JWT as well as clearing the local login flag; wallet records remain.
 Late login/refresh responses from before teardown cannot restore that session.
-Network/Firebase operations are bounded (12 seconds each); failure does not
-block local teardown. An in-flight operation followed by DELETE can take up to
-24 seconds. Cancellation cannot undo a request already accepted by the server:
+Candidate acquisition plus POST is bounded to 12 seconds; each cleanup batch
+has a separate 12-second budget. Logout may drain an in-flight registration and
+rotation cleanup before its own cleanup batch (up to 36 seconds of those budgets,
+plus local storage work). Failures do not prevent local teardown.
+Cancellation cannot undo a request already accepted by the server:
 an offline logout or timeout may leave a registration active until a subsequent
 registration or future backend cleanup policy. No automatic cleanup is added.
 
@@ -38,8 +95,15 @@ wallet material, request bodies or exception objects. A 409 is logged as
 
 == Required external Firebase configuration
 
-Android client configuration is included in `android/app/google-services.json`
-for Firebase project `signer-app-ca780` and package `com.app.cadenabitcoin`.
+Android configuration is selected explicitly per build type:
+
+* `android/app/src/debug/google-services.json` -> staging Firebase project
+  `signer-app-staging`.
+* `android/app/src/release/google-services.json` -> production Firebase project
+  `signer-app-ca780` (display name: `signer-app`).
+
+Both use package `com.app.cadenabitcoin`. No generic or `src/main` Firebase
+configuration is present. This mapping was committed separately in `0a64fd0`.
 The Google Services Gradle plugin processes that file into Android resources;
 FlutterFire initializes the default Android app using those native resources.
 Android Firebase Dart defines are not required or used. No GoogleService-Info.plist or
@@ -62,9 +126,10 @@ without credentials and the registration route advertises POST. The existing
 production URL remains the default; a staging build must explicitly select staging.
 Do not change wallet network settings merely to select this API endpoint.
 
-Android uses `android/app/google-services.json` as its Firebase configuration
-source. Use a configuration file for the intended Firebase project when building
-for another environment; `API_BASE_URL` changes only the backend destination.
+Firebase build-type selection and backend/API environment selection are separate.
+Debug selecting the staging Firebase project does NOT select the staging API.
+The existing `API_BASE_URL` / application environment mechanism must independently
+select the corresponding backend; the default API URL remains production.
 iOS continues to use explicit FirebaseOptions.
 Do not include backend service-account credentials. Missing iOS options safely
 fail registration while the rest of the app remains usable. Missing or mismatched
@@ -115,3 +180,15 @@ mutation, or DB result is claimed by the service tests.
 The full-app analyzer also reports a pre-existing case-sensitive import defect:
 secretPhrase.dart imports app_text_styles.dart, while the tracked filename is
 app_Text_Styles.dart. That unrelated defect is unchanged.
+
+The focused regression suite covers callback-only FID acquisition, rotation
+ordering, failed new registration, logout during rotation, persisted cleanup
+across restart/JWT refresh, account/backend isolation and nonfatal failures.
+After the rotation/logout correction, all 59 focused Flutter tests and targeted
+Dart analysis pass. Locked dependency resolution passed for the earlier bridge
+implementation; this correction does not change dependencies.
+Android plugin compilation and manifest merging pass independently. Full-app
+Android compilation is blocked by the existing import-case defect above and the
+unchanged WorkManager Apple/platform-interface parameter mismatch. Native iOS
+methods were checked against the pinned release headers but cannot be compiled
+on this Linux host. Real FCM registration/staging acceptance remains pending.

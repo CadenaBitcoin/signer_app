@@ -50,6 +50,7 @@ void main() {
           })))}.signature';
 
   setUp(() {
+    fid = ' Opaque/FID+AbC ';
     adapter = RecordingAdapter();
     api = PushRegistrationApi('https://staging.invalid/app',
         dio: Dio()..httpClientAdapter = adapter);
@@ -93,11 +94,15 @@ void main() {
 
   test('Firebase returns its exact ID and initializes once', () async {
     var initializations = 0;
+    final registered = StreamController<String>.broadcast();
+    addTearDown(registered.close);
     final firebase = FirebaseInstallationService(
         initialize: () async {
           initializations++;
         },
-        readId: () async => fid);
+        register: () async => registered.add(fid),
+        registeredFids: registered.stream);
+    addTearDown(firebase.dispose);
     expect(await firebase.getId(), fid);
     expect(await firebase.getId(), fid);
     expect(initializations, 1);
@@ -105,11 +110,15 @@ void main() {
   test('initialization can retry after failure without a substitute ID',
       () async {
     var attempts = 0;
+    final registered = StreamController<String>.broadcast();
+    addTearDown(registered.close);
     final firebase = FirebaseInstallationService(
         initialize: () async {
           if (++attempts == 1) throw StateError('unavailable');
         },
-        readId: () async => fid);
+        register: () async => registered.add(fid),
+        registeredFids: registered.stream);
+    addTearDown(firebase.dispose);
     await expectLater(firebase.getId(), throwsStateError);
     expect(await firebase.getId(), fid);
   });
@@ -117,7 +126,9 @@ void main() {
       () async {
     final firebase = FirebaseInstallationService(
         initialize: () async {},
-        readId: () async => throw StateError('unavailable'));
+        register: () async => throw StateError('unavailable'),
+        registeredFids: const Stream.empty());
+    addTearDown(firebase.dispose);
     final service = PushRegistrationLifecycle(
         readToken: () async => token,
         readFid: firebase.getId,
@@ -131,11 +142,118 @@ void main() {
   });
   test('empty Firebase ID is rejected', () async {
     final firebase = FirebaseInstallationService(
-        initialize: () async {}, readId: () async => ' \t');
-    await expectLater(firebase.getId(), throwsStateError);
+        initialize: () async {},
+        register: () async {},
+        registeredFids: Stream.value(' \t'),
+        timeout: const Duration(milliseconds: 10));
+    addTearDown(firebase.dispose);
+    await expectLater(firebase.getId(), throwsA(isA<TimeoutException>()));
   });
   test('Android initialization uses native Google Services resources', () {
     expect(installationOptions('android'), isNull);
+  });
+  test('FCM register success alone does not supply an uploadable FID',
+      () async {
+    final service = FirebaseInstallationService(
+        initialize: () async {},
+        register: () async {},
+        registeredFids: const Stream.empty(),
+        timeout: const Duration(milliseconds: 10));
+    addTearDown(service.dispose);
+    final orchestration = PushRegistrationLifecycle(
+        readToken: () async => token,
+        readFid: service.getId,
+        platform: 'android',
+        api: api,
+        log: events.add);
+    await orchestration.register();
+    expect(adapter.requests, isEmpty);
+    expect(token, 'current-jwt');
+  });
+  test(
+      'late registered-FID callback retries after timeout and forwards rotation',
+      () async {
+    final registered = StreamController<String>.broadcast();
+    addTearDown(registered.close);
+    late PushRegistrationLifecycle orchestration;
+    final service = FirebaseInstallationService(
+        initialize: () async {},
+        register: () async {},
+        registeredFids: registered.stream,
+        timeout: const Duration(milliseconds: 10),
+        onRegistered: () => unawaited(orchestration.register(force: true)));
+    addTearDown(service.dispose);
+    orchestration = PushRegistrationLifecycle(
+        readToken: () async => token,
+        readFid: service.getId,
+        platform: 'android',
+        api: api,
+        log: events.add);
+    await orchestration.register();
+    expect(adapter.requests, isEmpty);
+    registered.add(' Confirmed-FCM-ID ');
+    await Future<void>.delayed(Duration.zero);
+    await orchestration.register();
+    expect(adapter.requests.last.data['firebase_installation_id'],
+        ' Confirmed-FCM-ID ');
+    registered.add('Rotated-FCM-ID');
+    await Future<void>.delayed(Duration.zero);
+    await orchestration.register();
+    expect(
+        adapter.requests
+            .lastWhere((r) => r.method == 'POST')
+            .data['firebase_installation_id'],
+        'Rotated-FCM-ID');
+  });
+  test('FCM events do not register an unauthenticated user or resurrect logout',
+      () async {
+    final registered = StreamController<String>.broadcast();
+    addTearDown(registered.close);
+    final service = FirebaseInstallationService(
+        initialize: () async {},
+        register: () async => registered.add(fid),
+        registeredFids: registered.stream,
+        onRegistered: () => PushRegistrationRuntime.authenticated(force: true));
+    addTearDown(service.dispose);
+    PushRegistrationRuntime.lifecycle = PushRegistrationLifecycle(
+        readToken: () async => token,
+        readFid: service.getId,
+        platform: 'android',
+        api: api,
+        log: events.add);
+    token = null;
+    await service.getId();
+    await PushRegistrationRuntime.lifecycle!.register();
+    expect(adapter.requests, isEmpty);
+    token = 'current-jwt';
+    await PushRegistrationRuntime.lifecycle!.register();
+    await PushRegistrationRuntime.disconnect(() async {
+      token = null;
+    });
+    final count = adapter.requests.length;
+    registered.add('Post-logout-FCM-ID');
+    await Future<void>.delayed(Duration.zero);
+    await PushRegistrationRuntime.lifecycle!.register();
+    expect(adapter.requests.length, count);
+    expect(adapter.requests.last.method, 'DELETE');
+  });
+  test('service disposal detaches the registered-FID listener', () async {
+    final registered = StreamController<String>.broadcast();
+    addTearDown(registered.close);
+    var callbacks = 0;
+    final service = FirebaseInstallationService(
+        initialize: () async {},
+        register: () async => registered.add(fid),
+        registeredFids: registered.stream,
+        onRegistered: () {
+          callbacks++;
+        });
+    await service.getId();
+    await service.dispose();
+    final before = callbacks;
+    registered.add('Later');
+    await Future<void>.delayed(Duration.zero);
+    expect(callbacks, before);
   });
   test('missing iOS Firebase configuration fails explicitly', () {
     expect(() => installationOptions('ios'), throwsStateError);
@@ -217,6 +335,8 @@ void main() {
   });
   test('DELETE targets encoded exact FID, handles empty 204 before teardown',
       () async {
+    await lifecycle.register();
+    adapter.requests.clear();
     adapter.beforeResponse = (request) async {
       expect(token, 'current-jwt');
     };
@@ -231,6 +351,7 @@ void main() {
     expect(events, contains('push_deregistration_succeeded'));
   });
   test('DELETE failure still clears session', () async {
+    await lifecycle.register();
     adapter.deleteStatus = 500;
     await lifecycle.disconnect(() async {
       token = null;
@@ -239,9 +360,10 @@ void main() {
     expect(events.last, 'push_deregistration_failed');
   });
   test('repeated DELETE is safe', () async {
+    await lifecycle.register();
     await lifecycle.disconnect(() async {});
     await lifecycle.disconnect(() async {});
-    expect(adapter.requests, hasLength(2));
+    expect(adapter.requests.map((r) => r.method), ['POST', 'DELETE']);
   });
   test('slow FID cannot register after logout', () async {
     final fidReady = Completer<String>();
@@ -288,6 +410,270 @@ void main() {
     await Future.wait(List.generate(5, (_) => lifecycle.register()));
     expect(adapter.requests, hasLength(1));
   });
+
+  test('rotation confirms B before retiring A, then logout deletes B',
+      () async {
+    fid = 'A';
+    await lifecycle.register();
+    fid = 'B';
+    await lifecycle.register(force: true);
+    expect(adapter.requests.map((r) => r.method), ['POST', 'POST', 'DELETE']);
+    expect(adapter.requests[1].data['firebase_installation_id'], 'B');
+    expect(adapter.requests[2].path, endsWith('/A'));
+    await lifecycle.disconnect(() async {
+      token = null;
+    });
+    expect(adapter.requests.last.path, endsWith('/B'));
+  });
+
+  test('failed POST B preserves A and never prematurely deletes A', () async {
+    fid = 'A';
+    await lifecycle.register();
+    fid = 'B';
+    adapter.postStatus = 500;
+    await lifecycle.register(force: true);
+    expect(adapter.requests.map((r) => r.method), ['POST', 'POST']);
+    await lifecycle.disconnect(() async {
+      token = null;
+    });
+    expect(adapter.requests.last.path, endsWith('/A'));
+  });
+
+  test('logout during candidate acquisition deletes A and prevents POST B',
+      () async {
+    final candidateReady = Completer<String>();
+    final acquiring = Completer<void>();
+    var rotating = false;
+    final service = PushRegistrationLifecycle(
+      readToken: () async => token,
+      readFid: () {
+        if (!rotating) return Future.value('A');
+        acquiring.complete();
+        return candidateReady.future;
+      },
+      platform: 'android',
+      api: api,
+      log: events.add,
+    );
+    await service.register();
+    rotating = true;
+    final rotation = service.register(force: true);
+    await acquiring.future;
+    final logout = service.disconnect(() async {
+      token = null;
+    });
+    candidateReady.complete('B');
+    await Future.wait([rotation, logout]);
+    await service.register(force: true);
+    expect(adapter.requests.map((r) => r.method), ['POST', 'DELETE']);
+    expect(adapter.requests.last.path, endsWith('/A'));
+  });
+
+  for (final succeeds in [false, true]) {
+    test('logout drains in-flight rotation, POST B succeeds=$succeeds',
+        () async {
+      fid = 'A';
+      await lifecycle.register();
+      fid = 'B';
+      final started = Completer<void>();
+      final finish = Completer<void>();
+      adapter.postStatus = succeeds ? 200 : 500;
+      adapter.beforeResponse = (request) async {
+        if (request.method == 'POST') {
+          started.complete();
+          await finish.future;
+        }
+      };
+      final rotation = lifecycle.register(force: true);
+      await started.future;
+      final logout = lifecycle.disconnect(() async {
+        token = null;
+      });
+      finish.complete();
+      await Future.wait([rotation, logout]);
+      final deletions =
+          adapter.requests.where((r) => r.method == 'DELETE').toList();
+      expect(deletions.first.path, endsWith(succeeds ? '/B' : '/A'));
+      if (succeeds) expect(deletions.last.path, endsWith('/A'));
+    });
+  }
+
+  test('failed retirement is nonfatal and retries even during POST throttle',
+      () async {
+    fid = 'A';
+    await lifecycle.register();
+    fid = 'B';
+    adapter.deleteStatus = 500;
+    await lifecycle.register(force: true);
+    expect(events, contains('push_registration_succeeded'));
+    expect(token, 'current-jwt');
+    adapter.deleteStatus = 204;
+    await lifecycle.register();
+    expect(adapter.requests.map((r) => r.method),
+        ['POST', 'POST', 'DELETE', 'DELETE']);
+    expect(adapter.requests.last.path, endsWith('/A'));
+    await lifecycle.disconnect(() async {
+      token = null;
+    });
+    expect(adapter.requests.last.path, endsWith('/B'));
+  });
+
+  PushRegistrationLifecycle persistedLifecycle(String baseUrl,
+          {Future<String> Function()? candidate}) =>
+      PushRegistrationLifecycle(
+        readToken: () async => token,
+        readFid: candidate ?? (() async => fid),
+        platform: 'android',
+        api: api,
+        log: events.add,
+        loadState: (jwt) =>
+            PushRegistrationRuntime.loadRegistrationState(baseUrl, jwt),
+        saveState: (jwt, state) =>
+            PushRegistrationRuntime.saveRegistrationState(baseUrl, jwt, state),
+      );
+
+  test(
+      'restart and JWT refresh retain confirmed A without a candidate callback',
+      () async {
+    const baseUrl = 'https://staging.invalid/app';
+    token = jwt();
+    fid = 'A';
+    await persistedLifecycle(baseUrl).register();
+    token =
+        '${token!}refreshed'; // Same authenticated subject, different JWT bytes.
+    final restarted = persistedLifecycle(baseUrl,
+        candidate: () async => throw StateError('no FCM callback'));
+    await restarted.disconnect(() async {
+      token = null;
+    });
+    expect(adapter.requests.last.path, endsWith('/A'));
+    expect(secure, isEmpty);
+  });
+
+  test('confirmed state is isolated by backend and authenticated subject',
+      () async {
+    const baseUrl = 'https://staging.invalid/app';
+    final firstToken = jwt();
+    token = firstToken;
+    fid = 'A';
+    await persistedLifecycle(baseUrl).register();
+    await persistedLifecycle('https://production.invalid/app')
+        .disconnect(() async {});
+    final otherClaims = base64Url.encode(utf8.encode(jsonEncode({
+      'sub': 'another-user',
+      'exp': 9999999999,
+    })));
+    token = 'header.$otherClaims.signature';
+    await persistedLifecycle(baseUrl).disconnect(() async {});
+    expect(adapter.requests, hasLength(1));
+    token = firstToken;
+    await persistedLifecycle(baseUrl).disconnect(() async {});
+    expect(adapter.requests.last.path, endsWith('/A'));
+  });
+
+  test('pending rotation cleanup survives restart and does not delete active B',
+      () async {
+    const baseUrl = 'https://staging.invalid/app';
+    token = jwt();
+    final service = persistedLifecycle(baseUrl);
+    fid = 'A';
+    await service.register();
+    fid = 'B';
+    adapter.deleteStatus = 500;
+    await service.register(force: true);
+    final stored =
+        await PushRegistrationRuntime.loadRegistrationState(baseUrl, token!);
+    expect(stored.registeredFid, 'B');
+    expect(stored.pendingCleanup, {'A'});
+    adapter.deleteStatus = 204;
+    await persistedLifecycle(baseUrl).disconnect(() async {
+      token = null;
+    });
+    final deletions =
+        adapter.requests.where((r) => r.method == 'DELETE').toList();
+    expect(deletions[deletions.length - 2].path, endsWith('/B'));
+    expect(deletions.last.path, endsWith('/A'));
+    expect(secure, isEmpty);
+  });
+
+  test('B is durably authoritative before DELETE A is attempted', () async {
+    const baseUrl = 'https://staging.invalid/app';
+    token = jwt();
+    final service = persistedLifecycle(baseUrl);
+    fid = 'A';
+    await service.register();
+    adapter.beforeResponse = (request) async {
+      final state =
+          await PushRegistrationRuntime.loadRegistrationState(baseUrl, token!);
+      if (request.method == 'POST') {
+        expect(state.registeredFid, 'A');
+      } else {
+        expect(state.registeredFid, 'B');
+        expect(state.pendingCleanup, {'A'});
+      }
+    };
+    fid = 'B';
+    await service.register(force: true);
+  });
+
+  test('failed logout deletion survives logout and retries after login',
+      () async {
+    const baseUrl = 'https://staging.invalid/app';
+    final credential = jwt();
+    token = credential;
+    fid = 'A';
+    final service = persistedLifecycle(baseUrl);
+    await service.register();
+    adapter.deleteStatus = 500;
+    await service.disconnect(() async {
+      token = null;
+    });
+    expect(
+        (await PushRegistrationRuntime.loadRegistrationState(
+                baseUrl, credential))
+            .registeredFid,
+        'A');
+    adapter.deleteStatus = 204;
+    token = credential;
+    fid = 'B';
+    await persistedLifecycle(baseUrl).register();
+    expect(adapter.requests.last.method, 'DELETE');
+    expect(adapter.requests.last.path, endsWith('/A'));
+    expect(
+        (await PushRegistrationRuntime.loadRegistrationState(
+                baseUrl, credential))
+            .registeredFid,
+        'B');
+  });
+
+  test('state save failure does not undo POST B or lose its logout target',
+      () async {
+    var failSave = false;
+    final service = PushRegistrationLifecycle(
+      readToken: () async => token,
+      readFid: () async => fid,
+      platform: 'android',
+      api: api,
+      log: events.add,
+      saveState: (_, __) async {
+        if (failSave) throw StateError('storage failed');
+      },
+    );
+    fid = 'A';
+    await service.register();
+    fid = 'B';
+    failSave = true;
+    await service.register(force: true);
+    expect(adapter.requests.map((r) => r.method), ['POST', 'POST']);
+    expect(events, contains('push_registration_state_save_failed'));
+    await service.disconnect(() async {
+      token = null;
+    });
+    final deletions =
+        adapter.requests.where((r) => r.method == 'DELETE').toList();
+    expect(deletions.first.path, endsWith('/B'));
+    expect(deletions.last.path, endsWith('/A'));
+  });
   test(
       'session changed during FID acquisition is not posted with old credentials',
       () async {
@@ -309,7 +695,7 @@ void main() {
     await registration;
     expect(adapter.requests, isEmpty);
   });
-  test('Firebase failure during deregistration still performs local teardown',
+  test('logout without backend-confirmed FID never acquires a candidate',
       () async {
     final service = PushRegistrationLifecycle(
         readToken: () async => token,
@@ -322,7 +708,7 @@ void main() {
     });
     expect(token, isNull);
     expect(adapter.requests, isEmpty);
-    expect(events.last, 'push_deregistration_failed');
+    expect(events, isEmpty);
   });
   test('unsupported platform performs neither Firebase nor network work',
       () async {
@@ -410,6 +796,8 @@ void main() {
       test('$reset attempts DELETE before clearing auth, failure=$failure',
           () async {
         await configureRuntime();
+        await PushRegistrationRuntime.lifecycle!.register();
+        adapter.requests.clear();
         adapter.fail = failure;
         final prefs = await SharedPreferences.getInstance();
         adapter.beforeResponse = (request) async {

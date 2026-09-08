@@ -1,0 +1,11 @@
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <application>
+        <meta-data android:name="firebase_messaging_installation_id_enabled" android:value="true" />
+        <meta-data android:name="firebase_messaging_auto_init_enabled" android:value="true" />
+        <service android:name="com.cadena.fcm_registration.RegisteredFidService" android:exported="false">
+            <intent-filter>
+                <action android:name="com.google.firebase.MESSAGING_EVENT" />
+            </intent-filter>
+        </service>
+    </application>
+</manifest>

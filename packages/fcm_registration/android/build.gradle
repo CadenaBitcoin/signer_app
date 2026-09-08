@@ -1,0 +1,29 @@
+group 'com.cadena.fcm_registration'
+version '1.0'
+
+buildscript {
+    repositories { google(); mavenCentral() }
+    dependencies {
+        classpath 'com.android.tools.build:gradle:8.11.2'
+        classpath 'org.jetbrains.kotlin:kotlin-gradle-plugin:2.1.0'
+    }
+}
+apply plugin: 'com.android.library'
+apply plugin: 'kotlin-android'
+
+android {
+    namespace 'com.cadena.fcm_registration'
+    compileSdk 36
+    defaultConfig { minSdk 23 }
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_11
+        targetCompatibility JavaVersion.VERSION_11
+    }
+    kotlinOptions { jvmTarget = '11' }
+}
+repositories { google(); mavenCentral() }
+dependencies {
+    // Align with firebase_core 4.14.0; includes native FID registration APIs.
+    implementation platform('com.google.firebase:firebase-bom:34.18.0')
+    implementation 'com.google.firebase:firebase-messaging'
+}
