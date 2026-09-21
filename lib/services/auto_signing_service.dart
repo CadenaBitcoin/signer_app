@@ -151,6 +151,10 @@ class AutoSigningService extends GetxService {
   }
   
   void _startPolling() {
+    if (!_appController.backendSessionActive.value) {
+      print('AutoSigningService: Backend session inactive, not starting polling');
+      return;
+    }
     print('AutoSigningService: Starting polling...');
     
     // Cancel existing timers
@@ -193,10 +197,22 @@ class AutoSigningService extends GetxService {
     _pollingTimer?.cancel();
     _backgroundTimer?.cancel();
     _persistentTimer?.cancel();
+    _foregroundTimer?.cancel();
     _pollingTimer = null;
     _backgroundTimer = null;
     _persistentTimer = null;
+    _foregroundTimer = null;
     _isPersistentTimerRunning = false;
+  }
+
+  /// Stop all auth/session-related polling and background work.
+  /// Used after Session Invalid → Reset Data so a deleted session cannot keep retrying.
+  Future<void> stopAllSessionActivity() async {
+    print('AutoSigningService: Stopping all session activity (invalid session teardown)');
+    isProcessing.value = false;
+    _hasProcessedData = false;
+    _stopPolling();
+    await _stopBackgroundService();
   }
   
   /// Start background service using WorkManager
@@ -283,6 +299,12 @@ class AutoSigningService extends GetxService {
   
   Future<void> _pollForTransactions() async {
     if (isProcessing.value) return;
+
+    // After Session Invalid reset, do not reuse the deleted/invalid session
+    if (!_appController.backendSessionActive.value) {
+      print('AutoSigningService: Backend session inactive, skipping transaction polling');
+      return;
+    }
     
     // Check if user is authenticated by checking if user profile exists
     if (_appController.userProfileObject.value.payload == null) {
@@ -1003,6 +1025,10 @@ class AutoSigningService extends GetxService {
   bool get isEnabled => _isAutoSigningEnabled;
   
   void resumePolling() {
+    if (!_appController.backendSessionActive.value) {
+      print('AutoSigningService: Backend session inactive, not resuming polling');
+      return;
+    }
     if (_isAutoSigningEnabled && _pollingTimer == null) {
       _startPolling();
     }
@@ -1019,7 +1045,8 @@ class AutoSigningService extends GetxService {
   
   Future<void> forceRefresh() async {
     // Check if user is authenticated
-    if (_appController.userProfileObject.value.payload == null) {
+    if (!_appController.backendSessionActive.value ||
+        _appController.userProfileObject.value.payload == null) {
       Get.snackbar(
         'Authentication Required',
         'Please log in to check for transactions',
@@ -1049,7 +1076,8 @@ class AutoSigningService extends GetxService {
   // Method to manually trigger a check for new transactions
   Future<void> checkForNewTransactions() async {
     // Check if user is authenticated
-    if (_appController.userProfileObject.value.payload == null) {
+    if (!_appController.backendSessionActive.value ||
+        _appController.userProfileObject.value.payload == null) {
       Get.snackbar(
         'Authentication Required',
         'Please log in to check for transactions',
@@ -1143,6 +1171,17 @@ class AutoSigningService extends GetxService {
   
   // Background processing methods
   Future<void> handleAppLifecycleChange(AppLifecycleState state) async {
+    if (!_appController.backendSessionActive.value) {
+      print('AutoSigningService: Backend session inactive — ignoring lifecycle poll/restart');
+      if (state == AppLifecycleState.resumed) {
+        _isAppInForeground = true;
+      } else if (state == AppLifecycleState.paused ||
+          state == AppLifecycleState.detached) {
+        _isAppInForeground = false;
+      }
+      return;
+    }
+
     switch (state) {
       case AppLifecycleState.resumed:
         // App came to foreground
@@ -1155,7 +1194,7 @@ class AutoSigningService extends GetxService {
         
         // Also poll again after a short delay to catch any missed transactions
         Future.delayed(Duration(seconds: 2), () async {
-          if (_isAppInForeground) {
+          if (_isAppInForeground && _appController.backendSessionActive.value) {
             print('AutoSigningService: Follow-up poll after app resume');
             await _pollForTransactions();
           }
@@ -1250,6 +1289,10 @@ class AutoSigningService extends GetxService {
   
   /// Start persistent timer that works in all app states
   void _startPersistentTimer() {
+    if (!_appController.backendSessionActive.value) {
+      print('AutoSigningService: Backend session inactive, not starting persistent timer');
+      return;
+    }
     if (_isPersistentTimerRunning) return;
     
     _isPersistentTimerRunning = true;

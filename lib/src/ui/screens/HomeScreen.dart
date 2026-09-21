@@ -19,6 +19,7 @@ import 'package:signer/src/ui/screens/splashScreen.dart';
 import 'package:signer/src/ui/screens/verify_password_screen.dart';
 import 'package:signer/src/ui/theme/app_Text_Styles.dart';
 import 'package:signer/src/ui/theme/colors.dart';
+import 'package:signer/src/ui/widgets/connect_to_cadena_button.dart';
 
 import '../../../models/user_profile_model.dart';
 
@@ -68,6 +69,11 @@ class _HomeScreenState extends State<HomeScreen> {
 
   var qrText = ''.obs;
   Timer? _profileTimer;
+  bool _isConnectingToCadena = false;
+
+  /// True while local credentials exist but Cadena connect step still needed.
+  bool get _needsCadenaConnectAttention =>
+      appController.showVerifyButton.value;
 
   Future<String> _getLocalEmail() async {
     return await StorageService.getLoggedInEmail() ?? '';
@@ -249,14 +255,24 @@ class _HomeScreenState extends State<HomeScreen> {
     final SharedPreferences prefs = await SharedPreferences.getInstance();
     final jwtToken = prefs.getString('jwtToken');
 
-    if (jwtToken != null && jwtToken.isNotEmpty) {
+    if (jwtToken != null &&
+        jwtToken.isNotEmpty &&
+        appController.backendSessionActive.value) {
       debugPrint("JWT token found, starting periodic timer");
       // Start timer only if JWT token exists
+      _profileTimer?.cancel();
       _profileTimer = Timer.periodic(Duration(seconds: 10), (timer) {
+        if (!appController.backendSessionActive.value) {
+          timer.cancel();
+          _profileTimer = null;
+          return;
+        }
         ApiService().getUserProfile();
       });
     } else {
       debugPrint("No JWT token found, timer not started");
+      _profileTimer?.cancel();
+      _profileTimer = null;
     }
   }
 
@@ -293,6 +309,8 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   Future<void> _verifyUser() async {
+    if (_isConnectingToCadena) return;
+    setState(() => _isConnectingToCadena = true);
     try {
       // Call the existing _initializeUserData which does login + getUserProfile
       await _initializeUserData();
@@ -311,7 +329,22 @@ class _HomeScreenState extends State<HomeScreen> {
       }
     } catch (e) {
       print("Error during verification: $e");
+    } finally {
+      if (mounted) setState(() => _isConnectingToCadena = false);
     }
+  }
+
+  Widget _subordinateIfNeedsConnect({required Widget child}) {
+    return Obx(() {
+      final needsConnect = _needsCadenaConnectAttention;
+      return Opacity(
+        opacity: needsConnect ? 0.45 : 1.0,
+        child: IgnorePointer(
+          ignoring: needsConnect,
+          child: child,
+        ),
+      );
+    });
   }
 
   Future<void> _initializeUserData() async {
@@ -741,20 +774,7 @@ class _HomeScreenState extends State<HomeScreen> {
 
   Future<void> _wipeAllData() async {
     try {
-      // Set xpub mismatch flag to block API calls
-      appController.setXpubMismatchDetected();
-      // Clear all user data from StorageService
-      await StorageService.clearAllUsers();
-
-      // Clear SharedPreferences
-      final SharedPreferences prefs = await SharedPreferences.getInstance();
-      await prefs.clear();
-
-      // Clear FlutterSecureStorage
-      const FlutterSecureStorage storage = FlutterSecureStorage();
-      await storage.deleteAll();
-
-      print("All data wiped successfully - API calls will be blocked until next login");
+      await appController.wipeAllLocalDataAndEnterOffline();
 
       Get.snackbar(
         'Data Cleared',
@@ -922,39 +942,62 @@ class _HomeScreenState extends State<HomeScreen> {
                   },
                 ),
                 const SizedBox(height: 16),
+                // Prominent Cadena connect CTA (after credentials created/restored)
+                Obx(() => appController.showVerifyButton.value
+                    ? Padding(
+                        padding: const EdgeInsets.only(bottom: 16),
+                        child: ConnectToCadenaButton(
+                          isLoading: _isConnectingToCadena,
+                          onTap: () {
+                            _verifyUser().then((_) {
+                              initWallet();
+                              ApiService().getUserProfile();
+                              _checkTokenAndStartTimer();
+                            });
+                          },
+                        ),
+                      )
+                    : const SizedBox.shrink()),
                 // KYC Status Card (chip opens Sumsub when actionable)
-                Obx(() {
-                  final kycStatus = appController.userProfileObject.value.payload?.kycStatus;
-                  final display = _kycDisplayText(kycStatus);
-                  final actionable = _kycIsActionable(kycStatus) &&
-                      !_kycIsVerified(kycStatus) &&
-                      !_kycIsInProgress(kycStatus);
+                // Soft-subordinated until Cadena connect — requires online session
+                _subordinateIfNeedsConnect(
+                  child: Obx(() {
+                    final kycStatus =
+                        appController.userProfileObject.value.payload?.kycStatus;
+                    final display = _kycDisplayText(kycStatus);
+                    final actionable = _kycIsActionable(kycStatus) &&
+                        !_kycIsVerified(kycStatus) &&
+                        !_kycIsInProgress(kycStatus);
 
-                  return _buildInfoCard(
-                    title: "KYC Status",
-                    value: _isKycLaunching ? "Opening..." : display,
-                    icon: _kycIcon(kycStatus),
-                    valueColor: _kycColor(kycStatus),
-                    trailing: (actionable && !_isKycLaunching)
-                        ? GestureDetector(
-                            onTap: _startKycFlow,
-                            child: Container(
-                              padding: const EdgeInsets.symmetric(
-                                horizontal: 12,
-                                vertical: 6,
+                    return _buildInfoCard(
+                      title: "KYC Status",
+                      value: _isKycLaunching ? "Opening..." : display,
+                      icon: _kycIcon(kycStatus),
+                      valueColor: _kycColor(kycStatus),
+                      trailing: (actionable && !_isKycLaunching)
+                          ? GestureDetector(
+                              onTap: _startKycFlow,
+                              child: Container(
+                                padding: const EdgeInsets.symmetric(
+                                  horizontal: 12,
+                                  vertical: 6,
+                                ),
+                                decoration: BoxDecoration(
+                                  color: primaryColor.value.withOpacity(0.2),
+                                  borderRadius: BorderRadius.circular(20),
+                                ),
+                                child: Text(
+                                  'Verify',
+                                  style: AppTextStyles.caption.copyWith(
+                                    color: subTextColor.value,
+                                  ),
+                                ),
                               ),
-                              decoration: BoxDecoration(
-                                color: primaryColor.value.withOpacity(0.2),
-                                borderRadius: BorderRadius.circular(20),
-                              ),
-                              child:  Text('Verify',style: AppTextStyles.caption.copyWith(
-                                color: subTextColor.value,
-                              ),),
-                            ),
-                          )
-                        : null,
-                  );
-                }),
+                            )
+                          : null,
+                    );
+                  }),
+                ),
 
                 const SizedBox(height: 16),
 
@@ -1086,110 +1129,94 @@ class _HomeScreenState extends State<HomeScreen> {
                 const SizedBox(height: 16),
 
                 // Quick Actions Buttons
-                Row(
-                  spacing: 16,
-                  children: [
-                    if (!appController.showVerifyButton.value)
-                      Expanded(
-                          child: _buildActionButton(
-                              icon: Icons.refresh,
-                              label: "Refresh",
-                              onTap: () {
-                                autoSigningService.checkForNewTransactions();
-                              })),
-                    Obx(() => appController.showScanButton.value
-                        ? Expanded(
+                // Soft-subordinate Cadena-online actions (Refresh / Pair) until CONNECT
+                _subordinateIfNeedsConnect(
+                  child: Row(
+                    spacing: 16,
+                    children: [
+                      if (!appController.showVerifyButton.value)
+                        Expanded(
                             child: _buildActionButton(
-                              icon: Icons.qr_code_scanner,
-                              label: "Pair",
-                              onTap: () async {
-                                Get.to(() => QrScanner())?.then((onValue) async {
-                                  debugPrint('onValue : $onValue');
-                                  qrText.value = onValue ?? '';
-                                  debugPrint(' qrText.value  : ${qrText.value}');
+                                icon: Icons.refresh,
+                                label: "Refresh",
+                                onTap: () {
+                                  autoSigningService.checkForNewTransactions();
+                                })),
+                      Obx(() => appController.showScanButton.value
+                          ? Expanded(
+                              child: _buildActionButton(
+                                icon: Icons.qr_code_scanner,
+                                label: "Pair",
+                                onTap: () async {
+                                  Get.to(() => QrScanner())?.then((onValue) async {
+                                    debugPrint('onValue : $onValue');
+                                    qrText.value = onValue ?? '';
+                                    debugPrint(' qrText.value  : ${qrText.value}');
 
-                                  if (onValue != null && onValue.isNotEmpty) {
-                                    try {
-                                      // Parse the QR JSON result
-                                      final Map<String, dynamic> qrData = jsonDecode(onValue);
-                                      final String? upgradeURL = qrData['upgradeURL'];
+                                    if (onValue != null && onValue.isNotEmpty) {
+                                      try {
+                                        // Parse the QR JSON result
+                                        final Map<String, dynamic> qrData = jsonDecode(onValue);
+                                        final String? upgradeURL = qrData['upgradeURL'];
 
-                                      if (upgradeURL != null) {
-                                        // Get xpub from local storage
-                                        final loggedInEmail = await StorageService.getLoggedInEmail();
-                                        final userData = await StorageService.getUserByEmail(
-                                          loggedInEmail ?? '',
-                                        );
-                                        final String? xpub = userData?['xpub'];
+                                        if (upgradeURL != null) {
+                                          // Get xpub from local storage
+                                          final loggedInEmail = await StorageService.getLoggedInEmail();
+                                          final userData = await StorageService.getUserByEmail(
+                                            loggedInEmail ?? '',
+                                          );
+                                          final String? xpub = userData?['xpub'];
 
-                                        if (xpub != null && xpub.isNotEmpty) {
-                                          // Call the API with dynamic URL and local xpub
-                                          ApiService()
-                                              .userUpgradePubx(
-                                            xpub: xpub,
-                                            upgradeURL: upgradeURL,
-                                          )
-                                              .then((result) {
-                                            if (result == "OK") {
-                                              Get.snackbar(
-                                                'Success',
-                                                'User XPub upgraded successfully.',
-                                                snackPosition: SnackPosition.BOTTOM,
-                                                backgroundColor: Colors.green.withOpacity(0.9),
-                                                colorText: Colors.white,
-                                              );
-                                            } else if (result == "BLOCKED_XPUB_MISMATCH") {
-                                              print("API call blocked due to xpub mismatch - data reset required");
-                                              _showXpubMismatchDialog();
-                                            } else {
-                                              Get.snackbar(
-                                                'Error',
-                                                'Failed to upgrade user',
-                                                snackPosition: SnackPosition.BOTTOM,
-                                                backgroundColor: Colors.red.withOpacity(0.9),
-                                                colorText: Colors.white,
-                                              );
-                                            }
-                                          });
+                                          if (xpub != null && xpub.isNotEmpty) {
+                                            // Call the API with dynamic URL and local xpub
+                                            ApiService()
+                                                .userUpgradePubx(
+                                              xpub: xpub,
+                                              upgradeURL: upgradeURL,
+                                            )
+                                                .then((result) {
+                                              if (result == "OK") {
+                                                Get.snackbar(
+                                                  'Success',
+                                                  'User XPub upgraded successfully.',
+                                                  snackPosition: SnackPosition.BOTTOM,
+                                                  backgroundColor: Colors.green.withOpacity(0.9),
+                                                  colorText: Colors.white,
+                                                );
+                                              } else if (result == "BLOCKED_XPUB_MISMATCH") {
+                                                print("API call blocked due to xpub mismatch - data reset required");
+                                                _showXpubMismatchDialog();
+                                              } else {
+                                                Get.snackbar(
+                                                  'Error',
+                                                  'Failed to upgrade user',
+                                                  snackPosition: SnackPosition.BOTTOM,
+                                                  backgroundColor: Colors.red.withOpacity(0.9),
+                                                  colorText: Colors.white,
+                                                );
+                                              }
+                                            });
+                                          } else {
+                                            print("No xpub found in local storage");
+                                          }
                                         } else {
-                                          print("No xpub found in local storage");
+                                          print("No upgradeURL found in QR data");
                                         }
-                                      } else {
-                                        print("No upgradeURL found in QR data");
+                                      } catch (e) {
+                                        print("Error parsing QR data: $e");
                                       }
-                                    } catch (e) {
-                                      print("Error parsing QR data: $e");
                                     }
-                                  }
-                                });
-                              },
-                            ),
-                          )
-                        : SizedBox.shrink()),
-                  ],
+                                  });
+                                },
+                              ),
+                            )
+                          : SizedBox.shrink()),
+                    ],
+                  ),
                 ),
-                // if (showVerifyButton) const Spacer(),
-                // appController.userProfileObject.value.payload?.uuid != null &&
-                //         appController.userProfileObject.value.payload?.uuid !=
-                //             ""
-                //     ? SizedBox.shrink()
-                //     :
                 SizedBox(
                   height: 16,
                 ),
-                Obx(() => appController.showVerifyButton.value
-                    ? _buildActionButton(
-                        icon: Icons.refresh,
-                        label: "Please Verify",
-                        onTap: () {
-                          _verifyUser().then((_) {
-                            initWallet();
-                            ApiService().getUserProfile();
-                            _checkTokenAndStartTimer();
-                          });
-                        },
-                      )
-                    : SizedBox.shrink()),
                 Obx(() => appController.showResetButton.value
                     ? _buildActionButton(
                         icon: Icons.restart_alt,

@@ -48,6 +48,7 @@ class ApiService {
         response.data != null) {
       // Clear XPUB mismatch flag BEFORE saving token so the rest of the app can call APIs again.
       appController.clearXpubMismatchDetected();
+      appController.activateBackendSession();
       saveToken(response.data['access_token']);
       return 'OK';
     } else {

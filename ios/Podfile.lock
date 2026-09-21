@@ -1,0 +1,92 @@
+PODS:
+  - dlc_wallet (0.1.0):
+    - Flutter
+  - FingerprintPro (2.14.0)
+  - Flutter (1.0.0)
+  - flutter_idensic_mobile_sdk_plugin (1.42.0):
+    - Flutter
+    - IdensicMobileSDK (= 1.42.0)
+    - IdensicMobileSDK/Fisherman (= 1.42.0)
+  - flutter_local_notifications (0.0.1):
+    - Flutter
+  - flutter_secure_storage (6.0.0):
+    - Flutter
+  - fluttertoast (0.0.2):
+    - Flutter
+  - IdensicMobileSDK (1.42.0):
+    - IdensicMobileSDK/Default (= 1.42.0)
+  - IdensicMobileSDK/Core (1.42.0)
+  - IdensicMobileSDK/Default (1.42.0):
+    - IdensicMobileSDK/Core
+  - IdensicMobileSDK/Fisherman (1.42.0):
+    - FingerprintPro (~> 2.11)
+    - IdensicMobileSDK/Core
+  - mobile_scanner (7.0.0):
+    - Flutter
+    - FlutterMacOS
+  - path_provider_foundation (0.0.1):
+    - Flutter
+    - FlutterMacOS
+  - shared_preferences_foundation (0.0.1):
+    - Flutter
+    - FlutterMacOS
+  - workmanager_apple (0.0.1):
+    - Flutter
+
+DEPENDENCIES:
+  - dlc_wallet (from `.symlinks/plugins/dlc_wallet/ios`)
+  - Flutter (from `Flutter`)
+  - flutter_idensic_mobile_sdk_plugin (from `.symlinks/plugins/flutter_idensic_mobile_sdk_plugin/ios`)
+  - flutter_local_notifications (from `.symlinks/plugins/flutter_local_notifications/ios`)
+  - flutter_secure_storage (from `.symlinks/plugins/flutter_secure_storage/ios`)
+  - fluttertoast (from `.symlinks/plugins/fluttertoast/ios`)
+  - mobile_scanner (from `.symlinks/plugins/mobile_scanner/darwin`)
+  - path_provider_foundation (from `.symlinks/plugins/path_provider_foundation/darwin`)
+  - shared_preferences_foundation (from `.symlinks/plugins/shared_preferences_foundation/darwin`)
+  - workmanager_apple (from `.symlinks/plugins/workmanager_apple/ios`)
+
+SPEC REPOS:
+  https://github.com/SumSubstance/Specs.git:
+    - IdensicMobileSDK
+  trunk:
+    - FingerprintPro
+
+EXTERNAL SOURCES:
+  dlc_wallet:
+    :path: ".symlinks/plugins/dlc_wallet/ios"
+  Flutter:
+    :path: Flutter
+  flutter_idensic_mobile_sdk_plugin:
+    :path: ".symlinks/plugins/flutter_idensic_mobile_sdk_plugin/ios"
+  flutter_local_notifications:
+    :path: ".symlinks/plugins/flutter_local_notifications/ios"
+  flutter_secure_storage:
+    :path: ".symlinks/plugins/flutter_secure_storage/ios"
+  fluttertoast:
+    :path: ".symlinks/plugins/fluttertoast/ios"
+  mobile_scanner:
+    :path: ".symlinks/plugins/mobile_scanner/darwin"
+  path_provider_foundation:
+    :path: ".symlinks/plugins/path_provider_foundation/darwin"
+  shared_preferences_foundation:
+    :path: ".symlinks/plugins/shared_preferences_foundation/darwin"
+  workmanager_apple:
+    :path: ".symlinks/plugins/workmanager_apple/ios"
+
+SPEC CHECKSUMS:
+  dlc_wallet: 3de407037d8d2f6e900dfd746ba1e9c992077163
+  FingerprintPro: 0316a80c096a09d64f29033417337b134fdf2fe0
+  Flutter: cabc95a1d2626b1b06e7179b784ebcf0c0cde467
+  flutter_idensic_mobile_sdk_plugin: 6b7b827478cb993776959c83285d37d2d3284f1d
+  flutter_local_notifications: a5a732f069baa862e728d839dd2ebb904737effb
+  flutter_secure_storage: 1ed9476fba7e7a782b22888f956cce43e2c62f13
+  fluttertoast: 2c67e14dce98bbdb200df9e1acf610d7a6264ea1
+  IdensicMobileSDK: a8ec2cf5c216ae138b00e2ff32e0e31c5e366cec
+  mobile_scanner: 9157936403f5a0644ca3779a38ff8404c5434a93
+  path_provider_foundation: bb55f6dbba17d0dccd6737fe6f7f34fbd0376880
+  shared_preferences_foundation: 7036424c3d8ec98dfe75ff1667cb0cd531ec82bb
+  workmanager_apple: 904529ae31e97fc5be632cf628507652294a0778
+
+PODFILE CHECKSUM: efa3654ede0f5c3a6f5d2467c53887e758794192
+
+COCOAPODS: 1.16.2

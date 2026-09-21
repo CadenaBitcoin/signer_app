@@ -9,6 +9,7 @@ import 'package:signer/models/user_profile_model.dart';
 import 'package:signer/models/xpub_validation_model.dart';
 import 'package:signer/models/dlc_signature_response_model.dart';
 import 'package:signer/services/storage_service.dart';
+import 'package:signer/services/auto_signing_service.dart';
 import 'package:signer/src/ui/screens/splashScreen.dart';
 import 'package:bip32/bip32.dart'as bip32;
 
@@ -69,6 +70,10 @@ class AppController extends GetxController {
   // Auth failure tracking (401 responses)
   var consecutive401Count = 0.obs;
   static const int max401BeforeWipe = 10;
+
+  /// When false, the app is in offline / not-connected mode after session teardown.
+  /// Auth retries and 401 wipe dialogs must not run until a new login succeeds.
+  var backendSessionActive = true.obs;
 
   // ========================================
   // NETWORK CONFIGURATION - EASY SWITCHING
@@ -358,6 +363,10 @@ class AppController extends GetxController {
 
   /// Handle consecutive 401 authentication failures.
   Future<void> handleAuth401() async {
+    if (!backendSessionActive.value) {
+      // Session already torn down (e.g. after Reset Data) — do not retry or re-prompt.
+      return;
+    }
     consecutive401Count.value++;
     if (consecutive401Count.value >= max401BeforeWipe) {
       consecutive401Count.value = 0;
@@ -368,6 +377,14 @@ class AppController extends GetxController {
   /// Reset the 401 counter on successful authenticated calls.
   void resetAuth401Counter() {
     consecutive401Count.value = 0;
+  }
+
+  /// Mark backend session as active after a successful login / CONNECT.
+  void activateBackendSession() {
+    backendSessionActive.value = true;
+    resetAuth401Counter();
+    clearXpubMismatchDetected();
+    setServerReachable(true);
   }
 
   Future<void> _showAuthFailureResetDialog() async {
@@ -384,7 +401,7 @@ class AppController extends GetxController {
           TextButton(
             onPressed: () async {
               Get.back();
-              await _wipeAllData();
+              await wipeAllLocalDataAndEnterOffline();
               Get.offAll(() => SplashScreen());
             },
             child: const Text(
@@ -398,20 +415,64 @@ class AppController extends GetxController {
     );
   }
 
-  /// Wipe all local data (shared with auth failure and xpub mismatch flows)
-  Future<void> _wipeAllData() async {
+  /// Wipe local data, stop auth retries/polling, and enter offline / not-connected state.
+  /// Does not require backend availability. Safe to call from Session Invalid or other reset flows.
+  Future<void> wipeAllLocalDataAndEnterOffline() async {
+    // Stop retries first so wiped credentials cannot keep being used,
+    // even if a later storage wipe step fails on a given platform.
+    backendSessionActive.value = false;
+    resetAuth401Counter();
+
+    try {
+      final autoSigning = Get.find<AutoSigningService>();
+      await autoSigning.stopAllSessionActivity();
+    } catch (e) {
+      print("AutoSigningService not available during session wipe: $e");
+    }
+
     try {
       await StorageService.clearAllUsers();
+    } catch (e) {
+      print("Error clearing users during session wipe: $e");
+    }
 
+    try {
       final SharedPreferences prefs = await SharedPreferences.getInstance();
       await prefs.clear();
+    } catch (e) {
+      print("Error clearing SharedPreferences during session wipe: $e");
+    }
 
+    try {
       const FlutterSecureStorage storage = FlutterSecureStorage();
       await storage.deleteAll();
-
-      print("All data wiped due to repeated authentication failures");
     } catch (e) {
-      print("Error wiping data after auth failures: $e");
+      print("Error clearing secure storage during session wipe: $e");
     }
+
+    // Discard invalid in-memory session / API state
+    userProfileObject.value = UserProfileModel();
+    xpubValidationObject.value = XpubValidationModel();
+    userOfferDlcIdsPollObject.value = UserOfferDlcIdsPoll();
+    sigReqsByDlcIdsModelObject.value = SigReqsByDlcIdsModel();
+    dlcSignatureResponseObject.value = DlcSignatureResponseModel();
+    appVersionObject.value = AppVersionEPModel();
+
+    // Offline / not-connected posture — local credential create/restore remains allowed
+    setServerReachable(false);
+    xpubMismatchDetected.value = false;
+    showVerifyButton.value = true;
+    showScanButton.value = false;
+    showResetButton.value = false;
+    selectedBottomTabIndex.value = 0;
+
+    // Re-assert after storage steps in case of concurrent updates
+    backendSessionActive.value = false;
+    resetAuth401Counter();
+
+    print("Session wiped — offline / not-connected; auth retries stopped");
   }
+
+  /// Legacy name used by older call sites; delegates to [wipeAllLocalDataAndEnterOffline].
+  Future<void> _wipeAllData() => wipeAllLocalDataAndEnterOffline();
 }
