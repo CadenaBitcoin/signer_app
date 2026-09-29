@@ -1,6 +1,6 @@
 [package]
 name = "dlcplazacryptlib"
-version = "0.2.0"
+version = "2.0.1"
 edition = "2021"
 
 [lib]
@@ -8,13 +8,10 @@ name = "dlcplazacryptlib"
 crate-type = ["cdylib", "staticlib"]
 
 [dependencies]
-bip39 = "2.1.0"
-bitcoin = "0.32.4"
+dlccryptlib = "=2.0.1"
+dlccryptlib-py = "=2.0.1"
 pyo3 = { version = "0.23.1", optional = true }
-secp256k1-sys = "0.10.1"
-secp256k1-zkp = "0.11.0"
 
 [features]
-default = ["std"]
-std = ["bitcoin/std", "secp256k1-zkp/rand-std"]
+default = []
 with-pyo3 = ["pyo3"]
