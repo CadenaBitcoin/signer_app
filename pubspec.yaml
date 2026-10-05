@@ -35,7 +35,7 @@ dependencies:
   flutter_local_notifications: ^19.4.2
   flutter_app_minimizer_plus: ^1.0.2
   workmanager: ^0.9.0+3
-  flutter_idensic_mobile_sdk_plugin:
+  flutter_idensic_mobile_sdk_plugin: 1.42.0
 #  my_plugin:
 #    path: ../my_plugin
 
