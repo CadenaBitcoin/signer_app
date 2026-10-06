@@ -42,7 +42,6 @@ class _SignTransactionsState extends State<SignTransactions> with WidgetsBinding
   Future<void> _checkToken() async {
     final prefs = await SharedPreferences.getInstance();
     final jwtToken = prefs.getString('jwtToken');
-    debugPrint("JWT token inside SignTransactionScreen : $jwtToken");
 
     if (jwtToken != null && jwtToken.isNotEmpty) {
       // ✅ Token exists → call API
@@ -101,8 +100,6 @@ class _SignTransactionsState extends State<SignTransactions> with WidgetsBinding
 
     print('ManualSign: Attempting to sign DLC: $dlcId');
     print('ManualSign: DLC status: ${filteredDlcs[0].status}');
-    print('ManualSign: DLC initiator: ${filteredDlcs[0].iniEmail}');
-    print('ManualSign: DLC acceptor: ${filteredDlcs[0].accEmail}');
 
     final result = await ApiService().sigReqsByDlcIds([dlcId]);
     if (result == "OK") {
@@ -356,9 +353,7 @@ class _SignTransactionsState extends State<SignTransactions> with WidgetsBinding
           throw Exception('Invalid signature request parameters');
         }
 
-        print('hash: $hash');
         final signature = await DlcWallet.signHashEcdsa(hash, signerIndex, signerPubkey);
-        print('ECDSA Signature: $signature');
         fundingSignatures.add(signature);
       }
 
@@ -369,7 +364,6 @@ class _SignTransactionsState extends State<SignTransactions> with WidgetsBinding
         final refundReq = refundReqs[0];
         if (refundReq.sighash != null && refundReq.signerIndex != null && refundReq.signerPubkey != null) {
           refundSignature = await DlcWallet.signHashEcdsa(refundReq.sighash!, refundReq.signerIndex!, refundReq.signerPubkey!);
-          print('Refund Signature: $refundSignature');
         }
       }
 
@@ -387,23 +381,11 @@ class _SignTransactionsState extends State<SignTransactions> with WidgetsBinding
           print('  numDigits: ${cets.numDigits}');
           print('  numCets: ${cets.numCets}');
           print('  digitStringTemplate: ${cets.digitStringTemplate}');
-          print('  nonces string: "${cets.nonces}"');
-          print('  intervalWildcards string: "${cets.intervalWildcards}"');
-          print('  sighashes string: "${cets.sighashes}"');
           print('  nonces length: ${noncesList.length}');
           print('  intervalWildcards length: ${intervalWildcardsList.length}');
           print('  sighashes length: ${sighashesList.length}');
 
           // Debug: Show first few items of each list
-          if (noncesList.isNotEmpty) {
-            print('  First 3 nonces: ${noncesList.take(3).toList()}');
-          }
-          if (intervalWildcardsList.isNotEmpty) {
-            print('  First 3 intervalWildcards: ${intervalWildcardsList.take(3).toList()}');
-          }
-          if (sighashesList.isNotEmpty) {
-            print('  First 3 sighashes: ${sighashesList.take(3).toList()}');
-          }
 
           if (noncesList.isEmpty) {
             print('No CET parameters provided');
@@ -431,7 +413,7 @@ class _SignTransactionsState extends State<SignTransactions> with WidgetsBinding
               final singleNonce = noncesList[0];
               final repeatedNonces = List<String>.filled(intervalWildcardsList.length, singleNonce);
 
-              print('Using repeated nonce: $singleNonce for ${intervalWildcardsList.length} CETs');
+              print('Using repeated nonce for ${intervalWildcardsList.length} CETs');
 
               // Validate that the parameter lists have the expected lengths
               if (repeatedNonces.length != intervalWildcardsList.length || repeatedNonces.length != sighashesList.length) {
@@ -452,7 +434,6 @@ class _SignTransactionsState extends State<SignTransactions> with WidgetsBinding
               );
 
               adaptorSigPoints = signatures.join(' '); // Space-separated signatures
-              print('Adaptor Signature Points: $adaptorSigPoints');
             } else if (noncesList.length > 1 && intervalWildcardsList.length > noncesList.length) {
               print('Using original ${noncesList.length} nonces for ${intervalWildcardsList.length} CETs');
               print('The DlcWallet function will handle the nonce cycling internally');
@@ -471,7 +452,6 @@ class _SignTransactionsState extends State<SignTransactions> with WidgetsBinding
               );
 
               adaptorSigPoints = signatures.join(' '); // Space-separated signatures
-              print('Adaptor Signature Points: $adaptorSigPoints');
             } else {
               throw Exception('CET parameter length mismatch');
             }
@@ -491,10 +471,9 @@ class _SignTransactionsState extends State<SignTransactions> with WidgetsBinding
 
             adaptorSigPoints = signatures.join(' '); // Space-separated signatures
             print('Generated ${signatures.length} CET adaptor signatures');
-            print('Adaptor Signature Points: $adaptorSigPoints');
           }
         } catch (e) {
-          print('Error creating CET adaptor signatures: $e');
+          print('Error creating CET adaptor signatures: ${e.runtimeType}');
 
           // Ask user if they want to continue without CET signatures
           final shouldContinue = await Get.dialog<bool>(
@@ -534,9 +513,6 @@ class _SignTransactionsState extends State<SignTransactions> with WidgetsBinding
       print('Submitting signatures to API:');
       print('  DLC ID: $dlcId');
       print('  Funding signatures count: ${fundingSignatures.length}');
-      print('  Funding signatures: ${fundingSignatures.join(' ')}');
-      print('  Refund signature: $refundSignature');
-      print('  Adaptor signature points: $adaptorSigPoints');
 
       final result = await ApiService().offerDlcSignatures(
           dlc_id: '$dlcId', funding_sigs: fundingSignatures.join(' '), refund_sig: refundSignature, adaptor_sig_points: adaptorSigPoints);
@@ -589,7 +565,7 @@ class _SignTransactionsState extends State<SignTransactions> with WidgetsBinding
         );
       }
     } catch (e) {
-      print('Error in signFundingInput: $e');
+      print('Error in signFundingInput: ${e.runtimeType}');
       Get.snackbar(
         'Error',
         'An error occurred while signing transactions: ${e.toString()}',

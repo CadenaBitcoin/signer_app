@@ -65,7 +65,7 @@ class _MyAppState extends State<MyApp> with WidgetsBindingObserver {
       autoSigningService.handleAppLifecycleChange(state);
     } catch (e) {
       // Service might not be initialized yet
-      print('AutoSigningService not available: $e');
+      print('AutoSigningService not available: ${e.runtimeType}');
     }
   }
 

@@ -77,9 +77,7 @@ class _SignInScreenState extends State<SignInScreen> {
     try {
       // Use local storage login instead of API
       final userData = await StorageService.login(email, password);
-      debugPrint('userData  inside Sign in Screen : $userData');
       await _storage.write(key: 'logged_in_user_email', value: email);
-      debugPrint("loggedInEmail inside signIn Screen : $email");
 
       if (userData != null) {
         // Set isLoggedIn to true on successful login
@@ -106,7 +104,7 @@ class _SignInScreenState extends State<SignInScreen> {
         );
       }
     } catch (e) {
-      debugPrint('Error : $e');
+      debugPrint('Error : ${e.runtimeType}');
       Get.snackbar(
         'Error',
         'An error occurred during login',
@@ -308,7 +306,6 @@ class _SignInScreenState extends State<SignInScreen> {
 
   Future<String> generateMeneMonic() async {
     final mnemonic = generateMnemonic();
-    debugPrint('🧠 Mnemonic: $mnemonic');
     return mnemonic;
   }
 

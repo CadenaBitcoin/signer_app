@@ -77,7 +77,6 @@ class _QrScannerState extends State<QrScanner> {
                           final List<Barcode> barcodes = capture.barcodes;
                           final Uint8List? image = capture.image;
                           for (final barcode in barcodes) {
-                            debugPrint('Barcode found! ${barcode.rawValue}');
                             cameraController.dispose();
                             Get.to(ScanResult(result: barcode.rawValue));
                             // Get.back(result: barcode.rawValue);

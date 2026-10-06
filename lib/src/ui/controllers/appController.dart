@@ -19,7 +19,8 @@ import 'package:bip32/bip32.dart'as bip32;
 /// To switch between mainnet and testnet, simply change these two variables:
 /// 
 /// 1. USE_TESTNET = false (for mainnet) or true (for testnet/signet)
-/// 2. API_BASE_URL = "http://cadenabitcoin.com/app" (mainnet) or "http://staging.purabitcoin.com/app" (staging)
+/// 2. API_BASE_URL = "https://cadenabitcoin.com/app" (mainnet production)
+///    or "https://staging.purabitcoin.com/app" (staging). HTTPS is required for both.
 /// 
 /// NETWORK TYPES:
 /// - MAINNET_NATIVE_SEGWIT: Generates vpub/vprv (recommended for mainnet)
@@ -82,16 +83,17 @@ class AppController extends GetxController {
   /// Set to true for testnet/signet, false for mainnet
   /// 
   /// EXAMPLE SWITCHING:
-  /// For MAINNET: USE_TESTNET = false, API_BASE_URL = "http://cadenabitcoin.com/app"
-  /// For STAGING: USE_TESTNET = true, API_BASE_URL = "http://staging.purabitcoin.com/app"
+  /// For MAINNET: USE_TESTNET = false, API_BASE_URL = "https://cadenabitcoin.com/app"
+  /// For STAGING: USE_TESTNET = true, NETWORK_ENVIRONMENT = "signet",
+  ///   API_BASE_URL = "https://staging.purabitcoin.com/app"
   static const bool USE_TESTNET = false;
   
   /// Environment string for API calls: "bitcoin" for mainnet, "signet" for testnet
   static const String NETWORK_ENVIRONMENT = "bitcoin";
   
   /// API Base URL - change this for different environments
-  static const String API_BASE_URL = "http://cadenabitcoin.com/app";
-  // For mainnet: "http://cadenabitcoin.com/app"
+  static const String API_BASE_URL = "https://cadenabitcoin.com/app";
+  // Must be https:// — DataService refuses any other scheme.
   
   // ========================================
   // BIP32 NETWORK TYPES
@@ -191,7 +193,7 @@ class AppController extends GetxController {
         showScanButton.value = false;
       }
     } catch (e) {
-      print("Error checking JWT token: $e");
+      print("Error checking JWT token: ${e.runtimeType}");
       showVerifyButton.value = true;
       showScanButton.value = false;
     }
@@ -427,27 +429,27 @@ class AppController extends GetxController {
       final autoSigning = Get.find<AutoSigningService>();
       await autoSigning.stopAllSessionActivity();
     } catch (e) {
-      print("AutoSigningService not available during session wipe: $e");
+      print("AutoSigningService not available during session wipe: ${e.runtimeType}");
     }
 
     try {
       await StorageService.clearAllUsers();
     } catch (e) {
-      print("Error clearing users during session wipe: $e");
+      print("Error clearing users during session wipe: ${e.runtimeType}");
     }
 
     try {
       final SharedPreferences prefs = await SharedPreferences.getInstance();
       await prefs.clear();
     } catch (e) {
-      print("Error clearing SharedPreferences during session wipe: $e");
+      print("Error clearing SharedPreferences during session wipe: ${e.runtimeType}");
     }
 
     try {
       const FlutterSecureStorage storage = FlutterSecureStorage();
       await storage.deleteAll();
     } catch (e) {
-      print("Error clearing secure storage during session wipe: $e");
+      print("Error clearing secure storage during session wipe: ${e.runtimeType}");
     }
 
     // Discard invalid in-memory session / API state

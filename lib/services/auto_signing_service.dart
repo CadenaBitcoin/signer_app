@@ -75,7 +75,7 @@ class AutoSigningService extends GetxService {
       
       print('AutoSigningService: Background service initialized');
     } catch (e) {
-      print('AutoSigningService: Error initializing background service: $e');
+      print('AutoSigningService: Error initializing background service: ${e.runtimeType}');
     }
   }
   
@@ -105,7 +105,7 @@ class AutoSigningService extends GetxService {
         _startPolling();
       }
     } catch (e) {
-      print('Error loading auto-signing settings: $e');
+      print('Error loading auto-signing settings: ${e.runtimeType}');
     }
   }
   
@@ -114,7 +114,7 @@ class AutoSigningService extends GetxService {
       await _storage.write(key: _autoSigningKey, value: _isAutoSigningEnabled.toString());
       await _storage.write(key: _lastProcessedTimeKey, value: lastProcessedTime.value.toIso8601String());
     } catch (e) {
-      print('Error saving auto-signing settings: $e');
+      print('Error saving auto-signing settings: ${e.runtimeType}');
     }
   }
   
@@ -270,7 +270,7 @@ class AutoSigningService extends GetxService {
       
       print('AutoSigningService: Background service started');
     } catch (e) {
-      print('AutoSigningService: Error starting background service: $e');
+      print('AutoSigningService: Error starting background service: ${e.runtimeType}');
     }
   }
   
@@ -293,7 +293,7 @@ class AutoSigningService extends GetxService {
       _isBackgroundServiceRunning = false;
       print('AutoSigningService: Background service stopped');
     } catch (e) {
-      print('AutoSigningService: Error stopping background service: $e');
+      print('AutoSigningService: Error stopping background service: ${e.runtimeType}');
     }
   }
   
@@ -370,7 +370,7 @@ class AutoSigningService extends GetxService {
         }
       }
     } catch (e) {
-      print('Error polling for transactions: $e');
+      print('Error polling for transactions: ${e.runtimeType}');
       
       // Show error notification in background to help debug
       // if (!_isAppInForeground) {
@@ -482,7 +482,7 @@ class AutoSigningService extends GetxService {
       // Show a persistent notification indicating background processing is active
       await _notificationService.showBackgroundProcessingNotification();
     } catch (e) {
-      print('AutoSigningService: Error showing background processing notification: $e');
+      print('AutoSigningService: Error showing background processing notification: ${e.runtimeType}');
     }
   }
   
@@ -493,7 +493,7 @@ class AutoSigningService extends GetxService {
       print('AutoSigningService: Showing transaction available notification for $transactionCount transactions');
       await _notificationService.showTransactionAvailableNotification(transactionCount);
     } catch (e) {
-      print('AutoSigningService: Error showing transaction available notification: $e');
+      print('AutoSigningService: Error showing transaction available notification: ${e.runtimeType}');
     }
   }
   
@@ -503,7 +503,7 @@ class AutoSigningService extends GetxService {
       print('AutoSigningService: Showing signing success notification for $transactionCount transactions');
       await _notificationService.showSigningSuccessNotification(transactionCount);
     } catch (e) {
-      print('AutoSigningService: Error showing signing success notification: $e');
+      print('AutoSigningService: Error showing signing success notification: ${e.runtimeType}');
     }
   }
   
@@ -630,7 +630,7 @@ class AutoSigningService extends GetxService {
     try {
       return await StorageService.getLoggedInEmail();
     } catch (e) {
-      print('AutoSigningService: Error getting user email: $e');
+      print('AutoSigningService: Error getting user email: ${e.runtimeType}');
       return null;
     }
   }
@@ -749,7 +749,7 @@ class AutoSigningService extends GetxService {
       
       print('AutoSigningService: Completed processing all ${dlcsToProcess.length} DLCs');
     } catch (e) {
-      print('Error in auto signing: $e');
+      print('Error in auto signing: ${e.runtimeType}');
       _hasProcessedData = false; // Reset to allow retry
       
       // Show error notification in background
@@ -845,9 +845,7 @@ class AutoSigningService extends GetxService {
           throw Exception('Invalid signature request parameters');
         }
 
-        print('hash: $hash');
         final signature = await DlcWallet.signHashEcdsa(hash, signerIndex, signerPubkey);
-        print('ECDSA Signature: $signature');
         fundingSignatures.add(signature);
       }
 
@@ -858,7 +856,6 @@ class AutoSigningService extends GetxService {
         final refundReq = refundReqs[0];
         if (refundReq.sighash != null && refundReq.signerIndex != null && refundReq.signerPubkey != null) {
           refundSignature = await DlcWallet.signHashEcdsa(refundReq.sighash!, refundReq.signerIndex!, refundReq.signerPubkey!);
-          print('Refund Signature: $refundSignature');
         }
       }
 
@@ -897,9 +894,8 @@ class AutoSigningService extends GetxService {
 
           adaptorSigPoints = signatures.join(' '); // Space-separated signatures
           print('Generated ${signatures.length} CET adaptor signatures');
-          print('Adaptor Signature Points: $adaptorSigPoints');
         } catch (e) {
-          print('Error creating CET adaptor signatures: $e');
+          print('Error creating CET adaptor signatures: ${e.runtimeType}');
           // Continue without adaptor signatures
         }
       }
@@ -998,7 +994,7 @@ class AutoSigningService extends GetxService {
         _hasProcessedData = false;
       }
     } catch (e) {
-      print('Error in signFundingInput: $e');
+      print('Error in signFundingInput: ${e.runtimeType}');
       Get.snackbar(
         'Error',
         'An error occurred while signing transactions: ${e.toString()}',
@@ -1273,7 +1269,7 @@ class AutoSigningService extends GetxService {
         await _checkForNewTransactions();
       }
     } catch (e) {
-      print('AutoSigningService: Error checking for pending transactions: $e');
+      print('AutoSigningService: Error checking for pending transactions: ${e.runtimeType}');
     }
   }
   
@@ -1311,7 +1307,7 @@ class AutoSigningService extends GetxService {
           print('AutoSigningService: Persistent timer skipped - already processing');
         }
       } catch (e) {
-        print('AutoSigningService: Persistent timer error: $e');
+        print('AutoSigningService: Persistent timer error: ${e.runtimeType}');
       }
     });
     
@@ -1361,7 +1357,7 @@ void callbackDispatcher() {
       
       return Future.value(true);
     } catch (e) {
-      print('Background task error: $e');
+      print('Background task error: ${e.runtimeType}');
       return Future.value(false);
     }
   });
@@ -1390,6 +1386,6 @@ Future<void> _handleAutoSigningTask() async {
       print('Background task: Auto-signing is disabled, skipping transaction check');
     }
   } catch (e) {
-    print('Background task: Error in auto-signing task: $e');
+    print('Background task: Error in auto-signing task: ${e.runtimeType}');
   }
 }

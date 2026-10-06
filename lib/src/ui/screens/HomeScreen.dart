@@ -58,7 +58,6 @@ class _HomeScreenState extends State<HomeScreen> {
     final emailKey = 'logged_in_user_email';
 
     final storedData = await _storage.read(key: emailKey);
-    print("storedData ${storedData}");
 
     final mnemonic = await getMnemonic("${storedData}");
     if (mnemonic == null) {
@@ -226,7 +225,7 @@ class _HomeScreenState extends State<HomeScreen> {
         );
       }
     } catch (e) {
-      print('Error launching KYC: $e');
+      print('Error launching KYC: ${e.runtimeType}');
       Get.snackbar(
         'KYC',
         'An error occurred while launching KYC: $e',
@@ -303,7 +302,7 @@ class _HomeScreenState extends State<HomeScreen> {
         appController.showScanButton.value = false;
       }
     } catch (e) {
-      debugPrint("Error checking token in initState: $e");
+      debugPrint("Error checking token in initState: ${e.runtimeType}");
       appController.showScanButton.value = false;
     }
   }
@@ -318,7 +317,6 @@ class _HomeScreenState extends State<HomeScreen> {
       // After API calls, check if JWT token exists
       final SharedPreferences prefs = await SharedPreferences.getInstance();
       final jwtToken = prefs.getString('jwtToken');
-      print('jwtToken $jwtToken');
 
       if (jwtToken != null && jwtToken.isNotEmpty) {
         print("User verified successfully");
@@ -328,7 +326,7 @@ class _HomeScreenState extends State<HomeScreen> {
         print("User verification failed");
       }
     } catch (e) {
-      print("Error during verification: $e");
+      print("Error during verification: ${e.runtimeType}");
     } finally {
       if (mounted) setState(() => _isConnectingToCadena = false);
     }
@@ -354,13 +352,12 @@ class _HomeScreenState extends State<HomeScreen> {
       final userData = await StorageService.getUserByEmail(loggedInEmail ?? '');
 
       if (userData != null && userData['email'] != null && userData['password'] != null) {
-        print(userData);
         await _performVerificationProcess(userData['email'] ?? '', userData['password'] ?? '');
       } else {
         print("No user credentials found in local storage");
       }
     } catch (e) {
-      print("Error initializing user data: $e");
+      print("Error initializing user data: ${e.runtimeType}");
     }
   }
 
@@ -511,7 +508,7 @@ class _HomeScreenState extends State<HomeScreen> {
         isHaltState: false,
       );
     } catch (e) {
-      print("Error in verification process: $e");
+      print("Error in verification process: ${e.runtimeType}");
       _showLoginFailureDialog();
     }
   }
@@ -525,7 +522,7 @@ class _HomeScreenState extends State<HomeScreen> {
         email: email,
         pass: password,
       );
-      print("Step 2: Attempting login...${loginResult}");
+      print("Step 2: Login result: $loginResult");
       if (loginResult == 'OK') {
         print("Login successful");
 
@@ -554,7 +551,7 @@ class _HomeScreenState extends State<HomeScreen> {
         _showLoginFailureDialog();
       }
     } catch (e) {
-      print("Error in login process: $e");
+      print("Error in login process: ${e.runtimeType}");
       _showLoginFailureDialog();
     }
   }
@@ -784,7 +781,7 @@ class _HomeScreenState extends State<HomeScreen> {
         colorText: Colors.white,
       );
     } catch (e) {
-      print("Error wiping data: $e");
+      print("Error wiping data: ${e.runtimeType}");
     }
   }
 
@@ -832,7 +829,7 @@ class _HomeScreenState extends State<HomeScreen> {
   //       );
   //     }
   //   } catch (e) {
-  //     print("Error checking local user data: $e");
+  //     print("Error checking local user data: ${e.runtimeType}");
   //     // show error case
   //     Get.snackbar(
   //       'User Unverified',
@@ -1149,9 +1146,7 @@ class _HomeScreenState extends State<HomeScreen> {
                                 label: "Pair",
                                 onTap: () async {
                                   Get.to(() => QrScanner())?.then((onValue) async {
-                                    debugPrint('onValue : $onValue');
                                     qrText.value = onValue ?? '';
-                                    debugPrint(' qrText.value  : ${qrText.value}');
 
                                     if (onValue != null && onValue.isNotEmpty) {
                                       try {
@@ -1203,7 +1198,7 @@ class _HomeScreenState extends State<HomeScreen> {
                                           print("No upgradeURL found in QR data");
                                         }
                                       } catch (e) {
-                                        print("Error parsing QR data: $e");
+                                        print("Error parsing QR data: ${e.runtimeType}");
                                       }
                                     }
                                   });

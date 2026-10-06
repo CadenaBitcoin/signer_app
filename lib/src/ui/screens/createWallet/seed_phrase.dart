@@ -74,14 +74,12 @@ class _SeedPhraseScreenState extends State<SeedPhraseScreen> {
                 text: "Generate New Seed",
                 onTap: () async {
                   await resetMnemonic();
-                  print(":brain: Mnemonic:$_mnemonic");
                 },
               ),
               const SizedBox(height: 20),
               PrimaryButton(
                 text: "Verify Seed Phrase",
                 onTap: () {
-                  print(":brain: Mnemonic:$_mnemonic");
                   Navigator.push(
                     context,
                     MaterialPageRoute(builder: (_) => ConfirmSeedPhraseScreen(mnemonic: _mnemonic, email: widget.email, password: widget.password, fromPage: widget.fromPage)),

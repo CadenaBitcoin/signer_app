@@ -139,9 +139,6 @@ class _ConfirmSeedPhraseScreenState extends State<ConfirmSeedPhraseScreen> {
       // 👇 Replace manual logic with helper function
       final address = generateP2WPKHAddress(pubkey, isTestnet: appController.isTestnet);
 
-      print("+++++++++++++new address ${address}");
-      print("Valid XPUB: ${xpub}");
-      print("privKey: ${privKey}");
       // print("pubKey: ${pubKey}");
 
       // ✅ Save to SharedPreferences
