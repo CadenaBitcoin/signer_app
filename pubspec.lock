@@ -720,10 +720,10 @@ packages:
     dependency: transitive
     description:
       name: workmanager_android
-      sha256: "757fd2ef0761a130c6f71cd46ea656b7ea393d813ace46c1ef4fc24a7136953d"
+      sha256: "7be970ef9ade7af816a63c597495e634bd3df74a6d6a2aa13083e8f529b2c673"
       url: "https://pub.dev"
     source: hosted
-    version: "0.9.3"
+    version: "0.9.2"
   workmanager_apple:
     dependency: transitive
     description:
@@ -733,13 +733,13 @@ packages:
     source: hosted
     version: "0.9.4"
   workmanager_platform_interface:
-    dependency: transitive
+    dependency: "direct main"
     description:
       name: workmanager_platform_interface
-      sha256: "687ce0e27f2f7ce716d8e66143381e63312478ecc4aa0880e8064c7bf72e3e90"
+      sha256: "5ccae1606b0973111bd9cec94e4092030c39ca4be98054f1da110ae9e9cfe957"
       url: "https://pub.dev"
     source: hosted
-    version: "0.9.4"
+    version: "0.9.3"
   xdg_directories:
     dependency: transitive
     description:
