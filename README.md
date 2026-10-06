@@ -20,6 +20,12 @@ Important: Also run flutter pub get inside the flutter_plugin folder before runn
 
 Start application: flutter run
 
+## Contributing and governance
+
+- [CONTRIBUTING.md](CONTRIBUTING.md) — how to propose changes
+- [GOVERNANCE.md](GOVERNANCE.md) — branch model, authority levels, release and versioning policy
+- [SECURITY.md](SECURITY.md) — reporting vulnerabilities privately
+
 ## Security
 
 See [docs/SECURITY_BOUNDARY.md](docs/SECURITY_BOUNDARY.md) for the backend transport (HTTPS-only) and runtime-logging rules.
