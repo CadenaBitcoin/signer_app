@@ -12,7 +12,7 @@ technical owner
     ↓
 Claude Code
     ↓
-local issue branch (from current staging)
+local issue branch (from the current integration branch)
     ↓
 tests / build / runtime verification
     ↓
@@ -22,7 +22,7 @@ signed commit
     ↓
 GitHub PR
     ↓
-staging
+integration branch (development; staging until the migration)
 ```
 
 - The **technical owner** sets scope, approves plans that touch architecture or
@@ -30,7 +30,7 @@ staging
 - **Claude Code** investigates, proposes, implements the smallest coherent change
   and verifies it. It is not a release authority.
 - **Git and GitHub remain authoritative**: issues define scope, PRs are the only
-  way into `staging`, history is never rewritten on shared branches.
+  way into the shared branches, history is never rewritten on shared branches.
 
 ## Four levels — kept separate
 
@@ -47,8 +47,10 @@ human into the app, not into prompts, scripts or files.
 
 ## Standard sequence for an issue
 
-1. **Start clean**: `git switch staging && git pull --ff-only`; confirm
-   `git status` is clean; create `issue/<N>-<short-name>` from it.
+1. **Start clean**: switch to the current integration branch (`staging` until the
+   `development` migration in `GOVERNANCE.md` is complete) and
+   `git pull --ff-only`; confirm `git status` is clean; create
+   `issue/<N>-<short-name>` from it.
 2. **Inspect first**: read the code and trace the real runtime path. Report facts
    before proposing changes.
 3. **Plan** and obtain human approval where the change involves architecture or
@@ -61,7 +63,8 @@ human into the app, not into prompts, scripts or files.
    confirm no temporary test configuration remains.
 7. **Human review**, then a **signed commit** with the Claude `Co-Authored-By`
    trailer.
-8. **PR to `staging`**, opened by the human unless arranged otherwise.
+8. **PR to the integration branch**, opened by the human unless arranged
+   otherwise. Merge is performed by an authorized maintainer.
 
 ## Runtime verification practice
 

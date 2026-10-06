@@ -6,6 +6,8 @@ it says so — do not fill gaps with guesses; ask the human.
 
 Longer workflow detail: `docs/AI_DEVELOPMENT_WORKFLOW.md`.
 Transport/logging security rules: `docs/SECURITY_BOUNDARY.md`.
+Branch model, authority levels and contribution rules: `GOVERNANCE.md`,
+`CONTRIBUTING.md`.
 
 ## 1. What this repository is
 
@@ -26,12 +28,22 @@ Transport/logging security rules: `docs/SECURITY_BOUNDARY.md`.
 
 ## 2. Source of truth and branch policy
 
-- `staging` is the **active integration branch**.
-- Every issue starts from current `staging` (`git switch staging && git pull
-  --ff-only`, confirm clean, then branch). Branch name: `issue/<N>-<short-name>`
-  (older branches use other spellings).
-- Issue branches enter `staging` **by pull request**. Never commit directly to
-  `staging` or `main`.
+- **Target model** (see `GOVERNANCE.md`): `development` (default, integration) →
+  `staging` (Signet) → `production` (Mainnet). Promotion is forward only; no
+  application logic is developed on `staging` or `production`. The migration to
+  this model is **pending**.
+- Until `development` exists, `staging` remains the **active integration branch**;
+  `main` is the legacy GitHub default and is not an integration target. After the
+  migration, issue work starts from `development` instead.
+- Every issue starts from the current integration branch (`git switch <branch> &&
+  git pull --ff-only`, confirm clean, then branch). Branch name:
+  `issue/<N>-<short-name>` (older branches use other spellings).
+- Issue branches enter the integration branch **by pull request**. Never commit
+  directly to `development`, `staging`, `production` or `main`.
+- PRs reference their issue with `Implements #N`, not automatic closing keywords
+  (`fixes #N`, `closes #N`); a maintainer closes the issue explicitly.
+- Merge, promotion, release and signing are reserved to authorized maintainers;
+  Claude never exercises them.
 - Historical branches (`cadena(v1.0.3+1000033)`, `cryptlib`, `cryptlib1`,
   `cryptlib2`, `index4_*`, `sziller/firebase-installation-work`) are
   **references only** unless a human explicitly reactivates one.
@@ -142,7 +154,7 @@ inspect
 -> run verification (section 4, plus runtime checks where relevant)
 -> inspect the Git diff
 -> signed commit
--> PR to staging
+-> PR to the integration branch
 ```
 
 - Commits must be signed and end with the `Co-Authored-By` trailer for Claude.
