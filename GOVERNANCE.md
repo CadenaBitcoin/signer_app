@@ -154,16 +154,22 @@ a maintainer explicitly closes the issue
 
 ## 6. GitHub-enforced branch protection
 
-`development` and `staging` are protected by active GitHub rulesets.
+`development` and `staging` are protected by a combination of GitHub rulesets
+and classic branch protection rules.
 
-For each branch, an access-control ruleset:
+For each branch, a classic branch protection rule:
 
-- restricts branch updates to the `CadenaBitcoin/Maintainers` team;
-- allows that Maintainer bypass **for pull requests only**;
-- restricts deletion; and
-- blocks force pushes.
+- uses **Restrict who can push to matching branches**;
+- allows only the `CadenaBitcoin/Maintainers` team to update the branch; and
+- does not allow administrators to bypass the protection.
 
-A separate pull-request policy ruleset requires:
+This prevents Contributors with repository `Write` access from merging into or
+otherwise updating `development` or `staging`, while allowing them to create and
+push ordinary work branches.
+
+Active rulesets additionally restrict deletion and block force pushes.
+
+A separate pull-request policy ruleset for each branch requires:
 
 - a pull request before merge;
 - at least one approving review;
