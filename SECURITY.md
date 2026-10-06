@@ -8,9 +8,13 @@ vulnerabilities **privately**.
 - **Do not** open a public issue, pull request or discussion for a suspected
   vulnerability, and do not include exploit details, secrets or real wallet data
   in any public place.
-- Email **sziller@cadenabitcoin.com**, the current private security-reporting
-  contact, with a description, affected version or commit, steps to reproduce and
-  the impact you expect.
+- Prefer GitHub **Private Vulnerability Reporting** for this repository. Use the
+  repository's **Security** page and select **Report a vulnerability** so the report
+  remains private to the authorized repository security/administration roles.
+- If GitHub Private Vulnerability Reporting cannot be used, email
+  **sziller@cadenabitcoin.com** as the fallback private security contact.
+- Include a description, affected version or commit, steps to reproduce and the
+  impact you expect.
 - Never send mnemonics, private keys, passwords, production tokens or real user
   data. Use disposable test material to demonstrate a problem.
 
