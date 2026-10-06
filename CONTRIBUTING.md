@@ -10,11 +10,13 @@ grant any of those.
 - **Public contributors:** fork the repository, create a branch in your fork, and open
   a pull request. You do not need any special permission, and you receive no write,
   merge, release, signing or administrative access by contributing.
-- **Authorized collaborators / maintainers:** people explicitly invited by the
-  repository owner may work on issue branches directly in the official repository.
-  Because the repository belongs to a personal GitHub account, collaborator access is
-  granted only to people trusted with merge-level authority. Merge authority is held
-  only by the authorized maintainers named in [GOVERNANCE.md](GOVERNANCE.md).
+- **Authorized contributors:** Organization members in the
+  `CadenaBitcoin/Contributors` team may create and push normal work branches directly
+  in the official repository and submit pull requests without maintaining a personal
+  fork. Contributor access does not grant protected-branch merge authority.
+- **Authorized maintainers:** members of the `CadenaBitcoin/Maintainers` team review
+  and merge accepted pull requests and perform authorized branch promotions according
+  to [GOVERNANCE.md](GOVERNANCE.md).
 
 Do not report security vulnerabilities in public issues or pull requests; see
 [SECURITY.md](SECURITY.md).
@@ -25,10 +27,7 @@ Do not report security vulnerabilities in public issues or pull requests; see
    for anything non-trivial, and always for changes touching wallet, authentication,
    signing, FFI/native code, environment selection, release signing or transport
    security. These areas require investigation and human approval before changes.
-2. Branch from the current integration branch:
-   - `development`, once the branch migration described in
-     [GOVERNANCE.md](GOVERNANCE.md) is complete;
-   - until then, the current `staging`.
+2. Branch from the current `development` branch.
 3. Name the branch `issue/<number>-<short-name>`.
 
 Historical or reference branches are not merge targets or starting points.
@@ -77,8 +76,10 @@ Use the pull request template. A pull request needs:
 - **Security impact:** whether the change touches secrets, logging, transport, wallet,
   authentication, signing or native code, and how you checked.
 - **Dependency/toolchain changes:** none, or each one with its justification.
-- **Human review before merge.** Merge is performed only by an authorized maintainer.
-  Review approval is not merge, promotion, release or signing authority.
+- **Maintainer review before merge.** Protected-branch pull requests require approval
+  from the `CadenaBitcoin/Maintainers` team. Merge is performed only through the
+  protected pull-request workflow. Review approval is not promotion, release or
+  signing authority.
 
 Commit messages follow `type: summary` (for example `fix: ...`, `docs: ...`,
 `chore: ...`). Maintainers may require signed commits.

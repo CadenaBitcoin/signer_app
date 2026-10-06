@@ -28,22 +28,24 @@ Branch model, authority levels and contribution rules: `GOVERNANCE.md`,
 
 ## 2. Source of truth and branch policy
 
-- **Target model** (see `GOVERNANCE.md`): `development` (default, integration) →
-  `staging` (Signet) → `production` (Mainnet). Promotion is forward only; no
-  application logic is developed on `staging` or `production`. The migration to
-  this model is **pending**.
-- Until `development` exists, `staging` remains the **active integration branch**;
-  `main` is the legacy GitHub default and is not an integration target. After the
-  migration, issue work starts from `development` instead.
-- Every issue starts from the current integration branch (`git switch <branch> &&
+- **Current branch model** (see `GOVERNANCE.md`): `development` (default,
+  integration) → `staging` (Signet promotion) → `production` (planned Mainnet
+  release branch). Promotion is forward only; no application logic is developed
+  independently on `staging` or `production`.
+- `development` is the **active integration and GitHub default branch**. `staging`
+  is a protected promotion branch. `main` is legacy and is not an integration
+  target. `production` has not yet been created because release provenance must be
+  established first.
+- Every issue starts from `development` (`git switch development &&
   git pull --ff-only`, confirm clean, then branch). Branch name:
   `issue/<N>-<short-name>` (older branches use other spellings).
 - Issue branches enter the integration branch **by pull request**. Never commit
   directly to `development`, `staging`, `production` or `main`.
 - PRs reference their issue with `Implements #N`, not automatic closing keywords
   (`fixes #N`, `closes #N`); a maintainer closes the issue explicitly.
-- Merge, promotion, release and signing are reserved to authorized maintainers;
-  Claude never exercises them.
+- Protected-branch review and merge authority belongs to the
+  `CadenaBitcoin/Maintainers` team. Promotion, release and signing follow the
+  additional authority boundaries in `GOVERNANCE.md`; Claude never exercises them.
 - Historical branches (`cadena(v1.0.3+1000033)`, `cryptlib`, `cryptlib1`,
   `cryptlib2`, `index4_*`, `sziller/firebase-installation-work`) are
   **references only** unless a human explicitly reactivates one.
