@@ -23,3 +23,7 @@ Start application: flutter run
 ## Security
 
 See [docs/SECURITY_BOUNDARY.md](docs/SECURITY_BOUNDARY.md) for the backend transport (HTTPS-only) and runtime-logging rules.
+
+## Development with Claude Code
+
+Project rules for AI-assisted development are in [CLAUDE.md](CLAUDE.md); the workflow is described in [docs/AI_DEVELOPMENT_WORKFLOW.md](docs/AI_DEVELOPMENT_WORKFLOW.md).
