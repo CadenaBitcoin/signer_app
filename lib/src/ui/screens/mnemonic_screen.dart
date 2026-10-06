@@ -58,12 +58,7 @@ class _MnemonicScreenState extends State<MnemonicScreen> {
         .where((word) => word.isNotEmpty)
         .toList();
 
-    print('words -> $words');
     print('words count -> ${words.length}');
-    print('final mnemonic -> ${words.join(' ')}');
-    for (int i = 0; i < words.length; i++) {
-      print('word ${i + 1}: "${words[i]}"');
-    }
     
     if (words.length != 12) {
       Get.snackbar(
@@ -78,7 +73,6 @@ class _MnemonicScreenState extends State<MnemonicScreen> {
     }
     
     final enteredMnemonic = words.join(' ');
-    print('final mnemonic -> $enteredMnemonic');
     if (!bip39.validateMnemonic(enteredMnemonic)) {
       Get.snackbar(
         "Error",

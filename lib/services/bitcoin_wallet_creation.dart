@@ -93,7 +93,6 @@ Future<BitcoinWallet> generateBitcoinWalletTestnet({required String mnemonic, St
   // 👇 Replace manual logic with helper function
   final address = generateP2WPKHAddress(pubKey, isTestnet: appController.isTestnet);
 
-  print("+++++++++++++new address${address}");
 
   return BitcoinWallet(path: derivationPath, privateKey: hex.encode(privKey), publicKey: hex.encode(pubKey), address: address);
 }

@@ -36,7 +36,7 @@ class UtilService {
           return values[0].replaceAllMapped(RegExp(r'(\d{1,3})(?=(\d{3})+(?!\d))'), (Match m) => '${m[1]},');
         }
       } catch (e) {
-        print('Error parsing data: $e');
+        print('Error parsing data: ${e.runtimeType}');
         return '0';
       }
     }

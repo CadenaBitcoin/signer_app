@@ -16,6 +16,7 @@
         android:icon="@mipmap/ic_launcher"
         android:allowBackup="false"
         android:fullBackupOnly="false"
+        android:usesCleartextTraffic="false"
         tools:replace="android:label, android:name">
 
         <activity
