@@ -118,28 +118,6 @@ class UtilService {
     selectedLanguage = _prefs.getString('SELECTED_LANGUAGE') ?? 'uk';
     print("getStatic $selectedLanguage");
   }
-
-  bool automationEmailExists(String email) {
-    const validEmails = {
-      'automation@extsy.com',
-      'seller-p2p@extsy.com',
-      'buyer-p2p@extsy.com',
-      'awais.3utt@gmail.com',
-      'kyc@gmail.com',
-      'referral@extsy.com',
-      'settings@extsy.com',
-      'mail-captcha3@yopmail.com',
-      'trading@extsy.com',
-      'swap-coins@extsy.com',
-      'aml-check@extsy.com',
-      'forgot-pass@extsy.com',
-      'extsy@yopmail.com',
-      'mail-captcha1@yopmail.com',
-      'delete-user@extsy.com',
-    };
-
-    return validEmails.contains(email.toLowerCase());
-  }
 }
 
 RegExp lowerCase = new RegExp(r"(?=.*[a-z])\w+");
