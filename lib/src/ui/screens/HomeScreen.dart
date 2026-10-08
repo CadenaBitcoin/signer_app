@@ -332,19 +332,6 @@ class _HomeScreenState extends State<HomeScreen> {
     }
   }
 
-  Widget _subordinateIfNeedsConnect({required Widget child}) {
-    return Obx(() {
-      final needsConnect = _needsCadenaConnectAttention;
-      return Opacity(
-        opacity: needsConnect ? 0.45 : 1.0,
-        child: IgnorePointer(
-          ignoring: needsConnect,
-          child: child,
-        ),
-      );
-    });
-  }
-
   Future<void> _initializeUserData() async {
     try {
       // Get user credentials from local storage
@@ -956,45 +943,45 @@ class _HomeScreenState extends State<HomeScreen> {
                       )
                     : const SizedBox.shrink()),
                 // KYC Status Card (chip opens Sumsub when actionable)
-                // Soft-subordinated until Cadena connect — requires online session
-                _subordinateIfNeedsConnect(
-                  child: Obx(() {
-                    final kycStatus =
-                        appController.userProfileObject.value.payload?.kycStatus;
-                    final display = _kycDisplayText(kycStatus);
-                    final actionable = _kycIsActionable(kycStatus) &&
-                        !_kycIsVerified(kycStatus) &&
-                        !_kycIsInProgress(kycStatus);
+                // Card is always visible; only the Verify action needs an
+                // online session, so it is offered only after Cadena connect.
+                Obx(() {
+                  final kycStatus =
+                      appController.userProfileObject.value.payload?.kycStatus;
+                  final display = _kycDisplayText(kycStatus);
+                  final actionable = _kycIsActionable(kycStatus) &&
+                      !_kycIsVerified(kycStatus) &&
+                      !_kycIsInProgress(kycStatus) &&
+                      !_needsCadenaConnectAttention;
 
-                    return _buildInfoCard(
-                      title: "KYC Status",
-                      value: _isKycLaunching ? "Opening..." : display,
-                      icon: _kycIcon(kycStatus),
-                      valueColor: _kycColor(kycStatus),
-                      trailing: (actionable && !_isKycLaunching)
-                          ? GestureDetector(
-                              onTap: _startKycFlow,
-                              child: Container(
-                                padding: const EdgeInsets.symmetric(
-                                  horizontal: 12,
-                                  vertical: 6,
-                                ),
-                                decoration: BoxDecoration(
-                                  color: primaryColor.value.withOpacity(0.2),
-                                  borderRadius: BorderRadius.circular(20),
-                                ),
-                                child: Text(
-                                  'Verify',
-                                  style: AppTextStyles.caption.copyWith(
-                                    color: subTextColor.value,
-                                  ),
+                  return _buildInfoCard(
+                    title: "KYC Status",
+                    value: _isKycLaunching ? "Opening..." : display,
+                    icon: _kycIcon(kycStatus),
+                    valueColor: _kycColor(kycStatus),
+                    trailing: (actionable && !_isKycLaunching)
+                        ? GestureDetector(
+                            onTap: _startKycFlow,
+                            child: Container(
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: 12,
+                                vertical: 6,
+                              ),
+                              decoration: BoxDecoration(
+                                color: primaryColor.value.withOpacity(0.2),
+                                borderRadius: BorderRadius.circular(20),
+                              ),
+                              child: Text(
+                                'Verify',
+                                style: AppTextStyles.caption.copyWith(
+                                  color: subTextColor.value,
                                 ),
                               ),
-                            )
-                          : null,
-                    );
-                  }),
-                ),
+                            ),
+                          )
+                        : null,
+                  );
+                }),
 
                 const SizedBox(height: 16),
 
@@ -1126,88 +1113,86 @@ class _HomeScreenState extends State<HomeScreen> {
                 const SizedBox(height: 16),
 
                 // Quick Actions Buttons
-                // Soft-subordinate Cadena-online actions (Refresh / Pair) until CONNECT
-                _subordinateIfNeedsConnect(
-                  child: Row(
-                    spacing: 16,
-                    children: [
-                      if (!appController.showVerifyButton.value)
-                        Expanded(
+                // Refresh / Pair are shown only when their own state flags allow it
+                Row(
+                  spacing: 16,
+                  children: [
+                    if (!appController.showVerifyButton.value)
+                      Expanded(
+                          child: _buildActionButton(
+                              icon: Icons.refresh,
+                              label: "Refresh",
+                              onTap: () {
+                                autoSigningService.checkForNewTransactions();
+                              })),
+                    Obx(() => appController.showScanButton.value
+                        ? Expanded(
                             child: _buildActionButton(
-                                icon: Icons.refresh,
-                                label: "Refresh",
-                                onTap: () {
-                                  autoSigningService.checkForNewTransactions();
-                                })),
-                      Obx(() => appController.showScanButton.value
-                          ? Expanded(
-                              child: _buildActionButton(
-                                icon: Icons.qr_code_scanner,
-                                label: "Pair",
-                                onTap: () async {
-                                  Get.to(() => QrScanner())?.then((onValue) async {
-                                    qrText.value = onValue ?? '';
+                              icon: Icons.qr_code_scanner,
+                              label: "Pair",
+                              onTap: () async {
+                                Get.to(() => QrScanner())?.then((onValue) async {
+                                  qrText.value = onValue ?? '';
 
-                                    if (onValue != null && onValue.isNotEmpty) {
-                                      try {
-                                        // Parse the QR JSON result
-                                        final Map<String, dynamic> qrData = jsonDecode(onValue);
-                                        final String? upgradeURL = qrData['upgradeURL'];
+                                  if (onValue != null && onValue.isNotEmpty) {
+                                    try {
+                                      // Parse the QR JSON result
+                                      final Map<String, dynamic> qrData = jsonDecode(onValue);
+                                      final String? upgradeURL = qrData['upgradeURL'];
 
-                                        if (upgradeURL != null) {
-                                          // Get xpub from local storage
-                                          final loggedInEmail = await StorageService.getLoggedInEmail();
-                                          final userData = await StorageService.getUserByEmail(
-                                            loggedInEmail ?? '',
-                                          );
-                                          final String? xpub = userData?['xpub'];
+                                      if (upgradeURL != null) {
+                                        // Get xpub from local storage
+                                        final loggedInEmail = await StorageService.getLoggedInEmail();
+                                        final userData = await StorageService.getUserByEmail(
+                                          loggedInEmail ?? '',
+                                        );
+                                        final String? xpub = userData?['xpub'];
 
-                                          if (xpub != null && xpub.isNotEmpty) {
-                                            // Call the API with dynamic URL and local xpub
-                                            ApiService()
-                                                .userUpgradePubx(
-                                              xpub: xpub,
-                                              upgradeURL: upgradeURL,
-                                            )
-                                                .then((result) {
-                                              if (result == "OK") {
-                                                Get.snackbar(
-                                                  'Success',
-                                                  'User XPub upgraded successfully.',
-                                                  snackPosition: SnackPosition.BOTTOM,
-                                                  backgroundColor: Colors.green.withOpacity(0.9),
-                                                  colorText: Colors.white,
-                                                );
-                                              } else if (result == "BLOCKED_XPUB_MISMATCH") {
-                                                print("API call blocked due to xpub mismatch - data reset required");
-                                                _showXpubMismatchDialog();
-                                              } else {
-                                                Get.snackbar(
-                                                  'Error',
-                                                  'Failed to upgrade user',
-                                                  snackPosition: SnackPosition.BOTTOM,
-                                                  backgroundColor: Colors.red.withOpacity(0.9),
-                                                  colorText: Colors.white,
-                                                );
-                                              }
-                                            });
-                                          } else {
-                                            print("No xpub found in local storage");
-                                          }
+                                        if (xpub != null && xpub.isNotEmpty) {
+                                          // Call the API with dynamic URL and local xpub
+                                          ApiService()
+                                              .userUpgradePubx(
+                                            xpub: xpub,
+                                            upgradeURL: upgradeURL,
+                                          )
+                                              .then((result) {
+                                            if (result == "OK") {
+                                              Get.snackbar(
+                                                'Success',
+                                                'User XPub upgraded successfully.',
+                                                snackPosition: SnackPosition.BOTTOM,
+                                                backgroundColor: Colors.green.withOpacity(0.9),
+                                                colorText: Colors.white,
+                                              );
+                                            } else if (result == "BLOCKED_XPUB_MISMATCH") {
+                                              print("API call blocked due to xpub mismatch - data reset required");
+                                              _showXpubMismatchDialog();
+                                            } else {
+                                              Get.snackbar(
+                                                'Error',
+                                                'Failed to upgrade user',
+                                                snackPosition: SnackPosition.BOTTOM,
+                                                backgroundColor: Colors.red.withOpacity(0.9),
+                                                colorText: Colors.white,
+                                              );
+                                            }
+                                          });
                                         } else {
-                                          print("No upgradeURL found in QR data");
+                                          print("No xpub found in local storage");
                                         }
-                                      } catch (e) {
-                                        print("Error parsing QR data: ${e.runtimeType}");
+                                      } else {
+                                        print("No upgradeURL found in QR data");
                                       }
+                                    } catch (e) {
+                                      print("Error parsing QR data: ${e.runtimeType}");
                                     }
-                                  });
-                                },
-                              ),
-                            )
-                          : SizedBox.shrink()),
-                    ],
-                  ),
+                                  }
+                                });
+                              },
+                            ),
+                          )
+                        : SizedBox.shrink()),
+                  ],
                 ),
                 SizedBox(
                   height: 16,
