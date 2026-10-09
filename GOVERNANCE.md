@@ -4,12 +4,12 @@ Cadena Bitcoin Signer is a public, open-source repository, but **official Cadena
 project authority remains controlled**. Anyone may read, fork and propose
 changes; only explicitly authorized people may merge, promote, release or sign.
 
-> **Status.** This document defines the adopted branch and authority model.
-> The branch migration to `development` / `staging` / `production` and the GitHub
-> protection rules described below have **not been applied yet**. Until the
-> migration is complete, `main` is the legacy GitHub default branch and `staging`
-> is the only integration branch; pull requests target `staging` (see
-> [Migration status](#migration-status)).
+> **Status.** The repository is owned by the `CadenaBitcoin` GitHub
+> Organization. `development` is the GitHub default and active integration
+> branch; `staging` is a protected promotion branch. GitHub rulesets enforce the
+> maintainer-controlled pull-request workflow on both branches. `production` has
+> not yet been created because authoritative release provenance must be
+> established first.
 
 ## 1. Authority
 
@@ -18,8 +18,9 @@ one person may eventually hold several.
 
 | Role | Held by | Authority |
 |---|---|---|
-| **Repository owner / administration** | `CadenaWizard` | Repository settings, rulesets, access management and collaborator invitations |
-| **Authorized maintainers (merge authority)** | `CadenaWizard`, `sziller` | Review and merge accepted changes according to the branch rules; perform promotions |
+| **Organization ownership / administration** | `CadenaBitcoin` Organization Owners | Organization and repository administration, access management and governance settings |
+| **Authorized maintainers (merge authority)** | `CadenaBitcoin/Maintainers`: `CadenaWizard`, `sziller` | Review and merge accepted changes according to the branch rules; perform promotions |
+| **Authorized contributors** | `CadenaBitcoin/Contributors` | Work directly on normal repository work branches and submit pull requests; no protected-branch merge authority |
 | **Release authority** | Authorized release maintainers (not yet named) | Decide that a build is an official release and authorize its publication |
 | **Signing authority** | Authorized signing custodians (not yet named) | Hold and use application-signing credentials |
 | **Public contributor** | Anyone | Fork, open issues, submit pull requests from forks |
@@ -37,16 +38,19 @@ requests from forks. They have no direct write access to the official
 repository, no merge authority, and no release, signing or administrative
 authority.
 
-**Authorized collaborators / maintainers** are explicitly invited by
-`CadenaWizard` and may work directly in the official repository. The repository
-belongs to a **personal GitHub account**, so a collaborator receives the
-permissions GitHub gives collaborators on such a repository. Collaborator status
-is therefore granted only to people trusted at that authority level, and merge
-authority remains limited to the authorized maintainers listed above.
+**Authorized contributors** are Organization members assigned to the
+`CadenaBitcoin/Contributors` team. That team has repository `Write` access, so
+contributors may create and push normal work branches directly in the official
+repository and submit pull requests without maintaining a personal fork. They
+do not have authority to update or merge protected lifecycle branches.
 
-Future option: if granular roles are needed (for example trusted contributors
-with direct write access but no merge authority), the repository can be moved to
-a GitHub Organization and use organization roles and Teams.
+**Authorized maintainers** are members of the `CadenaBitcoin/Maintainers` team.
+That team has repository `Maintain` access and is the technical review and merge
+authority for protected branches. Organization ownership or company authority
+does not by itself imply routine technical approval authority.
+
+The Organization base repository permission is `Read`. Repository access should
+normally be granted through Teams rather than permanent individual grants.
 
 ## 2. Branch model
 
@@ -63,13 +67,12 @@ production
 | Branch | Role |
 |---|---|
 | `development` | GitHub default branch and normal pull-request target. The active integration branch and normal issue completion point. Ordinary issues are **Done** when accepted into it, unless the issue explicitly carries staging or production scope. It does **not** automatically produce or deploy distributable application builds. Automatic CI verification (analyze, tests) may be added later and is distinct from application builds. |
-| `staging` | Signet. Promotion target from `development`; not a place for ordinary feature development. Has a **manually triggered** application build pipeline; branch updates alone must not build or deploy the staging application. Uses staging/Signet configuration. |
-| `production` | Mainnet. Promotion target from `staging`, with the strongest protection. It is the official production source. An authorized promotion/merge triggers the **official production application build**. A build does not imply automatic Play Store or App Store publication: store publication remains an explicitly controlled release action. Uses production/Mainnet configuration. |
+| `staging` | Signet promotion branch. Promotion target from `development`; not a place for ordinary feature development. It is protected now. The intended staging build is manually triggered once the build pipeline is established; branch updates alone must not deploy the staging application. |
+| `production` | Planned Mainnet release branch and promotion target from `staging`. It has **not yet been created** because authoritative production source/artifact provenance must be established first. When established, it will receive the strongest protection and drive the official production build; store publication remains a separately controlled release action. |
 
 Rules for all work:
 
-- Normal work branches from the current integration branch (`development` once
-  the migration is complete; until then `staging`).
+- Normal work branches start from the current `development` branch.
 - No direct normal development commits to `development`, `staging` or
   `production`; changes arrive by pull request.
 - A pull request needs review before merge, and merge is by an authorized
@@ -142,9 +145,6 @@ a maintainer explicitly closes the issue
 
 - Normal development is complete when accepted into `development`, unless the
   issue explicitly includes staging or production scope.
-- Until the branch migration is completed, acceptance into `staging` is the
-  equivalent completion point. The future model uses `development`; the current
-  repository still uses `staging`.
 - Pull requests reference their issue with `Implements #N`. Ordinary
   development pull requests do **not** use automatic closing keywords such as
   `fixes #N`, `closes #N` or `resolves #N`. GitHub applies those only when
@@ -152,19 +152,38 @@ a maintainer explicitly closes the issue
   has not happened.
 - Release or production work is tracked in issues that say so explicitly.
 
-## 6. Planned protection (not yet configured)
+## 6. GitHub-enforced branch protection
 
-Separate GitHub rulesets are to be created after this documentation is merged:
+`development` and `staging` are protected by a combination of GitHub rulesets
+and classic branch protection rules.
 
-- `development`: pull request required; maintainer-controlled merge; block force
-  pushes; block deletion.
-- `staging`: promotion pull requests only; maintainer-controlled merge; block
-  force pushes and deletion; no ordinary feature development.
-- `production`: strongest protection; promotion only from `staging`; restricted
-  merge and bypass; no ordinary direct pushes; official build trigger.
+For each branch, a classic branch protection rule:
 
-Until those rules are in force, the review and merge restrictions in this
-document are policy, not GitHub-enforced settings.
+- uses **Restrict who can push to matching branches**;
+- allows only the `CadenaBitcoin/Maintainers` team to update the branch; and
+- does not allow administrators to bypass the protection.
+
+This prevents Contributors with repository `Write` access from merging into or
+otherwise updating `development` or `staging`, while allowing them to create and
+push ordinary work branches.
+
+Active rulesets additionally restrict deletion and block force pushes.
+
+A separate pull-request policy ruleset for each branch requires:
+
+- a pull request before merge;
+- at least one approving review;
+- at least one approving review from `CadenaBitcoin/Maintainers` for changes
+  matching `**`;
+- stale approvals to be dismissed when new reviewable commits are pushed; and
+- all review conversations to be resolved before merge.
+
+This permits authorized Contributors to work directly on ordinary repository
+branches while preventing them from updating or merging into `development` or
+`staging`.
+
+`production` protection will be configured when that branch is established
+after release provenance is known.
 
 ## 7. AI-assisted changes
 
@@ -175,25 +194,32 @@ submitter remains responsible for the proposed change. See
 [docs/AI_DEVELOPMENT_WORKFLOW.md](docs/AI_DEVELOPMENT_WORKFLOW.md) for the
 rules that apply to AI tools in this repository.
 
-## Migration status
+## Current repository state
 
-Not performed. Current state: `main` is the legacy GitHub default branch, stale
-and pending migration; `staging` is the active integration branch and the
-pull-request target; no `development` or `production` branch exists.
+The governance migration has been performed:
 
-`production` will be initialized only after the authoritative currently released
-source commit and artifact lineage are confirmed. The fate of the legacy `main`
-branch is decided separately.
+- the repository is owned by the `CadenaBitcoin` GitHub Organization;
+- `development` exists and is the GitHub default / active integration branch;
+- `staging` is a protected promotion branch;
+- the `Maintainers` and `Contributors` Teams provide the technical access model;
+- branch rulesets enforce Maintainer-controlled pull-request merges on
+  `development` and `staging`; and
+- GitHub Private Vulnerability Reporting is enabled.
+
+`main` remains a legacy branch and is not an integration or promotion target.
+
+`production` has not been created. It will be initialized only after the
+authoritative currently released source commit and artifact lineage are
+confirmed.
 
 ## Pending follow-ups
 
-- Create `development`, make it the GitHub default, and establish `staging` as
-  promotion-only.
-- Establish `production` once release provenance is known.
+- Establish `production` once release provenance is known, then configure its
+  protection and release/build semantics.
 - Decide what to do with the legacy `main` branch.
-- Create the three rulesets in section 6.
-- Enable GitHub Private Vulnerability Reporting.
 - Designate release maintainers and signing custodians.
-- Build and release pipelines, including pipeline-controlled environment
-  configuration and the Android/iOS version representation.
-- Consider an organization-owned repository if granular roles are needed.
+- Build the CI, staging and production release pipelines, including
+  pipeline-controlled environment configuration and Android/iOS version
+  representation.
+- Where useful, add required CI/status checks and automated promotion-source
+  verification to the branch rulesets.

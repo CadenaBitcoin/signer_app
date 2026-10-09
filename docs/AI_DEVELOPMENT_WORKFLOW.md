@@ -22,7 +22,7 @@ signed commit
     ↓
 GitHub PR
     ↓
-integration branch (development; staging until the migration)
+integration branch (`development`)
 ```
 
 - The **technical owner** sets scope, approves plans that touch architecture or
@@ -47,10 +47,8 @@ human into the app, not into prompts, scripts or files.
 
 ## Standard sequence for an issue
 
-1. **Start clean**: switch to the current integration branch (`staging` until the
-   `development` migration in `GOVERNANCE.md` is complete) and
-   `git pull --ff-only`; confirm `git status` is clean; create
-   `issue/<N>-<short-name>` from it.
+1. **Start clean**: switch to `development` and `git pull --ff-only`; confirm
+   `git status` is clean; create `issue/<N>-<short-name>` from it.
 2. **Inspect first**: read the code and trace the real runtime path. Report facts
    before proposing changes.
 3. **Plan** and obtain human approval where the change involves architecture or
@@ -63,8 +61,9 @@ human into the app, not into prompts, scripts or files.
    confirm no temporary test configuration remains.
 7. **Human review**, then a **signed commit** with the Claude `Co-Authored-By`
    trailer.
-8. **PR to the integration branch**, opened by the human unless arranged
-   otherwise. Merge is performed by an authorized maintainer.
+8. **PR to `development`**, opened by the human unless arranged otherwise.
+   Protected-branch approval and merge are performed through the Maintainer-controlled
+   GitHub workflow.
 
 ## Runtime verification practice
 

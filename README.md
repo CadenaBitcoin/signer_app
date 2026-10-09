@@ -30,6 +30,10 @@ Start application: flutter run
 
 See [docs/SECURITY_BOUNDARY.md](docs/SECURITY_BOUNDARY.md) for the backend transport (HTTPS-only) and runtime-logging rules.
 
+## CI
+
+See [docs/ANDROID_CI.md](docs/ANDROID_CI.md) for the Android CI validation build (not for distribution).
+
 ## Development with Claude Code
 
 Project rules for AI-assisted development are in [CLAUDE.md](CLAUDE.md); the workflow is described in [docs/AI_DEVELOPMENT_WORKFLOW.md](docs/AI_DEVELOPMENT_WORKFLOW.md).
