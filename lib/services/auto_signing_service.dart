@@ -839,14 +839,15 @@ class AutoSigningService extends GetxService {
       for (final req in inputReqs!) {
         final hash = req.sighash;
         final signerIndex = req.signerIndex;
+        final signerIndex4 = req.signerIndex4;
         final signerPubkey = req.signerPubkey;
 
-        if (hash == null || signerIndex == null || signerPubkey == null) {
+        if (hash == null || signerIndex == null || signerIndex4 == null || signerPubkey == null) {
           throw Exception('Invalid signature request parameters');
         }
 
         print('hash: $hash');
-        final signature = await DlcWallet.signHashEcdsa(hash, signerIndex, signerPubkey);
+        final signature = await DlcWallet.signHashEcdsa(hash, signerIndex, signerIndex4, signerPubkey);
         print('ECDSA Signature: $signature');
         fundingSignatures.add(signature);
       }
@@ -856,8 +857,8 @@ class AutoSigningService extends GetxService {
       final refundReqs = _appController.sigReqsByDlcIdsModelObject.value.payload![0].refund?.inputReqs;
       if (refundReqs != null && refundReqs.isNotEmpty) {
         final refundReq = refundReqs[0];
-        if (refundReq.sighash != null && refundReq.signerIndex != null && refundReq.signerPubkey != null) {
-          refundSignature = await DlcWallet.signHashEcdsa(refundReq.sighash!, refundReq.signerIndex!, refundReq.signerPubkey!);
+        if (refundReq.sighash != null && refundReq.signerIndex != null refundReq.signerIndex4 != null && refundReq.signerPubkey != null) {
+          refundSignature = await DlcWallet.signHashEcdsa(refundReq.sighash!, refundReq.signerIndex!, refundReq.signerIndex4!, refundReq.signerPubkey!);
           print('Refund Signature: $refundSignature');
         }
       }
@@ -878,7 +879,7 @@ class AutoSigningService extends GetxService {
           }
 
           // Validate that we have the required CET parameters
-          if (cets.signerIndex == null || cets.signerPubkey == null || cets.oraclePubkey == null) {
+          if (cets.signerIndex == null || cets.signerIndex4 == null || cets.signerPubkey == null || cets.oraclePubkey == null) {
             throw Exception('Missing required CET parameters');
           }
 
@@ -889,6 +890,7 @@ class AutoSigningService extends GetxService {
             digitStringTemplate: cets.digitStringTemplate ?? 'BTCUSD',
             oraclePublicKey: cets.oraclePubkey!,
             signingKeyIndex: cets.signerIndex!,
+            signingKeyIndex4: cets.signerIndex4!,
             signingPublicKey: cets.signerPubkey!,
             nonces: noncesList,
             intervalWildcards: intervalWildcardsList,

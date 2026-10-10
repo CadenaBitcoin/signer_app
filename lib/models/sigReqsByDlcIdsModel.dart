@@ -87,15 +87,17 @@ class Funding {
 class InputReqs {
   int? inputIndex;
   int? signerIndex;
+  int? signerIndex4;
   String? signerPubkey;
   String? sighash;
   int? sighashType;
 
-  InputReqs({this.inputIndex, this.signerIndex, this.signerPubkey, this.sighash, this.sighashType});
+  InputReqs({this.inputIndex, this.signerIndex, this.signerIndex4, this.signerPubkey, this.sighash, this.sighashType});
 
   InputReqs.fromJson(Map<String, dynamic> json) {
     inputIndex = json['input_index'];
     signerIndex = json['signer_index'];
+    signerIndex4 = json['signer_index4'] != null ? json['signer_index4'] : 0;
     signerPubkey = json['signer_pubkey'];
     sighash = json['sighash'];
     sighashType = json['sighash_type'];
@@ -105,6 +107,7 @@ class InputReqs {
     final Map<String, dynamic> data = new Map<String, dynamic>();
     data['input_index'] = this.inputIndex;
     data['signer_index'] = this.signerIndex;
+    data['signer_index4'] = this.signerIndex4;
     data['signer_pubkey'] = this.signerPubkey;
     data['sighash'] = this.sighash;
     data['sighash_type'] = this.sighashType;
@@ -118,12 +121,13 @@ class Cets {
   String? digitStringTemplate;
   String? oraclePubkey;
   int? signerIndex;
+  int? signerIndex4;
   String? signerPubkey;
   String? nonces;
   String? intervalWildcards;
   String? sighashes;
 
-  Cets({this.numDigits, this.numCets, this.digitStringTemplate, this.oraclePubkey, this.signerIndex, this.signerPubkey, this.nonces, this.intervalWildcards, this.sighashes});
+  Cets({this.numDigits, this.numCets, this.digitStringTemplate, this.oraclePubkey, this.signerIndex, this.signerIndex4, this.signerPubkey, this.nonces, this.intervalWildcards, this.sighashes});
 
   Cets.fromJson(Map<String, dynamic> json) {
     numDigits = json['num_digits'];
@@ -131,6 +135,7 @@ class Cets {
     digitStringTemplate = json['digit_string_template'];
     oraclePubkey = json['oracle_pubkey'];
     signerIndex = json['signer_index'];
+    signerIndex4 = json['signer_index4'] != null ? json['signer_index4'] : 0;
     signerPubkey = json['signer_pubkey'];
     nonces = json['nonces'];
     intervalWildcards = json['interval_wildcards'];
@@ -144,6 +149,7 @@ class Cets {
     data['digit_string_template'] = this.digitStringTemplate;
     data['oracle_pubkey'] = this.oraclePubkey;
     data['signer_index'] = this.signerIndex;
+    data['signer_index4'] = this.signerIndex4;
     data['signer_pubkey'] = this.signerPubkey;
     data['nonces'] = this.nonces;
     data['interval_wildcards'] = this.intervalWildcards;

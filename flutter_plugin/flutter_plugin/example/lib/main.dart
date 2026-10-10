@@ -121,10 +121,12 @@ class _WalletScreenState extends State<WalletScreen> with TickerProviderStateMix
 
     try {
       final index = int.parse(_indexController.text);
+      final index4 = 0;
       final publicKey = await DlcWallet.getPublicKey(index);
       final signature = await DlcWallet.signHashEcdsa(
         _hashController.text,
         index,
+        index4,
         publicKey,
       );
 
@@ -162,6 +164,7 @@ class _WalletScreenState extends State<WalletScreen> with TickerProviderStateMix
       final signature = await DlcWallet.signTransaction(
         _hashController.text,
         int.parse(_indexController.text),
+        0,
       );
 
       _showResult('Transaction Signature', signature);
@@ -226,6 +229,7 @@ class _WalletScreenState extends State<WalletScreen> with TickerProviderStateMix
         digitStringTemplate: 'BTCUSD',
         oraclePublicKey: '0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798',
         signingKeyIndex: int.parse(_indexController.text),
+        signingKeyIndex4: 0,
         signingPublicKey: await DlcWallet.getPublicKey(int.parse(_indexController.text)),
         nonces: [
           '0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798',

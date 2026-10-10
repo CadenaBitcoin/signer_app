@@ -71,7 +71,7 @@ final address = await DlcWallet.getAddress(0);
 ```dart
 final signature = await DlcWallet.signHashEcdsa(
   "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-  0,
+  0, 0,
   pubkey
 );
 ```
@@ -114,6 +114,7 @@ final signatures = await DlcWallet.createCetAdaptorSigs(
   digitStringTemplate: 'BTCUSD',
   oraclePublicKey: '0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798',
   signingKeyIndex: 0,
+  signingKeyIndex4: 0,
   signingPublicKey: await DlcWallet.getPublicKey(0),
   nonces: ['nonce1', 'nonce2'],
   intervalWildcards: ['50000-60000', '60000-70000'],
@@ -156,7 +157,7 @@ final xpub = await DlcWallet.initWithEntropy(entropy, "signet");
 final addresses = await DlcWallet.generateAddresses(10);
 
 // Sign transaction
-final signature = await DlcWallet.signTransaction(txHash, keyIndex);
+final signature = await DlcWallet.signTransaction(txHash, keyIndex, keyIndex4);
 ```
 
 ### **2. DLC Contract Creation**
@@ -183,13 +184,13 @@ final nonces = dlcSetup['nonces'];
 // Sign Bitcoin transaction
 final txSignature = await DlcWallet.signTransaction(
   transactionHash,
-  keyIndex
+  keyIndex, keyIndex4,
 );
 
 // Sign arbitrary hash
 final hashSignature = await DlcWallet.signHashEcdsa(
   messageHash,
-  keyIndex,
+  keyIndex, keyIndex4,
   publicKey
 );
 ```

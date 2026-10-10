@@ -46,7 +46,7 @@
   const char *signerPubkeyCStr = [signerPubkey UTF8String];
   uint32_t signerIndexU32 = [signerIndex unsignedIntValue];
   
-  char *signatureCStr = sign_hash_ecdsa_c(hashCStr, signerIndexU32, signerPubkeyCStr);
+  char *signatureCStr = sign_hash_ecdsa_c(hashCStr, 0, signerIndexU32, signerPubkeyCStr);
   
   if (signatureCStr == NULL) {
     result([FlutterError errorWithCode:@"SIGNATURE_ERROR"
@@ -109,7 +109,7 @@
   
   char *signaturesCStr = create_cet_adaptor_sigs_c(
     numDigitsU8, numCetsU32, digitStringTemplateCStr, oraclePublicKeyCStr,
-    signingKeyIndexU32, signingPublicKeyCStr, noncesCStr, intervalWildcardsCStr, sighashesCStr
+    0, signingKeyIndexU32, signingPublicKeyCStr, noncesCStr, intervalWildcardsCStr, sighashesCStr
   );
   
   if (signaturesCStr == NULL) {
