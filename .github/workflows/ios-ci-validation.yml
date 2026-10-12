@@ -1,0 +1,289 @@
+# iOS CI validation build.
+#
+# Compiles the iOS app UNSIGNED (`flutter build ios --release --no-codesign`) on a
+# GitHub-hosted macOS runner from the exact commit pushed to `staging`, and uploads
+# the complete Runner.app (zipped with ditto) as a GitHub Actions artifact. This is
+# an infrastructure/CI validation artifact:
+#   - it is NOT approved for public distribution;
+#   - it is UNSIGNED: no Apple credentials, certificates or profiles are used, and
+#     it cannot be installed on a device. It only proves that the project compiles;
+#   - it currently contains the environment constants committed in
+#     lib/src/ui/controllers/appController.dart (today: PRODUCTION backend);
+#   - it links the committed prebuilt Rust static library as-is (no rebuild); the
+#     library's provenance is unverified.
+# See docs/IOS_CI.md.
+
+name: iOS CI validation build
+
+on:
+  push:
+    branches: [staging]
+  # Manual dry run of the same build for any ref, without promoting to staging.
+  # GitHub only offers this once the workflow file exists on the default branch.
+  workflow_dispatch:
+
+# Least privilege: the job only reads the repository. No release, no write access.
+permissions:
+  contents: read
+
+env:
+  # Toolchain this workflow requires. The build fails if the runner does not
+  # provide exactly these; the actual versions are recorded in the artifact notice.
+  XCODE_APP: /Applications/Xcode_16.4.app
+  EXPECTED_XCODE: "16.4"
+  EXPECTED_FLUTTER: "3.35.3"
+  EXPECTED_FLUTTER_REVISION: a402d9a437
+  EXPECTED_DART: "3.9.2"
+  # Prebuilt Rust static library linked by the dlc_wallet plugin (podspec -force_load).
+  # Never rebuilt here. This is the SHA-256 audited when this workflow was written;
+  # a changed library must be re-reviewed (with provenance) and this value updated.
+  RUST_LIB: flutter_plugin/flutter_plugin/ios/Classes/libdlcplazacryptlib.a
+  EXPECTED_RUST_LIB_SHA256: 203dcd7abe4187de0b756638a55f691b2d5c680b17d4fbfa7dda550ed703949b
+
+jobs:
+  ios-ci-validation:
+    name: Build unsigned iOS app (CI validation)
+    # macos-15 is the arm64 image (the Intel one is macos-15-intel). Not macos-latest.
+    runs-on: macos-15
+    timeout-minutes: 60
+    steps:
+      - name: Checkout exact commit
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+
+      - name: Select Xcode 16.4
+        run: |
+          sudo xcode-select -s "$XCODE_APP/Contents/Developer"
+          xcodebuild -version
+          actual="$(xcodebuild -version | sed -n '1s/^Xcode //p')"
+          if [ "$actual" != "$EXPECTED_XCODE" ]; then
+            echo "::error::Expected Xcode $EXPECTED_XCODE at $XCODE_APP but xcodebuild reports '$actual'."
+            exit 1
+          fi
+
+      # `architecture` defaults to runner.arch, i.e. the arm64 Flutter SDK here.
+      - name: Set up Flutter 3.35.3
+        uses: subosito/flutter-action@1a449444c387b1966244ae4d4f8c696479add0b2 # v2
+        with:
+          flutter-version: "3.35.3"
+          channel: stable
+          cache: true
+
+      - name: Record and verify toolchain
+        run: |
+          info="$RUNNER_TEMP/toolchain.txt"
+          arch="$(uname -m)"
+          flutter_json="$(flutter --version --machine)"
+          field() { printf '%s' "$flutter_json" | python3 -I -c "import sys,json; print(json.load(sys.stdin).get('$1',''))"; }
+          flutter_version="$(field frameworkVersion)"
+          flutter_revision="$(field frameworkRevision)"
+          dart_version="$(field dartSdkVersion | awk '{print $1}')"
+
+          {
+            echo "runner_os=macOS $(sw_vers -productVersion) ($(sw_vers -buildVersion))"
+            echo "runner_arch=${arch}"
+            echo "runner_image=${ImageOS:-unknown} ${ImageVersion:-unknown}"
+            echo "xcode=$(xcodebuild -version | sed -n '1s/^Xcode //p') ($(xcodebuild -version | sed -n '2s/^Build version //p'))"
+            echo "iphoneos_sdk=$(xcrun --sdk iphoneos --show-sdk-version)"
+            echo "flutter=${flutter_version} (revision ${flutter_revision:0:10})"
+            echo "dart=${dart_version}"
+            echo "cocoapods=$(pod --version)"
+            echo "ruby=$(ruby -v | awk '{print $2}')"
+          } > "$info"
+          cat "$info"
+
+          fail=0
+          if [ "$arch" != "arm64" ]; then echo "::error::Runner architecture is '$arch', expected arm64."; fail=1; fi
+          if [ "$flutter_version" != "$EXPECTED_FLUTTER" ]; then echo "::error::Flutter is '$flutter_version', expected $EXPECTED_FLUTTER."; fail=1; fi
+          case "$flutter_revision" in
+            "$EXPECTED_FLUTTER_REVISION"*) ;;
+            *) echo "::error::Flutter revision is '$flutter_revision', expected $EXPECTED_FLUTTER_REVISION*."; fail=1 ;;
+          esac
+          if [ "$dart_version" != "$EXPECTED_DART" ]; then echo "::error::Dart is '$dart_version', expected $EXPECTED_DART."; fail=1; fi
+          [ "$fail" -eq 0 ] || exit 1
+
+      - name: Resolve dependencies
+        run: |
+          flutter pub get --enforce-lockfile
+          (cd flutter_plugin/flutter_plugin && flutter pub get)
+
+      # The accepted analyzer baseline is 0 errors; existing warnings/info are
+      # known technical debt (CLAUDE.md section 4). Only errors fail this step.
+      # There is no test/ directory on this branch, so no `flutter test` step.
+      - name: Analyze (errors fail; pre-existing warnings/info do not)
+        run: flutter analyze --no-fatal-infos --no-fatal-warnings
+
+      # Documents what is linked. The library is NOT rebuilt or modified. Its origin
+      # is unverified: it was committed once (df269f6) and nothing here proves that
+      # it matches flutter_plugin/src.
+      - name: Record bundled Rust static library
+        run: |
+          if [ ! -f "$RUST_LIB" ]; then
+            echo "::error::Rust static library not found at $RUST_LIB"
+            exit 1
+          fi
+          sha="$(shasum -a 256 "$RUST_LIB" | awk '{print $1}')"
+          size="$(stat -f%z "$RUST_LIB")"
+          archs="$(lipo -info "$RUST_LIB" 2>&1)"
+          {
+            echo "rust_lib_path=${RUST_LIB}"
+            echo "rust_lib_sha256=${sha}"
+            echo "rust_lib_bytes=${size}"
+            echo "rust_lib_lipo=${archs}"
+          } > "$RUNNER_TEMP/rust-lib.txt"
+          cat "$RUNNER_TEMP/rust-lib.txt"
+          if [ "$sha" != "$EXPECTED_RUST_LIB_SHA256" ]; then
+            echo "::error::$RUST_LIB changed (sha256 $sha, audited $EXPECTED_RUST_LIB_SHA256). Re-review it, document its provenance, then update EXPECTED_RUST_LIB_SHA256."
+            exit 1
+          fi
+          case "$archs" in
+            *arm64*) ;;
+            *) echo "::error::Rust static library has no arm64 (device) slice: $archs"; exit 1 ;;
+          esac
+
+      # Flutter runs `pod install` itself. No signing: CODE_SIGNING_ALLOWED=NO.
+      - name: Build unsigned iOS app (release, no codesign)
+        run: flutter build ios --release --no-codesign
+
+      - name: Locate and inspect Runner.app
+        run: |
+          app="$(find build/ios -maxdepth 3 -type d -name Runner.app -print 2>/dev/null | head -n1 || true)"
+          if [ -z "$app" ]; then
+            echo "::error::flutter build ios succeeded but no Runner.app was found under build/ios."
+            find build/ios -maxdepth 3 2>/dev/null | head -n 40 || true
+            exit 1
+          fi
+          echo "$app" > "$RUNNER_TEMP/app-path.txt"
+          plist() { /usr/libexec/PlistBuddy -c "Print :$1" "$app/Info.plist"; }
+          exe="$app/$(plist CFBundleExecutable)"
+          archs="$(lipo -info "$exe" 2>&1)"
+          case "$archs" in
+            *arm64*) ;;
+            *) echo "::error::Runner executable is not arm64: $archs"; exit 1 ;;
+          esac
+          {
+            echo "app_path=${app}"
+            echo "bundle_id=$(plist CFBundleIdentifier)"
+            echo "bundle_short_version=$(plist CFBundleShortVersionString)"
+            echo "bundle_version=$(plist CFBundleVersion)"
+            echo "executable_arch=${archs}"
+            echo "frameworks=$(ls "$app/Frameworks" 2>/dev/null | wc -l | tr -d ' ')"
+            if [ -e "$app/embedded.mobileprovision" ]; then echo "embedded_provisioning_profile=PRESENT"; else echo "embedded_provisioning_profile=absent"; fi
+            echo "codesign=$(codesign -dv "$app" 2>&1 | sed -n '1,4p' | tr '\n' ' ')"
+            echo "tracked_files_modified_by_build=$(git status --porcelain --untracked-files=no | tr '\n' ';')"
+          } > "$RUNNER_TEMP/app-info.txt"
+          cat "$RUNNER_TEMP/app-info.txt"
+
+      - name: Prepare labelled artifact
+        id: prep
+        run: |
+          version="$(sed -n 's/^version:[[:space:]]*//p' pubspec.yaml | head -n1 | tr -d '[:space:]')"
+          if ! printf '%s' "$version" | grep -Eq '^[0-9A-Za-z.+-]+$'; then
+            echo "::error::Could not read a valid version from pubspec.yaml (got '$version')"
+            exit 1
+          fi
+
+          # The library must be unchanged by the build.
+          rust_after="$(shasum -a 256 "$RUST_LIB" | awk '{print $1}')"
+          if [ "$rust_after" != "$EXPECTED_RUST_LIB_SHA256" ]; then
+            echo "::error::$RUST_LIB was modified during the build."
+            exit 1
+          fi
+
+          # Environment constants as committed (no build configuration mechanism yet).
+          const() {
+            sed -nE "s/^[[:space:]]*static const [A-Za-z]+ $1 = ([^;]*);.*/\1/p" \
+              lib/src/ui/controllers/appController.dart | head -n1
+          }
+          use_testnet="$(const USE_TESTNET)"
+          network="$(const NETWORK_ENVIRONMENT)"
+          api_base_url="$(const API_BASE_URL)"
+          case "$api_base_url" in
+            *cadenabitcoin.com*)
+              env_verdict="PRODUCTION BACKEND CONFIGURATION" ;;
+            "")
+              env_verdict="UNDETERMINED (environment constants not found; treat as PRODUCTION until verified)" ;;
+            *)
+              env_verdict="non-production-looking configuration - verify before use" ;;
+          esac
+
+          app="$(cat "$RUNNER_TEMP/app-path.txt")"
+          short_sha="${GITHUB_SHA:0:7}"
+          name="CI-VALIDATION-NOT-APPROVED-FOR-PUBLIC-DISTRIBUTION_cadena-signer-ios_v${version}_unsigned_${short_sha}_run${GITHUB_RUN_NUMBER}-${GITHUB_RUN_ATTEMPT}"
+
+          mkdir -p ci-artifact
+          zip_name="${name}_Runner.app.zip"
+          # ditto keeps the bundle's symlinks, permissions and metadata intact.
+          ditto -c -k --sequesterRsrc --keepParent "$app" "ci-artifact/${zip_name}"
+          zip_sha256="$(shasum -a 256 "ci-artifact/${zip_name}" | awk '{print $1}')"
+          zip_bytes="$(stat -f%z "ci-artifact/${zip_name}")"
+          (cd ci-artifact && shasum -a 256 "${zip_name}" > SHA256SUMS.txt)
+
+          notice="ci-artifact/CI-VALIDATION-NOTICE.txt"
+          {
+            echo "CI VALIDATION — NOT APPROVED FOR PUBLIC DISTRIBUTION"
+            echo
+            echo "WARNING: this build contains: ${env_verdict}"
+            echo "  USE_TESTNET         = ${use_testnet}"
+            echo "  NETWORK_ENVIRONMENT = ${network}"
+            echo "  API_BASE_URL        = ${api_base_url}"
+            echo "  (values read from lib/src/ui/controllers/appController.dart at this commit)"
+            echo
+            echo "UNSIGNED iOS app (flutter build ios --release --no-codesign). No Apple credentials,"
+            echo "certificates or provisioning profiles were used. It cannot be installed on a device"
+            echo "and has not been run anywhere; CI proves only that the project compiles and links."
+            echo "Not a release. Not for distribution. No TestFlight / App Store use."
+            echo
+            echo "Rust static library (prebuilt, committed, NOT rebuilt here; provenance UNVERIFIED):"
+            sed 's/^/  /' "$RUNNER_TEMP/rust-lib.txt"
+            echo
+            echo "Toolchain (verified against the required versions by the workflow):"
+            sed 's/^/  /' "$RUNNER_TEMP/toolchain.txt"
+            echo
+            echo "Built app:"
+            sed 's/^/  /' "$RUNNER_TEMP/app-info.txt"
+            echo
+            echo "App version : ${version} (unchanged from pubspec.yaml)"
+            echo "Commit SHA  : ${GITHUB_SHA}"
+            echo "Ref         : ${GITHUB_REF_NAME}"
+            echo "Run         : ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID} (attempt ${GITHUB_RUN_ATTEMPT})"
+            echo "Archive     : ${zip_name} (${zip_bytes} bytes)"
+            echo "SHA-256     : ${zip_sha256}"
+            echo "Verify with : shasum -a 256 -c SHA256SUMS.txt"
+          } > "$notice"
+
+          tool() { sed -n "s/^$1=//p" "$RUNNER_TEMP/toolchain.txt" | head -n1; }
+          toolchain_summary="Xcode $(tool xcode), Flutter $(tool flutter), $(tool runner_arch)"
+
+          {
+            echo "## CI VALIDATION — NOT APPROVED FOR PUBLIC DISTRIBUTION"
+            echo
+            echo "> **WARNING: this build contains ${env_verdict}.**"
+            echo "> \`API_BASE_URL = ${api_base_url}\`, \`NETWORK_ENVIRONMENT = ${network}\`, \`USE_TESTNET = ${use_testnet}\`"
+            echo ">"
+            echo "> **UNSIGNED** iOS app: compile-and-link validation only. Not installable, not run, not for distribution."
+            echo
+            echo "| | |"
+            echo "|---|---|"
+            echo "| App version | \`${version}\` |"
+            echo "| Commit | \`${GITHUB_SHA}\` |"
+            echo "| Run | #${GITHUB_RUN_NUMBER} (attempt ${GITHUB_RUN_ATTEMPT}) |"
+            echo "| Toolchain | ${toolchain_summary} |"
+            echo "| Rust library | prebuilt, unverified provenance, sha256 \`${EXPECTED_RUST_LIB_SHA256:0:16}…\` |"
+            echo "| Signing | none (unsigned) |"
+            echo "| Artifact | \`${name}\` |"
+            echo "| Archive SHA-256 | \`${zip_sha256}\` |"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          echo "::warning title=CI VALIDATION - NOT FOR DISTRIBUTION::This UNSIGNED iOS app contains ${env_verdict} (API_BASE_URL=${api_base_url})."
+
+          echo "name=${name}" >> "$GITHUB_OUTPUT"
+
+      - name: Upload Actions artifact
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: ${{ steps.prep.outputs.name }}
+          path: ci-artifact/
+          if-no-files-found: error
+          retention-days: 14
