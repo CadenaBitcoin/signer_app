@@ -32,7 +32,7 @@ See [docs/SECURITY_BOUNDARY.md](docs/SECURITY_BOUNDARY.md) for the backend trans
 
 ## CI
 
-See [docs/ANDROID_CI.md](docs/ANDROID_CI.md) for the Android CI validation build (not for distribution).
+See [docs/ANDROID_CI.md](docs/ANDROID_CI.md) for the Android CI validation build and [docs/IOS_CI.md](docs/IOS_CI.md) for the iOS one (neither is for distribution).
 
 ## Development with Claude Code
 
