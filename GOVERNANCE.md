@@ -67,8 +67,8 @@ production
 | Branch | Role |
 |---|---|
 | `development` | GitHub default branch and normal pull-request target. The active integration branch and normal issue completion point. Ordinary issues are **Done** when accepted into it, unless the issue explicitly carries staging or production scope. It does **not** automatically produce or deploy distributable application builds. Automatic CI verification (analyze, tests) may be added later and is distinct from application builds. |
-| `staging` | Signet promotion branch. Promotion target from `development`; not a place for ordinary feature development. It is protected now. The intended staging build is manually triggered once the build pipeline is established; branch updates alone must not deploy the staging application. |
-| `production` | Planned Mainnet release branch and promotion target from `staging`. It has **not yet been created** because authoritative production source/artifact provenance must be established first. When established, it will receive the strongest protection and drive the official production build; store publication remains a separately controlled release action. |
+| `staging` | Signet promotion branch. Promotion target from `development`; not a place for ordinary feature development. It is protected now. The intended design is that a merge triggers the staging build pipeline, which builds and signs the staging artifacts (Android and iOS, a separate staging application on Signet) for restricted internal testing. A merge builds; it does not publish. See [docs/RELEASE_POLICY.md](docs/RELEASE_POLICY.md). Today only the unsigned CI validation workflows run on `staging`. |
+| `production` | Planned Mainnet release branch and promotion target from `staging`. It has **not yet been created** because authoritative production source/artifact provenance must be established first. When established, it will receive the strongest protection, and a merge into it will trigger the production build pipeline (Android APK, Android AAB, iOS). A merge builds and signs; publication to the website, Google Play or the App Store remains a separately authorized release action. Creation requirements and the promotion procedure: [docs/RELEASE_POLICY.md](docs/RELEASE_POLICY.md) section 2. |
 
 Rules for all work:
 
@@ -114,14 +114,28 @@ pipeline work.
 - Staging builds need an unambiguous candidate/build identifier.
 - Every staging and production artifact must record its exact Git commit SHA.
 - Build numbers / version codes are managed monotonically.
-- The exact Android and iOS representation of a candidate version will be
-  established together with the build pipelines.
+- **Product version, platform build number and release identifier are three
+  different things.** The product version `X.Y.Z` is the same on Android and iOS
+  for one release and is always numeric. Build numbers may differ between the
+  platforms where necessary. The release identifier names a staging candidate
+  (`vX.Y.Z-rc.N`) or a production release (`vX.Y.Z`); it is shown by the staging
+  apps and recorded in release metadata, never in Apple's numeric version fields.
+- Staging and production are different applications with different application
+  identities, backends and Bitcoin networks. The five signed artifacts, the
+  version rules, the release record and the distinction between CI validation
+  builds, pipeline builds and independent builds are defined in
+  [docs/RELEASE_POLICY.md](docs/RELEASE_POLICY.md). Signing is described in
+  [docs/RELEASE_SIGNING_ARCHITECTURE.md](docs/RELEASE_SIGNING_ARCHITECTURE.md) and
+  the order of work in
+  [docs/RELEASE_IMPLEMENTATION_PLAN.md](docs/RELEASE_IMPLEMENTATION_PLAN.md).
 
 Illustrative example only (not a requirement):
 
 ```text
-staging:     1.3.0-rc.1   1.3.0-rc.2
-production:  1.3.0
+release identifier     embedded product version + build
+staging:     v1.3.0-rc.1    1.3.0 (build 1000101)
+             v1.3.0-rc.2    1.3.0 (build 1000102)
+production:  v1.3.0         1.3.0 (build 1000103)
 ```
 
 Every built artifact must eventually record enough to identify its environment,
@@ -218,8 +232,9 @@ confirmed.
   protection and release/build semantics.
 - Decide what to do with the legacy `main` branch.
 - Designate release maintainers and signing custodians.
-- Build the CI, staging and production release pipelines, including
-  pipeline-controlled environment configuration and Android/iOS version
-  representation.
+- Build the staging and production release pipelines (five signed artifacts), the
+  explicit pipeline-controlled build configuration, the separate staging
+  application identities and the signing infrastructure, in the order of
+  [docs/RELEASE_IMPLEMENTATION_PLAN.md](docs/RELEASE_IMPLEMENTATION_PLAN.md).
 - Where useful, add required CI/status checks and automated promotion-source
   verification to the branch rulesets.

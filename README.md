@@ -24,6 +24,7 @@ Start application: flutter run
 
 - [CONTRIBUTING.md](CONTRIBUTING.md) — how to propose changes
 - [GOVERNANCE.md](GOVERNANCE.md) — branch model, authority levels, release and versioning policy
+- [docs/RELEASE_POLICY.md](docs/RELEASE_POLICY.md) — release branches, the five signed artifacts, application identity, versioning (draft); with [signing architecture](docs/RELEASE_SIGNING_ARCHITECTURE.md) and [implementation plan](docs/RELEASE_IMPLEMENTATION_PLAN.md)
 - [SECURITY.md](SECURITY.md) — reporting vulnerabilities privately
 
 ## Security

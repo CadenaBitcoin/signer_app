@@ -132,9 +132,10 @@ summary and a workflow warning annotation repeat the warning.
   unless a real build failure shows it is needed.
 - **Xcode 16.4 is pinned** and must remain on the `macos-15` image; Xcode 26 and
   Flutter 3.35.3 are untested together.
-- **Versioning is undecided.** The version is not modified. iOS requires a numeric
-  `CFBundleShortVersionString`, so a prerelease suffix such as `-rc.1` cannot be
-  used there as is.
+- **The version is not modified.** iOS requires a numeric
+  `CFBundleShortVersionString`, so a prerelease suffix such as `-rc.1` is never
+  embedded; staging candidates are named by a release identifier instead
+  ([RELEASE_POLICY.md](RELEASE_POLICY.md) section 7).
 - **Same bundle identifier** (`com.app.cadenabitcoin`) as Android and production.
 - The `DEVELOPMENT_TEAM` value in the Xcode project is committed but unused by this
   build (no signing).

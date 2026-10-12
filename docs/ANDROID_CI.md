@@ -75,6 +75,7 @@ warning annotation repeat the production-configuration warning.
   Rust library is not rebuilt, and its provenance is not verified here.
 - **Version is not modified**, and the `versionCode` is not unique per run.
 - **Not a release:** no GitHub Release is created and nothing is published.
-- `GOVERNANCE.md` says a staging *build* is intended to be manually triggered.
-  This workflow only produces a short-lived validation artifact; it deploys
-  nothing. The wording should be reconciled when staging builds are specified.
+- Staging builds are specified in [RELEASE_POLICY.md](RELEASE_POLICY.md): a merge
+  into `staging` is designed to trigger a separate signed staging pipeline. This
+  workflow only produces a short-lived validation artifact; it signs and deploys
+  nothing and is not one of the five signed artifacts.
