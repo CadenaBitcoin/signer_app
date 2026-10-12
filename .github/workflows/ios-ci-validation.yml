@@ -7,8 +7,9 @@
 #   - it is NOT approved for public distribution;
 #   - it is UNSIGNED: no Apple credentials, certificates or profiles are used, and
 #     it cannot be installed on a device. It only proves that the project compiles;
-#   - it currently contains the environment constants committed in
-#     lib/src/ui/controllers/appController.dart (today: PRODUCTION backend);
+#   - its environment is selected EXPLICITLY by BUILD_CONFIG_FILE below
+#     (config/build/staging.json), never by the branch name; a missing, incomplete
+#     or contradictory configuration fails the build (lib/config/build_config.dart);
 #   - it links the committed prebuilt Rust static library as-is (no rebuild); the
 #     library's provenance is unverified.
 # See docs/IOS_CI.md.
@@ -27,6 +28,9 @@ permissions:
   contents: read
 
 env:
+  # The environment this workflow builds. Passed to Flutter with
+  # --dart-define-from-file and checked against what the app itself resolves.
+  BUILD_CONFIG_FILE: config/build/staging.json
   # Toolchain this workflow requires. The build fails if the runner does not
   # provide exactly these; the actual versions are recorded in the artifact notice.
   XCODE_APP: /Applications/Xcode_16.4.app
@@ -108,6 +112,29 @@ jobs:
           flutter pub get --enforce-lockfile
           (cd flutter_plugin/flutter_plugin && flutter pub get)
 
+      # Same checks as the Android workflow: the configuration matrix (valid ones
+      # resolve to the intended values, invalid ones are rejected), release/AOT
+      # compiles, the analyzer guard and the portability scan, then what the app
+      # itself resolves from this workflow's configuration (must be staging).
+      # Deliberately run with the system /bin/bash (3.2 on macOS): the tool must
+      # stay portable to the bash that macOS ships.
+      - name: Verify build configuration
+        run: |
+          bash_version="$(/bin/bash -c 'echo "$BASH_VERSION"')"
+          echo "Build-configuration tool runs under /bin/bash $bash_version"
+          /bin/bash tool/verify_build_config.sh verify
+          resolved="$(/bin/bash tool/verify_build_config.sh resolve "$BUILD_CONFIG_FILE")"
+          echo "Resolved from $BUILD_CONFIG_FILE:"
+          echo "$resolved"
+          if ! grep -qx 'APP_ENV=staging' <<<"$resolved"; then
+            echo "::error::$BUILD_CONFIG_FILE does not resolve to APP_ENV=staging; refusing to build a staging CI artifact from it."
+            exit 1
+          fi
+          {
+            echo "$resolved"
+            echo "CONFIG_TOOL_BASH=/bin/bash $bash_version"
+          } > "$RUNNER_TEMP/resolved-build-config.txt"
+
       # The accepted analyzer baseline is 0 errors; existing warnings/info are
       # known technical debt (CLAUDE.md section 4). Only errors fail this step.
       # There is no test/ directory on this branch, so no `flutter test` step.
@@ -144,7 +171,7 @@ jobs:
 
       # Flutter runs `pod install` itself. No signing: CODE_SIGNING_ALLOWED=NO.
       - name: Build unsigned iOS app (release, no codesign)
-        run: flutter build ios --release --no-codesign
+        run: flutter build ios --release --no-codesign --dart-define-from-file="$BUILD_CONFIG_FILE"
 
       - name: Locate and inspect Runner.app
         run: |
@@ -175,6 +202,22 @@ jobs:
           } > "$RUNNER_TEMP/app-info.txt"
           cat "$RUNNER_TEMP/app-info.txt"
 
+      # Supporting evidence, not proof: the compiled Dart AOT snapshot of the built app
+      # must contain the selected environment's backend URL and must NOT contain the
+      # other environment's. Passing a configuration to Flutter is not, by itself,
+      # evidence that the artifact uses it. See docs/BUILD_CONFIGURATION.md.
+      - name: Check the built app against its configuration (positive and negative)
+        run: |
+          app="$(cat "$RUNNER_TEMP/app-path.txt")"
+          bin="$app/Frameworks/App.framework/App"
+          if [ ! -f "$bin" ]; then
+            echo "::error::Dart AOT snapshot not found at $bin"
+            find "$app" -maxdepth 3 2>/dev/null | head -n 40 || true
+            exit 1
+          fi
+          expected="$(sed -n 's/^APP_ENV=//p' "$RUNNER_TEMP/resolved-build-config.txt" | head -n1)"
+          /bin/bash tool/verify_build_config.sh check-binary "$expected" "$bin" | tee "$RUNNER_TEMP/binary-check.txt"
+
       - name: Prepare labelled artifact
         id: prep
         run: |
@@ -191,26 +234,34 @@ jobs:
             exit 1
           fi
 
-          # Environment constants as committed (no build configuration mechanism yet).
-          const() {
-            sed -nE "s/^[[:space:]]*static const [A-Za-z]+ $1 = ([^;]*);.*/\1/p" \
-              lib/src/ui/controllers/appController.dart | head -n1
-          }
-          use_testnet="$(const USE_TESTNET)"
-          network="$(const NETWORK_ENVIRONMENT)"
-          api_base_url="$(const API_BASE_URL)"
-          case "$api_base_url" in
-            *cadenabitcoin.com*)
-              env_verdict="PRODUCTION BACKEND CONFIGURATION" ;;
-            "")
-              env_verdict="UNDETERMINED (environment constants not found; treat as PRODUCTION until verified)" ;;
+          # What the app's own BuildConfig resolved from $BUILD_CONFIG_FILE
+          # (recorded by "Verify build configuration" with the same defines).
+          resolved_file="$RUNNER_TEMP/resolved-build-config.txt"
+          resolved() { sed -n "s/^$1=//p" "$resolved_file" | head -n1; }
+          app_env="$(resolved APP_ENV)"
+          network="$(resolved NETWORK_ENVIRONMENT)"
+          use_testnet="$(resolved USE_TESTNET)"
+          api_base_url="$(resolved API_BASE_URL)"
+          config_tool_bash="$(resolved CONFIG_TOOL_BASH)"
+
+          case "$app_env" in
+            staging)
+              env_verdict="STAGING backend configuration (Signet)"
+              annotation="notice"
+              ;;
+            production)
+              env_verdict="PRODUCTION BACKEND CONFIGURATION"
+              annotation="warning"
+              ;;
             *)
-              env_verdict="non-production-looking configuration - verify before use" ;;
+              echo "::error::Unexpected resolved APP_ENV '$app_env'"
+              exit 1
+              ;;
           esac
 
           app="$(cat "$RUNNER_TEMP/app-path.txt")"
           short_sha="${GITHUB_SHA:0:7}"
-          name="CI-VALIDATION-NOT-APPROVED-FOR-PUBLIC-DISTRIBUTION_cadena-signer-ios_v${version}_unsigned_${short_sha}_run${GITHUB_RUN_NUMBER}-${GITHUB_RUN_ATTEMPT}"
+          name="CI-VALIDATION-NOT-APPROVED-FOR-PUBLIC-DISTRIBUTION_cadena-signer-ios_v${version}_${app_env}_unsigned_${short_sha}_run${GITHUB_RUN_NUMBER}-${GITHUB_RUN_ATTEMPT}"
 
           mkdir -p ci-artifact
           zip_name="${name}_Runner.app.zip"
@@ -224,11 +275,16 @@ jobs:
           {
             echo "CI VALIDATION — NOT APPROVED FOR PUBLIC DISTRIBUTION"
             echo
-            echo "WARNING: this build contains: ${env_verdict}"
+            echo "Environment : ${app_env}  -> ${env_verdict}"
             echo "  USE_TESTNET         = ${use_testnet}"
             echo "  NETWORK_ENVIRONMENT = ${network}"
             echo "  API_BASE_URL        = ${api_base_url}"
-            echo "  (values read from lib/src/ui/controllers/appController.dart at this commit)"
+            echo "  Selected explicitly by: --dart-define-from-file=${BUILD_CONFIG_FILE}"
+            echo "  (not by the branch name; validated at compile time by lib/config/build_config.dart)"
+            echo "  Configuration tools ran under: ${config_tool_bash}"
+            echo
+            echo "Built-app check (positive and negative; supporting evidence, NOT proof of network isolation):"
+            sed 's/^/  /' "$RUNNER_TEMP/binary-check.txt"
             echo
             echo "UNSIGNED iOS app (flutter build ios --release --no-codesign). No Apple credentials,"
             echo "certificates or provisioning profiles were used. It cannot be installed on a device"
@@ -259,13 +315,19 @@ jobs:
           {
             echo "## CI VALIDATION — NOT APPROVED FOR PUBLIC DISTRIBUTION"
             echo
-            echo "> **WARNING: this build contains ${env_verdict}.**"
+            if [ "$app_env" = "production" ]; then
+              echo "> **WARNING: this build contains ${env_verdict}.**"
+            else
+              echo "> **Environment: ${env_verdict}.** Selected explicitly by \`${BUILD_CONFIG_FILE}\`, not by the branch name."
+            fi
             echo "> \`API_BASE_URL = ${api_base_url}\`, \`NETWORK_ENVIRONMENT = ${network}\`, \`USE_TESTNET = ${use_testnet}\`"
             echo ">"
             echo "> **UNSIGNED** iOS app: compile-and-link validation only. Not installable, not run, not for distribution."
             echo
             echo "| | |"
             echo "|---|---|"
+            echo "| Environment | \`${app_env}\` |"
+            echo "| Config file | \`${BUILD_CONFIG_FILE}\` |"
             echo "| App version | \`${version}\` |"
             echo "| Commit | \`${GITHUB_SHA}\` |"
             echo "| Run | #${GITHUB_RUN_NUMBER} (attempt ${GITHUB_RUN_ATTEMPT}) |"
@@ -276,7 +338,7 @@ jobs:
             echo "| Archive SHA-256 | \`${zip_sha256}\` |"
           } >> "$GITHUB_STEP_SUMMARY"
 
-          echo "::warning title=CI VALIDATION - NOT FOR DISTRIBUTION::This UNSIGNED iOS app contains ${env_verdict} (API_BASE_URL=${api_base_url})."
+          echo "::${annotation} title=CI VALIDATION - NOT FOR DISTRIBUTION::This UNSIGNED iOS app: ${env_verdict} (API_BASE_URL=${api_base_url}). Selected by ${BUILD_CONFIG_FILE}."
 
           echo "name=${name}" >> "$GITHUB_OUTPUT"
 

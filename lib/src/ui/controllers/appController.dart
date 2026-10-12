@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:get/get.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:signer/config/build_config.dart';
 import 'package:signer/models/appVersionEPModel.dart';
 import 'package:signer/models/sigReqsByDlcIdsModel.dart';
 import 'package:signer/models/userOfferDlcPollModel.dart';
@@ -14,14 +15,12 @@ import 'package:signer/src/ui/screens/splashScreen.dart';
 import 'package:bip32/bip32.dart'as bip32;
 
 /// AppController - Central configuration for network settings
-/// 
-/// EASY NETWORK SWITCHING:
-/// To switch between mainnet and testnet, simply change these two variables:
-/// 
-/// 1. USE_TESTNET = false (for mainnet) or true (for testnet/signet)
-/// 2. API_BASE_URL = "https://cadenabitcoin.com/app" (mainnet production)
-///    or "https://staging.purabitcoin.com/app" (staging). HTTPS is required for both.
-/// 
+///
+/// NETWORK SWITCHING:
+/// The environment (backend URL and Bitcoin network) is selected explicitly at
+/// build time through BuildConfig and config/build/*.json; there is no default.
+/// See docs/BUILD_CONFIGURATION.md. HTTPS is required for every backend URL.
+///
 /// NETWORK TYPES:
 /// - MAINNET_NATIVE_SEGWIT: Generates vpub/vprv (recommended for mainnet)
 /// - MAINNET_LEGACY: Generates xpub/xprv (legacy mainnet)
@@ -80,19 +79,21 @@ class AppController extends GetxController {
   // NETWORK CONFIGURATION - EASY SWITCHING
   // ========================================
   
-  /// Set to true for testnet/signet, false for mainnet
-  /// 
-  /// EXAMPLE SWITCHING:
-  /// For MAINNET: USE_TESTNET = false, API_BASE_URL = "https://cadenabitcoin.com/app"
-  /// For STAGING: USE_TESTNET = true, NETWORK_ENVIRONMENT = "signet",
-  ///   API_BASE_URL = "https://staging.purabitcoin.com/app"
-  static const bool USE_TESTNET = false;
-  
+  /// These three values come from [BuildConfig] (lib/config/build_config.dart)
+  /// and are selected at build time, not by editing source:
+  ///   --dart-define-from-file=config/build/staging.json
+  ///   --dart-define-from-file=config/build/production.json
+  /// There is no default: a build without a complete, consistent configuration
+  /// fails compilation.
+
+  /// True for testnet/signet, false for mainnet
+  static const bool USE_TESTNET = BuildConfig.useTestnet;
+
   /// Environment string for API calls: "bitcoin" for mainnet, "signet" for testnet
-  static const String NETWORK_ENVIRONMENT = "bitcoin";
-  
-  /// API Base URL - change this for different environments
-  static const String API_BASE_URL = "https://cadenabitcoin.com/app";
+  static const String NETWORK_ENVIRONMENT = BuildConfig.networkEnvironment;
+
+  /// API Base URL for the selected environment
+  static const String API_BASE_URL = BuildConfig.apiBaseUrl;
   // Must be https:// — DataService refuses any other scheme.
   
   // ========================================

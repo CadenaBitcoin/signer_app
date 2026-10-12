@@ -1,0 +1,6 @@
+{
+  "APP_ENV": "staging",
+  "NETWORK_ENVIRONMENT": "signet",
+  "USE_TESTNET": true,
+  "API_BASE_URL": "https://staging.purabitcoin.com/app"
+}

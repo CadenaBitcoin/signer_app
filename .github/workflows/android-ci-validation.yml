@@ -4,8 +4,9 @@
 # a GitHub Actions artifact. This is an infrastructure/CI validation artifact:
 #   - it is NOT approved for public distribution;
 #   - it is debug-signed with an ephemeral runner key (no signing secrets);
-#   - it currently contains the environment constants committed in
-#     lib/src/ui/controllers/appController.dart (today: PRODUCTION backend);
+#   - its environment is selected EXPLICITLY by BUILD_CONFIG_FILE below
+#     (config/build/staging.json), never by the branch name; a missing, incomplete
+#     or contradictory configuration fails the build (lib/config/build_config.dart);
 #   - it uses the committed prebuilt Rust binaries (no native rebuild).
 # See docs/ANDROID_CI.md.
 
@@ -21,6 +22,11 @@ on:
 # Least privilege: the job only reads the repository. No release, no write access.
 permissions:
   contents: read
+
+env:
+  # The environment this workflow builds. Passed to Flutter with
+  # --dart-define-from-file and checked against what the app itself resolves.
+  BUILD_CONFIG_FILE: config/build/staging.json
 
 jobs:
   android-ci-validation:
@@ -58,6 +64,24 @@ jobs:
           flutter pub get --enforce-lockfile
           (cd flutter_plugin/flutter_plugin && flutter pub get)
 
+      # Compiles tool/build_config_probe.dart against BuildConfig for every valid
+      # and invalid configuration (valid ones must resolve to the intended
+      # values, invalid ones must be rejected), including release/AOT compiles,
+      # the analyzer guard and the portability scan, then records what the app
+      # itself resolves from this workflow's configuration and requires it to
+      # be staging.
+      - name: Verify build configuration
+        run: |
+          tool/verify_build_config.sh verify
+          resolved="$(tool/verify_build_config.sh resolve "$BUILD_CONFIG_FILE")"
+          echo "Resolved from $BUILD_CONFIG_FILE:"
+          echo "$resolved"
+          if ! grep -qx 'APP_ENV=staging' <<<"$resolved"; then
+            echo "::error::$BUILD_CONFIG_FILE does not resolve to APP_ENV=staging; refusing to build a staging CI artifact from it."
+            exit 1
+          fi
+          echo "$resolved" > "$RUNNER_TEMP/resolved-build-config.txt"
+
       # The accepted analyzer baseline is 0 errors; existing warnings/info are
       # known technical debt (CLAUDE.md section 4). Only errors fail this step.
       # There is no test/ directory on this branch, so no `flutter test` step.
@@ -65,7 +89,7 @@ jobs:
         run: flutter analyze --no-fatal-infos --no-fatal-warnings
 
       - name: Build debug APK
-        run: flutter build apk --debug
+        run: flutter build apk --debug --dart-define-from-file="$BUILD_CONFIG_FILE"
 
       - name: Prepare labelled artifact
         id: prep
@@ -76,23 +100,32 @@ jobs:
             exit 1
           fi
 
+          # What the app's own BuildConfig resolved from $BUILD_CONFIG_FILE
+          # (recorded by "Verify build configuration" with the same defines).
+          resolved_file="$RUNNER_TEMP/resolved-build-config.txt"
+          resolved() { sed -n "s/^$1=//p" "$resolved_file" | head -n1; }
+          app_env="$(resolved APP_ENV)"
+          network="$(resolved NETWORK_ENVIRONMENT)"
+          use_testnet="$(resolved USE_TESTNET)"
+          api_base_url="$(resolved API_BASE_URL)"
+
+          case "$app_env" in
+            staging)
+              env_verdict="STAGING backend configuration (Signet)"
+              annotation="notice"
+              ;;
+            production)
+              env_verdict="PRODUCTION BACKEND CONFIGURATION"
+              annotation="warning"
+              ;;
+            *)
+              echo "::error::Unexpected resolved APP_ENV '$app_env'"
+              exit 1
+              ;;
+          esac
+
           short_sha="${GITHUB_SHA::7}"
-          name="CI-VALIDATION-NOT-APPROVED-FOR-PUBLIC-DISTRIBUTION_cadena-signer_v${version}_${short_sha}_run${GITHUB_RUN_NUMBER}-${GITHUB_RUN_ATTEMPT}"
-
-          # Report the environment constants actually compiled into this commit.
-          const() {
-            sed -nE "s/^[[:space:]]*static const [A-Za-z]+ $1 = ([^;]*);.*/\1/p" \
-              lib/src/ui/controllers/appController.dart | head -n1
-          }
-          use_testnet="$(const USE_TESTNET)"
-          network="$(const NETWORK_ENVIRONMENT)"
-          api_base_url="$(const API_BASE_URL)"
-
-          if printf '%s' "$api_base_url" | grep -q 'cadenabitcoin\.com'; then
-            env_verdict="PRODUCTION BACKEND CONFIGURATION"
-          else
-            env_verdict="non-production-looking configuration - verify before use"
-          fi
+          name="CI-VALIDATION-NOT-APPROVED-FOR-PUBLIC-DISTRIBUTION_cadena-signer_v${version}_${app_env}_${short_sha}_run${GITHUB_RUN_NUMBER}-${GITHUB_RUN_ATTEMPT}"
 
           mkdir -p ci-artifact
           apk="ci-artifact/${name}_debug.apk"
@@ -103,12 +136,14 @@ jobs:
           {
             echo "CI VALIDATION — NOT APPROVED FOR PUBLIC DISTRIBUTION"
             echo
-            echo "WARNING: this build contains: ${env_verdict}"
+            echo "Environment : ${app_env}  -> ${env_verdict}"
             echo "  USE_TESTNET         = ${use_testnet}"
             echo "  NETWORK_ENVIRONMENT = ${network}"
             echo "  API_BASE_URL        = ${api_base_url}"
-            echo "  (values read from lib/src/ui/controllers/appController.dart at this commit)"
+            echo "  Selected explicitly by: --dart-define-from-file=${BUILD_CONFIG_FILE}"
+            echo "  (not by the branch name; validated at compile time by lib/config/build_config.dart)"
             echo
+            echo "Compile-time validated only: CI has not exercised this APK against the backend."
             echo "Debug-signed with an ephemeral CI key. Not a release. Not for distribution."
             echo "Uses the committed prebuilt Rust binaries (no native rebuild)."
             echo
@@ -122,11 +157,17 @@ jobs:
           {
             echo "## CI VALIDATION — NOT APPROVED FOR PUBLIC DISTRIBUTION"
             echo
-            echo "> **WARNING: this build contains ${env_verdict}.**"
+            if [ "$app_env" = "production" ]; then
+              echo "> **WARNING: this build contains ${env_verdict}.**"
+            else
+              echo "> **Environment: ${env_verdict}.** Selected explicitly by \`${BUILD_CONFIG_FILE}\`, not by the branch name. Compile-time validated only; still a CI validation artifact."
+            fi
             echo "> \`API_BASE_URL = ${api_base_url}\`, \`NETWORK_ENVIRONMENT = ${network}\`, \`USE_TESTNET = ${use_testnet}\`"
             echo
             echo "| | |"
             echo "|---|---|"
+            echo "| Environment | \`${app_env}\` |"
+            echo "| Config file | \`${BUILD_CONFIG_FILE}\` |"
             echo "| App version | \`${version}\` |"
             echo "| Commit | \`${GITHUB_SHA}\` |"
             echo "| Run | #${GITHUB_RUN_NUMBER} (attempt ${GITHUB_RUN_ATTEMPT}) |"
@@ -135,7 +176,7 @@ jobs:
             echo "| APK SHA-256 | \`${apk_sha256}\` |"
           } >> "$GITHUB_STEP_SUMMARY"
 
-          echo "::warning title=CI VALIDATION - NOT FOR DISTRIBUTION::This APK contains ${env_verdict} (API_BASE_URL=${api_base_url})."
+          echo "::${annotation} title=CI VALIDATION - NOT FOR DISTRIBUTION::${env_verdict} (API_BASE_URL=${api_base_url}). Selected by ${BUILD_CONFIG_FILE}."
 
           echo "name=${name}" >> "$GITHUB_OUTPUT"
 
