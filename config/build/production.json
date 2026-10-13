@@ -1,0 +1,6 @@
+{
+  "APP_ENV": "production",
+  "NETWORK_ENVIRONMENT": "bitcoin",
+  "USE_TESTNET": false,
+  "API_BASE_URL": "https://cadenabitcoin.com/app"
+}

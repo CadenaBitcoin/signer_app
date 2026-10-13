@@ -82,15 +82,19 @@ flutter pub get
 cd ../..
 
 flutter analyze
-flutter build apk --debug
+flutter build apk --debug --dart-define-from-file=config/build/staging.json
 ```
 
 - **Accepted analyzer baseline: 0 errors.** Existing warnings/info are technical
   debt. Do **not** mass-clean them during unrelated work.
 - The nested plugin's `pubspec.lock` and `.dart_tool/` are ignored by Git; never
   commit them.
-- A debug build compiles whatever environment constants are in
-  `lib/src/ui/controllers/appController.dart` (see section 10).
+- **Every build needs an explicit environment**:
+  `--dart-define-from-file=config/build/staging.json` (or `production.json`) on
+  `flutter run`, `flutter build ...` and IDE run configurations. Without it the build
+  fails; there is no default (see section 10 and `docs/BUILD_CONFIGURATION.md`).
+  `flutter pub get` and `flutter analyze` need none. Use the staging file with
+  disposable test accounts.
 
 ## 5. Security boundaries — what must never reach Claude or Git
 
@@ -126,7 +130,7 @@ Read the code path and report before changing anything in:
 - manual signing (`SignTransactionScreen.dart`) and automatic signing
   (`lib/services/auto_signing_service.dart`)
 - FFI boundaries and the Rust `dlcplazacryptlib` / `dlc_wallet` plugin
-- environment selection (`AppController` constants)
+- environment selection (`BuildConfig` and the `AppController` constants it feeds)
 - release signing
 - backend transport security (`DataService` HTTPS guard,
   `android:usesCleartextTraffic="false"`)
@@ -192,13 +196,18 @@ authorization:
   must not be inferred from branch names.
 - The application version source is the `version:` field in `pubspec.yaml`, not
   historical branch names.
-- **Environment selection is manual**: `USE_TESTNET`, `NETWORK_ENVIRONMENT` and
-  `API_BASE_URL` are source constants in `appController.dart`. Production is
-  `https://cadenabitcoin.com/app` (`false`, `"bitcoin"`); the verified staging
-  setup is `true`, `"signet"`, `https://staging.purabitcoin.com/app`. Switching is
-  for local testing only: **never commit a staging configuration**, and restore the
-  committed production values afterwards. This area still needs deliberate
-  treatment.
+- **Environment selection is explicit and fail-closed**: `BuildConfig`
+  (`lib/config/build_config.dart`) is the only source of `USE_TESTNET`,
+  `NETWORK_ENVIRONMENT` and `API_BASE_URL` (the `AppController` constants are
+  aliases of it). It is selected per build with
+  `--dart-define-from-file=config/build/staging.json` (`true`, `"signet"`,
+  `https://staging.purabitcoin.com/app`) or `production.json` (`false`,
+  `"bitcoin"`, `https://cadenabitcoin.com/app`). A missing, incomplete or
+  contradictory configuration fails the build, including release/AOT. Never edit the
+  `AppController` constants to switch environments, never add a default or a
+  fallback to `build_config.dart`, and treat changes to it as sensitive (section 6).
+  The files contain no secrets and are meant to be committed. See
+  `docs/BUILD_CONFIGURATION.md`.
 - The release build currently uses the **debug signing config**
   (`android/app/build.gradle.kts`). An official release-signing procedure is **not
   yet established**.
