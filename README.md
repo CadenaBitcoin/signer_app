@@ -18,7 +18,7 @@ Run flutter pub get inside the main app
 
 Important: Also run flutter pub get inside the flutter_plugin folder before running the app
 
-Start application: flutter run --dart-define-from-file=config/build/staging.json (every build needs an explicit environment, staging or production; see [docs/BUILD_CONFIGURATION.md](docs/BUILD_CONFIGURATION.md))
+Start application: flutter run --flavor staging --dart-define-from-file=config/build/staging.json (every build needs an explicit environment and the matching flavor, staging or production; see [docs/BUILD_CONFIGURATION.md](docs/BUILD_CONFIGURATION.md))
 
 ## Contributing and governance
 

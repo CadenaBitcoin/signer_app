@@ -8,7 +8,10 @@
 #   tool/verify_build_config.sh aot              # release/AOT compile checks
 #   tool/verify_build_config.sh analyzer         # analyzer is clean, one narrow suppression
 #   tool/verify_build_config.sh portability      # static scan for bash > 3.2 constructs
-#   tool/verify_build_config.sh resolve FILE     # print what the app resolves from FILE
+#   tool/verify_build_config.sh resolve FILE FLAVOR
+#                                                # print what the app resolves from FILE
+#                                                # built with --flavor FLAVOR (fails if the
+#                                                # two disagree, like the real build)
 #   tool/verify_build_config.sh defines FILE     # print the -D arguments for FILE
 #   tool/verify_build_config.sh check-binary ENV FILE
 #                                                # AOT binary contains ENV's backend URL
@@ -16,8 +19,9 @@
 #
 # The rules live only in lib/config/build_config.dart (BuildConfig). The probe
 # tool/build_config_probe.dart is compiled against it, so this script exercises
-# the same constant assertions the app build enforces. Docs:
-# docs/BUILD_CONFIGURATION.md.
+# the same constant assertions the app build enforces. `flutter build --flavor X`
+# makes Flutter define FLUTTER_APP_FLAVOR=X; this script passes the same define
+# explicitly (the dart CLI has no flavors). Docs: docs/BUILD_CONFIGURATION.md.
 #
 # Portability: written for the bash 3.2 that macOS ships (CI runs it there as
 # `/bin/bash tool/verify_build_config.sh`). No arrays (they are the main 3.2 /
@@ -56,12 +60,24 @@ for k, v in d.items():
 ' "$@"
 }
 
-# load_defines FILE [MUTATION]: put the -D arguments for FILE, one per line, in
-# DEFINE_ARGS. FILE "" means "no configuration at all". A missing or unreadable
-# FILE is an error of its own (never mistaken for "no configuration").
+# default_flavor FILE: the flavor that matches FILE's own APP_ENV ("" for no
+# file). Used only by the test matrix, so that cases about other rules do not
+# have to spell out the flavor; `resolve` never defaults it.
+default_flavor() {
+  if [ -z "$1" ] || [ ! -f "$1" ]; then
+    echo ""
+  else
+    python3 -I -c 'import json, sys; print(json.load(open(sys.argv[1])).get("APP_ENV", ""))' "$1"
+  fi
+}
+
+# load_defines FILE [MUTATION [FLAVOR]]: put the -D arguments for FILE, one per
+# line, in DEFINE_ARGS, plus FLUTTER_APP_FLAVOR=FLAVOR when FLAVOR is not empty.
+# FILE "" means "no configuration at all". A missing or unreadable FILE is an
+# error of its own (never mistaken for "no configuration").
 DEFINE_ARGS=""
 load_defines() {
-  local file=$1 mutation=${2-}
+  local file=$1 mutation=${2-} flavor=${3-}
   DEFINE_ARGS=""
   if [ -n "$file" ]; then
     if [ ! -f "$file" ]; then
@@ -73,12 +89,17 @@ load_defines() {
       exit 2
     }
   fi
+  if [ -n "$flavor" ]; then
+    DEFINE_ARGS="${DEFINE_ARGS:+$DEFINE_ARGS
+}-DFLUTTER_APP_FLAVOR=$flavor"
+  fi
 }
 
 OUT=""
-run_probe() { # FILE [MUTATION]; output in OUT, returns the dart exit code
-  local file=$1 mutation=${2-} line rc=0
-  load_defines "$file" "$mutation"
+run_probe() { # FILE [MUTATION [FLAVOR]]; output in OUT, returns the dart exit code
+  local file=$1 mutation=${2-} flavor line rc=0
+  if [ $# -ge 3 ]; then flavor=$3; else flavor=$(default_flavor "$file"); fi
+  load_defines "$file" "$mutation" "$flavor"
   set --
   while IFS= read -r line; do
     if [ -n "$line" ]; then set -- "$@" "$line"; fi
@@ -112,12 +133,14 @@ expect_ok() {
   pass "$name"
 }
 
-# expect_rejected NAME FILE MUTATION MESSAGE_FRAGMENT
+# expect_rejected NAME FILE MUTATION MESSAGE_FRAGMENT [FLAVOR]
 # The build configuration must be rejected BY BuildConfig, with a message that
 # contains MESSAGE_FRAGMENT (so the right rule fired, not an unrelated error).
+# FLAVOR defaults to the one matching FILE's APP_ENV; pass "" for no flavor.
 expect_rejected() {
-  local name=$1 file=$2 mutation=$3 fragment=$4
-  if run_probe "$file" "$mutation"; then
+  local name=$1 file=$2 mutation=$3 fragment=$4 rc=0
+  if [ $# -ge 5 ]; then run_probe "$file" "$mutation" "$5" || rc=$?; else run_probe "$file" "$mutation" || rc=$?; fi
+  if [ "$rc" -eq 0 ]; then
     fail "$name (ACCEPTED, must be rejected)"
     return 0
   fi
@@ -182,13 +205,24 @@ check_matrix() {
   expect_rejected "production with signet" "$p" 'd["NETWORK_ENVIRONMENT"]="signet"; d["USE_TESTNET"]=True' 'A production build must use NETWORK_ENVIRONMENT'
   expect_rejected "staging values labelled production" "$s" 'd["APP_ENV"]="production"' 'A production build must use NETWORK_ENVIRONMENT'
   expect_rejected "production values labelled staging" "$p" 'd["APP_ENV"]="staging"' 'A staging build must use NETWORK_ENVIRONMENT'
+
+  echo "The native flavor must agree with APP_ENV (the flavor selects only the identity):"
+  expect_rejected "no flavor with staging.json" "$s" "" 'No build flavor was supplied' ""
+  expect_rejected "no flavor with production.json" "$p" "" 'No build flavor was supplied' ""
+  expect_rejected "staging flavor with production.json" "$p" "" 'does not match APP_ENV "production"' staging
+  expect_rejected "production flavor with staging.json" "$s" "" 'does not match APP_ENV "staging"' production
+  expect_rejected "unknown flavor (dev) with staging.json" "$s" "" 'does not match APP_ENV "staging"' dev
+  expect_rejected "flavor in the wrong case" "$s" "" 'does not match APP_ENV "staging"' Staging
+  expect_rejected "flavor without any configuration" "" "" 'No build configuration was supplied' staging
 }
 
-# aot_compile NAME FILE [MUTATION]: dart compile exe with the given defines into
-# $WORK_DIR/NAME. Returns the compiler exit code; OUT holds its output.
+# aot_compile NAME FILE [MUTATION [FLAVOR]]: dart compile exe with the given
+# defines into $WORK_DIR/NAME. FLAVOR defaults to the one matching FILE's APP_ENV.
+# Returns the compiler exit code; OUT holds its output.
 aot_compile() {
-  local name=$1 file=$2 mutation=${3-} line rc=0
-  load_defines "$file" "$mutation"
+  local name=$1 file=$2 mutation=${3-} flavor line rc=0
+  if [ $# -ge 4 ]; then flavor=$4; else flavor=$(default_flavor "$file"); fi
+  load_defines "$file" "$mutation" "$flavor"
   set --
   while IFS= read -r line; do
     if [ -n "$line" ]; then set -- "$@" "$line"; fi
@@ -263,6 +297,34 @@ check_aot() {
     fail "AOT: contradictory configuration failed for another reason: $(head -n1 <<<"$OUT")"
   fi
 
+  if aot_compile aot_noflavor "$STAGING_FILE" "" ""; then
+    fail "AOT: staging.json without a flavor compiled (must be rejected)"
+  elif [ -e "$WORK_DIR/aot_noflavor" ]; then
+    fail "AOT: a rejected build left a binary behind"
+  elif grep -q 'No build flavor was supplied' <<<"$OUT"; then
+    pass "AOT: no flavor -> rejected, no binary produced"
+  else
+    fail "AOT: a missing flavor failed for another reason: $(head -n1 <<<"$OUT")"
+  fi
+  if aot_compile aot_mismatch "$PRODUCTION_FILE" "" staging; then
+    fail "AOT: staging flavor with production.json compiled (must be rejected)"
+  elif [ -e "$WORK_DIR/aot_mismatch" ]; then
+    fail "AOT: a rejected build left a binary behind"
+  elif grep -q 'does not match APP_ENV "production"' <<<"$OUT"; then
+    pass "AOT: staging flavor with production.json -> rejected, no binary produced"
+  else
+    fail "AOT: a flavor mismatch failed for another reason: $(head -n1 <<<"$OUT")"
+  fi
+  if aot_compile aot_mismatch2 "$STAGING_FILE" "" production; then
+    fail "AOT: production flavor with staging.json compiled (must be rejected)"
+  elif [ -e "$WORK_DIR/aot_mismatch2" ]; then
+    fail "AOT: a rejected build left a binary behind"
+  elif grep -q 'does not match APP_ENV "staging"' <<<"$OUT"; then
+    pass "AOT: production flavor with staging.json -> rejected, no binary produced"
+  else
+    fail "AOT: a flavor mismatch failed for another reason: $(head -n1 <<<"$OUT")"
+  fi
+
   echo "Binary inspection (positive and negative; supporting evidence only):"
   if check_binary staging "$WORK_DIR/aot_staging" >/dev/null 2>&1; then
     pass "staging binary: has the staging URL, not the production URL"
@@ -310,9 +372,9 @@ check_portability() {
   local hits
   echo "Portability scan (constructs unavailable in bash 3.2 / macOS):"
   # portability-pattern (this line is excluded from the scan)
-  hits=$(grep -nE 'mapfile|readarray|declare -A|local -n|\$\{[A-Za-z_0-9]+(\^\^|,,)|\|&|&>>|coproc|;&|[A-Za-z_]+=\(' tool/verify_build_config.sh tool/verify_version.sh | grep -v 'portability-pattern' | grep -vE '^[^:]+:[0-9]+:[[:space:]]*#' || true)
+  hits=$(grep -nE 'mapfile|readarray|declare -A|local -n|\$\{[A-Za-z_0-9]+(\^\^|,,)|\|&|&>>|coproc|;&|[A-Za-z_]+=\(' tool/verify_build_config.sh tool/verify_version.sh tool/verify_artifact.sh | grep -v 'portability-pattern' | grep -vE '^[^:]+:[0-9]+:[[:space:]]*#' || true)
   if [ -z "$hits" ]; then
-    pass "no bash 4+ construct and no array literal in tool/verify_build_config.sh and tool/verify_version.sh"
+    pass "no bash 4+ construct and no array literal in tool/verify_build_config.sh, tool/verify_version.sh and tool/verify_artifact.sh"
   else
     fail "constructs that are not portable to bash 3.2:"; echo "$hits" | sed 's/^/        /'
   fi
@@ -346,8 +408,8 @@ case "${1:-verify}" in
   analyzer)    check_analyzer; finish ;;
   portability) check_portability; finish ;;
   resolve)
-    [ $# -eq 2 ] || { echo "usage: $0 resolve FILE" >&2; exit 2; }
-    run_probe "$2" "" || { echo "$OUT" >&2; exit 1; }
+    [ $# -eq 3 ] || { echo "usage: $0 resolve FILE FLAVOR" >&2; exit 2; }
+    run_probe "$2" "" "$3" || { echo "$OUT" >&2; exit 1; }
     grep -E '^(APP_ENV|NETWORK_ENVIRONMENT|USE_TESTNET|API_BASE_URL)=' <<<"$OUT"
     ;;
   defines)
@@ -359,7 +421,7 @@ case "${1:-verify}" in
     check_binary "$@"
     ;;
   *)
-    echo "usage: $0 [verify | matrix | aot | analyzer | portability | resolve FILE | defines FILE | check-binary ENV FILE]" >&2
+    echo "usage: $0 [verify | matrix | aot | analyzer | portability | resolve FILE FLAVOR | defines FILE | check-binary ENV FILE]" >&2
     exit 2
     ;;
 esac

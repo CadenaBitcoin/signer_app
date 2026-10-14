@@ -7,6 +7,9 @@
 #   - its environment is selected EXPLICITLY by BUILD_CONFIG_FILE below
 #     (config/build/staging.json), never by the branch name; a missing, incomplete
 #     or contradictory configuration fails the build (lib/config/build_config.dart);
+#   - it is the `staging` flavor (--flavor staging): the separate staging application
+#     com.app.cadenabitcoin.staging. The flavor selects only the application identity and
+#     must agree with the configuration, otherwise the build fails;
 #   - it uses the committed prebuilt Rust binaries (no native rebuild).
 # See docs/ANDROID_CI.md.
 
@@ -27,6 +30,8 @@ env:
   # The environment this workflow builds. Passed to Flutter with
   # --dart-define-from-file and checked against what the app itself resolves.
   BUILD_CONFIG_FILE: config/build/staging.json
+  # The Android flavor (application identity). Must equal the APP_ENV of the file above.
+  BUILD_FLAVOR: staging
 
 jobs:
   android-ci-validation:
@@ -73,8 +78,8 @@ jobs:
       - name: Verify build configuration
         run: |
           tool/verify_build_config.sh verify
-          resolved="$(tool/verify_build_config.sh resolve "$BUILD_CONFIG_FILE")"
-          echo "Resolved from $BUILD_CONFIG_FILE:"
+          resolved="$(tool/verify_build_config.sh resolve "$BUILD_CONFIG_FILE" "$BUILD_FLAVOR")"
+          echo "Resolved from $BUILD_CONFIG_FILE with --flavor $BUILD_FLAVOR:"
           echo "$resolved"
           if ! grep -qx 'APP_ENV=staging' <<<"$resolved"; then
             echo "::error::$BUILD_CONFIG_FILE does not resolve to APP_ENV=staging; refusing to build a staging CI artifact from it."
@@ -89,7 +94,15 @@ jobs:
         run: flutter analyze --no-fatal-infos --no-fatal-warnings
 
       - name: Build debug APK
-        run: flutter build apk --debug --dart-define-from-file="$BUILD_CONFIG_FILE"
+        run: flutter build apk --debug --flavor "$BUILD_FLAVOR" --dart-define-from-file="$BUILD_CONFIG_FILE"
+
+      # Reads the identity, version and signer from the APK itself (aapt2, apksigner). A
+      # debug build embeds both backend URLs, so no environment check from the binary is
+      # possible here; the verified resolved configuration plus the build command stand in.
+      - name: Verify the built APK (application ID, name, version, signing)
+        run: |
+          apk="build/app/outputs/flutter-apk/app-${BUILD_FLAVOR}-debug.apk"
+          tool/verify_artifact.sh apk "$BUILD_FLAVOR" "$apk" --signing debug --debug-build --evidence "$RUNNER_TEMP/apk-evidence.txt"
 
       - name: Prepare labelled artifact
         id: prep
@@ -124,12 +137,16 @@ jobs:
               ;;
           esac
 
+          evidence() { sed -n "s/^$1=//p" "$RUNNER_TEMP/apk-evidence.txt" | head -n1; }
+          application_id="$(evidence application_id)"
+          display_name="$(evidence display_name)"
+
           short_sha="${GITHUB_SHA::7}"
           name="CI-VALIDATION-NOT-APPROVED-FOR-PUBLIC-DISTRIBUTION_cadena-signer_v${version}_${app_env}_${short_sha}_run${GITHUB_RUN_NUMBER}-${GITHUB_RUN_ATTEMPT}"
 
           mkdir -p ci-artifact
           apk="ci-artifact/${name}_debug.apk"
-          cp build/app/outputs/flutter-apk/app-debug.apk "$apk"
+          cp "build/app/outputs/flutter-apk/app-${BUILD_FLAVOR}-debug.apk" "$apk"
           apk_sha256="$(sha256sum "$apk" | cut -d' ' -f1)"
 
           notice="ci-artifact/CI-VALIDATION-NOTICE.txt"
@@ -142,6 +159,8 @@ jobs:
             echo "  API_BASE_URL        = ${api_base_url}"
             echo "  Selected explicitly by: --dart-define-from-file=${BUILD_CONFIG_FILE}"
             echo "  (not by the branch name; validated at compile time by lib/config/build_config.dart)"
+            echo
+            echo "Application : ${application_id} ('${display_name}'), flavor ${BUILD_FLAVOR} (read from the APK by tool/verify_artifact.sh)"
             echo
             echo "Compile-time validated only: CI has not exercised this APK against the backend."
             echo "Debug-signed with an ephemeral CI key. Not a release. Not for distribution."
@@ -168,6 +187,7 @@ jobs:
             echo "|---|---|"
             echo "| Environment | \`${app_env}\` |"
             echo "| Config file | \`${BUILD_CONFIG_FILE}\` |"
+            echo "| Application ID | \`${application_id}\` ('${display_name}') |"
             echo "| App version | \`${version}\` |"
             echo "| Commit | \`${GITHUB_SHA}\` |"
             echo "| Run | #${GITHUB_RUN_NUMBER} (attempt ${GITHUB_RUN_ATTEMPT}) |"

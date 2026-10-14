@@ -12,7 +12,13 @@
 /// message of the first violated rule is printed and no app is produced. This
 /// holds for debug, profile and release/AOT builds alike, for `flutter run` and
 /// for CI. Neither environment can fall back to the other. The Git branch name
-/// plays no part in selection. See docs/BUILD_CONFIGURATION.md.
+/// plays no part in selection.
+///
+/// The native flavor (`--flavor staging|production`) selects only the platform
+/// identity (application ID / bundle ID and display name). Flutter passes it to
+/// Dart as FLUTTER_APP_FLAVOR, and the build fails unless it equals APP_ENV, so
+/// the identity and the environment cannot disagree and no second selector exists.
+/// See docs/BUILD_CONFIGURATION.md.
 library;
 
 /// Production API endpoint.
@@ -30,6 +36,7 @@ class _BuildConfigCheck {
     required String network,
     required String testnet,
     required String url,
+    required String flavor,
   })  : assert(
           env == 'staging' || env == 'production',
           env == '' && network == '' && testnet == '' && url == ''
@@ -81,6 +88,18 @@ class _BuildConfigCheck {
           env != 'production' || url == _productionApiBaseUrl,
           'A production build must use API_BASE_URL="$_productionApiBaseUrl", '
           'got "$url".',
+        ),
+        assert(
+          flavor != '',
+          'No build flavor was supplied for the "$env" configuration. Pass '
+          '--flavor $env together with --dart-define-from-file='
+          'config/build/$env.json (there is no default flavor).',
+        ),
+        assert(
+          flavor == env,
+          'Build flavor "$flavor" does not match APP_ENV "$env". The flavor '
+          'selects the application identity and must agree with the '
+          'environment: use --flavor $env with config/build/$env.json.',
         );
 }
 
@@ -92,6 +111,10 @@ class BuildConfig {
   static const String _network = String.fromEnvironment('NETWORK_ENVIRONMENT');
   static const String _testnet = String.fromEnvironment('USE_TESTNET');
   static const String _url = String.fromEnvironment('API_BASE_URL');
+
+  // Set by `flutter build/run --flavor X` itself; Flutter refuses to let it be
+  // passed by hand. Compared with APP_ENV, never used to select anything.
+  static const String _flavor = String.fromEnvironment('FLUTTER_APP_FLAVOR');
 
   /// Creating this constant is what enforces every rule above; nothing reads it.
   ///
@@ -109,6 +132,7 @@ class BuildConfig {
     network: _network,
     testnet: _testnet,
     url: _url,
+    flavor: _flavor,
   );
 
   /// "staging" or "production".

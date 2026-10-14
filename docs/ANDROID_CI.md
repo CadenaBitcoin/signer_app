@@ -8,8 +8,13 @@
 > `https://staging.purabitcoin.com/app`, Signet), selected explicitly with
 > `--dart-define-from-file`. The branch name does not select the environment, and
 > a build without a complete configuration fails (see
-> [BUILD_CONFIGURATION.md](BUILD_CONFIGURATION.md)). It is still only a CI
-> validation build.
+> [BUILD_CONFIGURATION.md](BUILD_CONFIGURATION.md)). It is the **`staging` flavor**:
+> the separate application `com.app.cadenabitcoin.staging` ("Cadena Signer STAGING"),
+> which installs next to production. It is still only a CI validation build.
+>
+> The five-variant compile validation (staging/production APK, production AAB, both iOS
+> apps) is the separate `build-variants` workflow, described in
+> [BUILD_CONFIGURATION.md](BUILD_CONFIGURATION.md#the-five-build-variants).
 
 Workflow: `.github/workflows/android-ci-validation.yml`
 
@@ -36,19 +41,23 @@ On a GitHub-hosted `ubuntu-latest` runner, with token permission
    `flutter_plugin/flutter_plugin`.
 4. `tool/verify_build_config.sh verify`: the configuration test matrix, release/AOT
    compile checks, the analyzer guard and the portability scan. Then record what
-   the app itself resolves from `config/build/staging.json` and require
-   `APP_ENV=staging`.
+   the app itself resolves from `config/build/staging.json` with `--flavor staging`
+   and require `APP_ENV=staging`.
 5. `flutter analyze --no-fatal-infos --no-fatal-warnings`: only analyzer
    **errors** fail the build. The accepted baseline is 0 errors; the existing
    warnings/info are known technical debt (`CLAUDE.md` section 4).
-6. `flutter build apk --debug --dart-define-from-file=config/build/staging.json`.
-7. Rename the APK, write a notice file, and upload both as one Actions artifact.
+6. `flutter build apk --debug --flavor staging --dart-define-from-file=config/build/staging.json`.
+7. `tool/verify_artifact.sh apk staging ... --signing debug --debug-build`: read the
+   application ID, display name, version name/code and signer **from the built APK**
+   and compare them with the identity matrix and `pubspec.yaml`.
+8. Rename the APK, write a notice file, and upload both as one Actions artifact.
 
 There is deliberately **no `flutter test` step**: the repository has no `test/`
 directory. Add it when tests exist.
 
 The same commands run locally (JDK 17) as the bootstrap in `CLAUDE.md` section 4.
-Every build needs the configuration flag; see [BUILD_CONFIGURATION.md](BUILD_CONFIGURATION.md).
+Every build needs the configuration flag and the matching `--flavor`; see
+[BUILD_CONFIGURATION.md](BUILD_CONFIGURATION.md).
 
 ## Retrieving the artifact
 
@@ -82,8 +91,9 @@ file that selected them. The run summary and a workflow annotation repeat them.
 - **Debug-signed with an ephemeral key.** Each run's key differs, so these APKs
   cannot update one another or any locally built APK. There is no signing
   policy yet.
-- **Same application ID** (`com.app.cadenabitcoin`) as production, so it cannot
-  coexist with an installed production app.
+- **Separate application ID** `com.app.cadenabitcoin.staging` (the `staging` flavor), so
+  it installs next to the production app. The ID is a proposal of
+  [RELEASE_POLICY.md](RELEASE_POLICY.md) section 5 and is not registered anywhere.
 - **Prebuilt Rust binaries:** the committed `.so` files are used as they are. The
   Rust library is not rebuilt, and its provenance is not verified here.
 - **Version is not modified**, and the `versionCode` is not unique per run.

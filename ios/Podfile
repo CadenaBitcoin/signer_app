@@ -7,10 +7,15 @@ source 'https://github.com/SumSubstance/Specs.git'
 ENV['COCOAPODS_DISABLE_STATS'] = 'true'
 ENV['IDENSIC_WITH_FISHERMAN'] = 'true'
 
+# One set of configurations per Flutter flavor (`flutter build ios --flavor X` selects
+# scheme X and configurations Debug|Profile|Release-X). There is no unflavored set.
 project 'Runner', {
-  'Debug' => :debug,
-  'Profile' => :release,
-  'Release' => :release,
+  'Debug-production' => :debug,
+  'Profile-production' => :release,
+  'Release-production' => :release,
+  'Debug-staging' => :debug,
+  'Profile-staging' => :release,
+  'Release-staging' => :release,
 }
 
 def flutter_root

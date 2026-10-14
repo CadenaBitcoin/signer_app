@@ -55,20 +55,25 @@ iPhoneOS SDK version are recorded in the artifact notice.
 5. `/bin/bash tool/verify_build_config.sh verify`: the configuration test matrix,
    release/AOT compile checks, the analyzer guard and the portability scan, run
    with macOS's system bash 3.2 on purpose. Then record what the app itself
-   resolves from `config/build/staging.json` and require `APP_ENV=staging`.
+   resolves from `config/build/staging.json` with `--flavor staging` and require
+   `APP_ENV=staging`.
 6. `flutter analyze --no-fatal-infos --no-fatal-warnings`: only analyzer errors
    fail the build (baseline 0 errors; existing warnings/info are known technical
    debt, `CLAUDE.md` section 4). There is no `test/` directory, so no `flutter test`.
 7. Record the bundled Rust static library and verify it is unchanged (below).
-8. `flutter build ios --release --no-codesign --dart-define-from-file=config/build/staging.json`.
+8. `flutter build ios --release --no-codesign --flavor staging --dart-define-from-file=config/build/staging.json`.
    Flutter runs `pod install` itself; `--no-codesign` sets `CODE_SIGNING_ALLOWED=NO`,
-   so no certificate or profile is needed.
+   so no certificate or profile is needed. The `staging` flavor is the Xcode scheme
+   `staging` with the configurations `Debug|Profile|Release-staging`: bundle ID
+   `com.app.cadenabitcoin.staging`, display name "Cadena Signer STAGING".
 9. Locate `Runner.app`, check its executable is arm64, and read its bundle
    identifier and version.
 10. Check the compiled Dart snapshot (`Frameworks/App.framework/App`): it must contain
     the staging backend URL and must not contain the production one. This is
     supporting evidence, not proof of network isolation
     ([BUILD_CONFIGURATION.md](BUILD_CONFIGURATION.md)).
+    Then `tool/verify_artifact.sh ios staging Runner.app`: bundle identifier, display
+    name, version fields and the unsigned state, read from the built app.
 11. Zip the **complete** bundle with `ditto` (this preserves symlinks and
     permissions), write the notice and a SHA-256 checksum file, and upload them.
 
@@ -77,8 +82,11 @@ Equivalent on a Mac (it cannot be run on Linux):
 ```bash
 flutter pub get --enforce-lockfile
 (cd flutter_plugin/flutter_plugin && flutter pub get)
-flutter build ios --release --no-codesign --dart-define-from-file=config/build/staging.json
+flutter build ios --release --no-codesign --flavor staging --dart-define-from-file=config/build/staging.json
 ```
+
+The five-variant compile validation (both iOS apps among them) is the separate
+`build-variants` workflow: [BUILD_CONFIGURATION.md](BUILD_CONFIGURATION.md#the-five-build-variants).
 
 ### External downloads (during `pod install`)
 
@@ -150,6 +158,9 @@ repeat the environment.
   `CFBundleShortVersionString`, so a prerelease suffix such as `-rc.1` is never
   embedded; staging candidates are named by a release identifier instead
   ([RELEASE_POLICY.md](RELEASE_POLICY.md) section 7).
-- **Same bundle identifier** (`com.app.cadenabitcoin`) as Android and production.
+- **Separate bundle identifier** `com.app.cadenabitcoin.staging` (the `staging` flavor),
+  the same value as the Android application ID and different from production's
+  `com.app.cadenabitcoin`. It is not registered with Apple; an unsigned build needs no
+  registration.
 - The `DEVELOPMENT_TEAM` value in the Xcode project is committed but unused by this
   build (no signing).

@@ -31,6 +31,34 @@ android {
         versionName = flutter.versionName
     }
 
+    // Application identity. The flavor selects ONLY the platform identity (application
+    // ID and launcher label). The environment (backend, network) is selected by
+    // config/build/<environment>.json, and lib/config/build_config.dart fails the build
+    // unless the flavor and APP_ENV agree. There is deliberately no default flavor:
+    // build with `--flavor staging|production`. See docs/BUILD_CONFIGURATION.md.
+    //
+    // The per-flavor cmake argument is NOT functional (the CMake project is the empty
+    // one Flutter adds only to make AGP download the NDK). Without a difference between
+    // the flavors, AGP shares ONE native-build task between them and ties it to a single
+    // flavor, so `assembleProductionRelease` would also run the staging Dart compile with
+    // the production defines, which the flavor/environment check rightly rejects.
+    flavorDimensions += "environment"
+    productFlavors {
+        // Keeps the existing production identity: defaultConfig's applicationId.
+        create("production") {
+            dimension = "environment"
+            manifestPlaceholders["appLabel"] = "Cadena Bitcoin"
+            externalNativeBuild { cmake { arguments("-DCADENA_FLAVOR=production") } }
+        }
+        // A separate application that installs next to production.
+        create("staging") {
+            dimension = "environment"
+            applicationIdSuffix = ".staging"
+            manifestPlaceholders["appLabel"] = "Cadena Signer STAGING"
+            externalNativeBuild { cmake { arguments("-DCADENA_FLAVOR=staging") } }
+        }
+    }
+
     buildTypes {
         release {
             // TODO: Add your own signing config for the release build.

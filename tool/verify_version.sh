@@ -16,10 +16,13 @@
 #   5. with --channel, the identifier kind matches the release branch: `staging` needs a
 #      vX.Y.Z-rc.N identifier, `production` needs a plain vX.Y.Z (no staging identifier).
 #
-# This describes the CURRENT wiring (one version for both platforms, no flavors, no
-# overrides). When flavors, per-environment application IDs and the Android staging
-# versionName (X.Y.Z-rc.N) are introduced, the same pull request must teach this script
-# to expect exactly that wiring; it is not to be loosened ahead of time.
+# This describes the CURRENT wiring: one version for both platforms and no overrides, plus
+# exactly two flavors (production, staging) that change only the application identity
+# (application ID / bundle ID and display name) and never the version. When the Android
+# staging versionName (X.Y.Z-rc.N) is introduced, the same pull request must teach this
+# script to expect exactly that wiring; it is not to be loosened ahead of time.
+#   6. Android and iOS declare exactly the two flavors with the identities of
+#      docs/BUILD_CONFIGURATION.md (production keeps com.app.cadenabitcoin).
 #
 # Build numbers: today both platforms take the build number from pubspec.yaml, and check 3
 # flags anything else as unintended. The policy does NOT forbid different Android/iOS build
@@ -127,15 +130,50 @@ else
 fi
 
 # Any other place that could change a version or split it per ABI/flavor.
-android_hits="$(grep -rnE 'versionCode|versionName|versionNameSuffix|versionCodeOverride|applicationIdSuffix|productFlavors|flavorDimensions|splits[[:space:]]*\{|flutter\.version' \
+android_hits="$(grep -rnE 'versionCode|versionName|versionNameSuffix|versionCodeOverride|splits[[:space:]]*\{|flutter\.version' \
   android --include='*.gradle' --include='*.kts' --include='gradle.properties' 2>/dev/null \
   | grep -vE '^android/app/build.gradle.kts:[0-9]+:[[:space:]]*version(Code|Name)[[:space:]]*=[[:space:]]*flutter\.version(Code|Name)[[:space:]]*$' || true)"
 if [ -z "$android_hits" ]; then
-  pass "no other Android version, flavor, suffix or ABI-split configuration"
+  pass "no other Android version, suffix or ABI-split configuration"
 else
   fail "unexpected Android version-related configuration:"; echo "$android_hits" | sed 's/^/        /'
 fi
 [ -f android/app/build.gradle ] && fail "legacy android/app/build.gradle exists next to build.gradle.kts"
+
+# Flavors: exactly production (the existing application ID) and staging (".staging"
+# suffix); the flavor changes the identity only (no version, no signing).
+if [ -f "$gradle" ]; then
+  flavor_block() { # body of create("$1") { ... } in the productFlavors block
+    sed -n "/^        create(\"$1\") {\$/,/^        }\$/p" "$gradle" | sed '1d;$d'
+  }
+  n_create="$(grep -cE '^        create\("[a-z]+"\) \{$' "$gradle")"
+  n_any_create="$(grep -c 'create(' "$gradle")"
+  [ "$n_create" -eq 2 ] && [ "$n_any_create" -eq 2 ] && [ "$(grep -c 'productFlavors' "$gradle")" -eq 1 ] \
+    && [ -n "$(flavor_block production)" ] && [ -n "$(flavor_block staging)" ] \
+    && pass "Android declares exactly the flavors production and staging" \
+    || fail "$gradle: expected exactly the flavors production and staging (found $n_create flavor blocks, $n_any_create create() calls)"
+  [ "$(grep -cE '^    flavorDimensions \+= "environment"$' "$gradle")" -eq 1 ] \
+    && pass "Android has the single flavor dimension 'environment'" \
+    || fail "$gradle: expected exactly one flavorDimensions += \"environment\""
+  [ "$(grep -cE '^        applicationId = "com\.app\.cadenabitcoin"$' "$gradle")" -eq 1 ] \
+    && [ "$(grep -cE '^[[:space:]]*applicationId[[:space:]]*=' "$gradle")" -eq 1 ] \
+    && pass "Android applicationId com.app.cadenabitcoin is set once, in defaultConfig (the production identity)" \
+    || fail "$gradle: applicationId must be set exactly once, to com.app.cadenabitcoin, in defaultConfig"
+  [ "$(grep -cE '^    namespace = "com\.app\.cadenabitcoin"$' "$gradle")" -eq 1 ] \
+    && pass "Android namespace com.app.cadenabitcoin unchanged" \
+    || fail "$gradle: namespace must stay com.app.cadenabitcoin"
+  [ "$(grep -cE '^[[:space:]]*applicationIdSuffix[[:space:]]*=' "$gradle")" -eq 1 ] \
+    && flavor_block staging | grep -qE '^            applicationIdSuffix = "\.staging"$' \
+    && pass "Android staging application ID = com.app.cadenabitcoin.staging (suffix only in the staging flavor)" \
+    || fail "$gradle: applicationIdSuffix \".staging\" must appear once, in the staging flavor only"
+  flavor_block staging | grep -qE '^            manifestPlaceholders\["appLabel"\] = "Cadena Signer STAGING"$' \
+    && flavor_block production | grep -qE '^            manifestPlaceholders\["appLabel"\] = "Cadena Bitcoin"$' \
+    && pass "Android launcher labels: production 'Cadena Bitcoin', staging 'Cadena Signer STAGING'" \
+    || fail "$gradle: flavor labels must be 'Cadena Bitcoin' (production) and 'Cadena Signer STAGING' (staging)"
+  grep -q 'android:label="${appLabel}"' android/app/src/main/AndroidManifest.xml \
+    && pass "Android manifest label comes from the flavor (\${appLabel})" \
+    || fail "android/app/src/main/AndroidManifest.xml: android:label must be \"\${appLabel}\""
+fi
 
 # ---- 3. iOS ------------------------------------------------------------------------
 plist=ios/Runner/Info.plist
@@ -153,9 +191,11 @@ else
     || fail "$plist: CFBundleVersion must be '\$(FLUTTER_BUILD_NUMBER)'"
 fi
 
-# Build settings of the app target (the blocks that set the app's own bundle identifier;
-# the RunnerTests target is not shipped and is ignored). The app target must take its build
-# number from Flutter and must not define a MARKETING_VERSION.
+# Build settings of the app target (the blocks that set Runner/Info.plist; the RunnerTests
+# target is not shipped and is ignored). Six configurations: Debug|Release|Profile for each
+# of the two flavors. The app target must take its build number from Flutter, must not define
+# a MARKETING_VERSION, and must not set a bundle identifier itself: the identity of each flavor
+# comes from ios/Flutter/Flavor-<flavor>.xcconfig (checked below).
 pbx=ios/Runner.xcodeproj/project.pbxproj
 if [ ! -f "$pbx" ]; then
   fail "$pbx not found"
@@ -163,16 +203,29 @@ else
   app_blocks="$(awk '
     /buildSettings = \{/ {inb=1; blk=""; next}
     inb && /^[[:space:]]*\};/ {
-      if (blk ~ /PRODUCT_BUNDLE_IDENTIFIER = com\.app\.cadenabitcoin;/) {n++; print blk "\n----"}
+      if (blk ~ /INFOPLIST_FILE = Runner\/Info\.plist;/) {n++; print blk "\n----"}
       inb=0; next }
     inb {blk = blk $0 "\n"}
   ' "$pbx")"
   n_blocks="$(printf '%s\n' "$app_blocks" | grep -c '^----$')"
   n_good="$(printf '%s\n' "$app_blocks" | grep -c 'CURRENT_PROJECT_VERSION = "\$(FLUTTER_BUILD_NUMBER)";')"
-  if [ "$n_blocks" -ge 1 ] && [ "$n_blocks" -eq "$n_good" ]; then
+  if [ "$n_blocks" -eq 6 ] && [ "$n_blocks" -eq "$n_good" ]; then
     pass "iOS app target: CURRENT_PROJECT_VERSION = \$(FLUTTER_BUILD_NUMBER) in all $n_blocks configurations"
   else
-    fail "iOS app target: $n_good of $n_blocks configurations use \$(FLUTTER_BUILD_NUMBER) for CURRENT_PROJECT_VERSION"
+    fail "iOS app target: $n_good of $n_blocks (expected 6) configurations use \$(FLUTTER_BUILD_NUMBER) for CURRENT_PROJECT_VERSION"
+  fi
+  if printf '%s\n' "$app_blocks" | grep -q 'PRODUCT_BUNDLE_IDENTIFIER'; then
+    fail "iOS app target sets PRODUCT_BUNDLE_IDENTIFIER in the project; it must come from Flavor-<flavor>.xcconfig"
+  else
+    pass "iOS app target takes its bundle identifier only from the flavor xcconfig"
+  fi
+  for cfg_name in Debug-production Release-production Profile-production Debug-staging Release-staging Profile-staging; do
+    grep -q "name = \"$cfg_name\";" "$pbx" || fail "$pbx: build configuration $cfg_name is missing"
+  done
+  if grep -qE 'name = (Debug|Release|Profile);' "$pbx"; then
+    fail "$pbx: an unflavored Debug/Release/Profile configuration exists"
+  else
+    pass "iOS has the six flavored configurations and no unflavored one"
   fi
   if printf '%s\n' "$app_blocks" | grep -q 'MARKETING_VERSION'; then
     fail "iOS app target defines MARKETING_VERSION (would bypass pubspec.yaml)"
@@ -180,6 +233,48 @@ else
     pass "iOS app target defines no MARKETING_VERSION"
   fi
 fi
+
+# Flavors: identity lives in one small file per flavor.
+xcflavor_value() { # xcflavor_value FLAVOR KEY: value of KEY in ios/Flutter/Flavor-FLAVOR.xcconfig
+  sed -n "s/^$2 = //p" "ios/Flutter/Flavor-$1.xcconfig" 2>/dev/null
+}
+if [ "$(xcflavor_value production PRODUCT_BUNDLE_IDENTIFIER)" = "com.app.cadenabitcoin" ] \
+  && [ "$(xcflavor_value production APP_DISPLAY_NAME)" = "Cadena Bitcoin" ] \
+  && [ "$(xcflavor_value staging PRODUCT_BUNDLE_IDENTIFIER)" = "com.app.cadenabitcoin.staging" ] \
+  && [ "$(xcflavor_value staging APP_DISPLAY_NAME)" = "Cadena Signer STAGING" ]; then
+  pass "iOS identities: production com.app.cadenabitcoin 'Cadena Bitcoin'; staging com.app.cadenabitcoin.staging 'Cadena Signer STAGING'"
+else
+  fail "ios/Flutter/Flavor-<flavor>.xcconfig: expected production com.app.cadenabitcoin/'Cadena Bitcoin' and staging com.app.cadenabitcoin.staging/'Cadena Signer STAGING'"
+fi
+[ "$(plist_value CFBundleDisplayName)" = '$(APP_DISPLAY_NAME)' ] \
+  && pass "iOS CFBundleDisplayName = \$(APP_DISPLAY_NAME)" \
+  || fail "$plist: CFBundleDisplayName must be '\$(APP_DISPLAY_NAME)'"
+schemes_dir=ios/Runner.xcodeproj/xcshareddata/xcschemes
+scheme_ok=1
+for fl in production staging; do
+  [ -f "$schemes_dir/$fl.xcscheme" ] || { scheme_ok=0; continue; }
+  cfgs="$(sed -n 's/.*buildConfiguration = "\([^"]*\)".*/\1/p' "$schemes_dir/$fl.xcscheme" | sort -u | tr '\n' ' ')"
+  [ "$cfgs" = "Debug-$fl Profile-$fl Release-$fl " ] || scheme_ok=0
+done
+if [ "$scheme_ok" -eq 1 ] && [ "$(ls "$schemes_dir" | wc -l | tr -d ' ')" -eq 2 ]; then
+  pass "iOS schemes: exactly production and staging, each using only its own configurations"
+else
+  fail "$schemes_dir: expected exactly the schemes production and staging using Debug|Profile|Release-<flavor>"
+fi
+pods_ok=1
+for n in Debug-production Profile-production Release-production Debug-staging Profile-staging Release-staging; do
+  grep -q "'$n' =>" ios/Podfile || pods_ok=0
+done
+if [ "$pods_ok" -eq 1 ] && ! grep -qE "'(Debug|Profile|Release)' =>" ios/Podfile; then
+  pass "iOS Podfile maps the six flavored configurations"
+else
+  fail "ios/Podfile: expected a mapping for the six flavored configurations and none for the unflavored ones"
+fi
+podfile_sum="$(sed -n 's/^PODFILE CHECKSUM: //p' ios/Podfile.lock)"
+if command -v sha1sum >/dev/null 2>&1; then actual_sum="$(sha1sum ios/Podfile | cut -d' ' -f1)"; else actual_sum="$(shasum -a 1 ios/Podfile | cut -d' ' -f1)"; fi
+[ "$podfile_sum" = "$actual_sum" ] \
+  && pass "ios/Podfile.lock records the checksum of the current ios/Podfile" \
+  || fail "ios/Podfile.lock PODFILE CHECKSUM ($podfile_sum) does not match ios/Podfile ($actual_sum)"
 
 xc_hits="$(grep -nE 'FLUTTER_BUILD_NAME|FLUTTER_BUILD_NUMBER|MARKETING_VERSION|CURRENT_PROJECT_VERSION' ios/Flutter/*.xcconfig ios/*.xcconfig 2>/dev/null | grep -v '/Generated\.xcconfig:' || true)"
 if [ -z "$xc_hits" ]; then
