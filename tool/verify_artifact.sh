@@ -310,8 +310,18 @@ run_kind() { # KIND ENV FILE SIGNING
 
 # One check run, isolated in a subshell so a negative run cannot disturb the counters.
 # Prints nothing; returns the verifier's verdict (0 = all checks passed).
+# The output and the exit status stay available in QUIET_OUT / QUIET_RC for diagnosis.
+QUIET_OUT=""
+QUIET_RC=0
 quiet_run() {
-  ( run_kind "$@" >/dev/null 2>&1; [ "$failures" -eq 0 ] )
+  QUIET_RC=0
+  QUIET_OUT=$( { run_kind "$@"; [ "$failures" -eq 0 ]; } 2>&1 ) || QUIET_RC=$?
+  return "$QUIET_RC"
+}
+# When the verifier unexpectedly rejects the artifact, show why (diagnosis only).
+show_quiet_failure() {
+  echo "        verifier exit status $QUIET_RC; its output was:"
+  printf '%s\n' "$QUIET_OUT" | sed 's/^/        | /'
 }
 
 finish() {
@@ -363,7 +373,7 @@ case "$cmd" in
     case "$env" in staging) other=production ;; production) other=staging ;; *) die "ENV must be staging or production" ;; esac
     [ -e "$file" ] || die "$file not found"
     echo "Self-test of the $kind verifier on $file"
-    if quiet_run "$kind" "$env" "$file" "$signing"; then pass "accepts the artifact as $env"; else fail "does not accept the artifact as $env"; fi
+    if quiet_run "$kind" "$env" "$file" "$signing"; then pass "accepts the artifact as $env"; else fail "does not accept the artifact as $env"; show_quiet_failure; fi
     if quiet_run "$kind" "$other" "$file" "$signing"; then fail "ACCEPTED the $env artifact as $other (must be rejected)"; else pass "rejects the $env artifact when claimed as $other"; fi
     if [ "$kind" != "ios" ]; then
       if [ "$signing" = "debug" ]; then wrong=unsigned; else wrong=debug; fi
