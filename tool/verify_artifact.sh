@@ -32,7 +32,10 @@
 # Portability: bash 3.2 (macOS) compatible; no arrays, no mapfile. Prints PASS/FAIL lines,
 # then an `evidence` block of key=value lines; exits 1 if any check failed.
 set -euo pipefail
+CALLER_PWD=$PWD
 cd "$(dirname "$0")/.."
+# The artifact path is given relative to the caller; the checks below change directory.
+abspath() { case "$1" in /*) echo "$1" ;; *) echo "$CALLER_PWD/$1" ;; esac; }
 
 STAGING_ID=com.app.cadenabitcoin.staging
 STAGING_NAME="Cadena Signer STAGING"
@@ -326,7 +329,7 @@ cmd=${1:-}
 case "$cmd" in
   apk|aab|ios)
     [ $# -ge 3 ] || die "usage: $0 $cmd ENV FILE [--signing debug|unsigned] [--evidence OUT]"
-    kind=$cmd; env=$2; file=$3; shift 3
+    kind=$cmd; env=$2; file=$(abspath "$3"); shift 3
     signing=debug; evidence_out=""
     while [ $# -gt 0 ]; do
       case "$1" in
@@ -348,7 +351,7 @@ case "$cmd" in
     ;;
   selftest)
     [ $# -ge 4 ] || die "usage: $0 selftest apk|aab|ios ENV FILE [--signing debug|unsigned]"
-    kind=$2; env=$3; file=$4; shift 4
+    kind=$2; env=$3; file=$(abspath "$4"); shift 4
     signing=debug
     while [ $# -gt 0 ]; do
       case "$1" in
