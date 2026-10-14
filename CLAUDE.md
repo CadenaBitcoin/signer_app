@@ -82,18 +82,19 @@ flutter pub get
 cd ../..
 
 flutter analyze
-flutter build apk --debug --dart-define-from-file=config/build/staging.json
+flutter build apk --debug --flavor staging --dart-define-from-file=config/build/staging.json
 ```
 
 - **Accepted analyzer baseline: 0 errors.** Existing warnings/info are technical
   debt. Do **not** mass-clean them during unrelated work.
 - The nested plugin's `pubspec.lock` and `.dart_tool/` are ignored by Git; never
   commit them.
-- **Every build needs an explicit environment**:
-  `--dart-define-from-file=config/build/staging.json` (or `production.json`) on
-  `flutter run`, `flutter build ...` and IDE run configurations. Without it the build
-  fails; there is no default (see section 10 and `docs/BUILD_CONFIGURATION.md`).
-  `flutter pub get` and `flutter analyze` need none. Use the staging file with
+- **Every build needs an explicit environment and the matching flavor**:
+  `--flavor staging --dart-define-from-file=config/build/staging.json` (or
+  `--flavor production ... production.json`) on `flutter run`, `flutter build ...` and IDE
+  run configurations. Without them, or with a flavor that does not match the file, the
+  build fails; there is no default (see section 10 and `docs/BUILD_CONFIGURATION.md`).
+  `flutter pub get` and `flutter analyze` need none. Use the staging pair with
   disposable test accounts.
 
 ## 5. Security boundaries — what must never reach Claude or Git
@@ -208,6 +209,16 @@ authorization:
   fallback to `build_config.dart`, and treat changes to it as sensitive (section 6).
   The files contain no secrets and are meant to be committed. See
   `docs/BUILD_CONFIGURATION.md`.
+- **Two flavors, `staging` and `production`, select only the application identity**:
+  Android `com.app.cadenabitcoin.staging` / `com.app.cadenabitcoin`, iOS the same bundle
+  IDs, launcher names "Cadena Signer STAGING" / "Cadena Bitcoin". Staging and production
+  install side by side. The build fails unless the flavor equals `APP_ENV` of the
+  configuration file (`BuildConfig`, `FLUTTER_APP_FLAVOR`); do not add a default flavor
+  (`default-flavor`) or a second environment selector. `tool/verify_version.sh` checks the
+  wiring, `tool/verify_artifact.sh` checks built artifacts, and the `build-variants`
+  workflow compiles the five variants without signing credentials; it
+  can be run for all of them or for one chosen variant (`tool/plan_build_variants.sh`
+  decides what a trigger requires).
 - The release build currently uses the **debug signing config**
   (`android/app/build.gradle.kts`). An official release-signing procedure is **not
   yet established**.

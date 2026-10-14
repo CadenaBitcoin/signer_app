@@ -10,6 +10,9 @@
 #   - its environment is selected EXPLICITLY by BUILD_CONFIG_FILE below
 #     (config/build/staging.json), never by the branch name; a missing, incomplete
 #     or contradictory configuration fails the build (lib/config/build_config.dart);
+#   - it is the `staging` flavor (--flavor staging): scheme and configurations
+#     Debug|Profile|Release-staging, bundle ID com.app.cadenabitcoin.staging. The flavor
+#     selects only the application identity and must agree with the configuration;
 #   - it links the committed prebuilt Rust static library as-is (no rebuild); the
 #     library's provenance is unverified.
 # See docs/IOS_CI.md.
@@ -31,6 +34,8 @@ env:
   # The environment this workflow builds. Passed to Flutter with
   # --dart-define-from-file and checked against what the app itself resolves.
   BUILD_CONFIG_FILE: config/build/staging.json
+  # The iOS flavor (scheme and application identity). Must equal the APP_ENV of the file above.
+  BUILD_FLAVOR: staging
   # Toolchain this workflow requires. The build fails if the runner does not
   # provide exactly these; the actual versions are recorded in the artifact notice.
   XCODE_APP: /Applications/Xcode_16.4.app
@@ -123,8 +128,8 @@ jobs:
           bash_version="$(/bin/bash -c 'echo "$BASH_VERSION"')"
           echo "Build-configuration tool runs under /bin/bash $bash_version"
           /bin/bash tool/verify_build_config.sh verify
-          resolved="$(/bin/bash tool/verify_build_config.sh resolve "$BUILD_CONFIG_FILE")"
-          echo "Resolved from $BUILD_CONFIG_FILE:"
+          resolved="$(/bin/bash tool/verify_build_config.sh resolve "$BUILD_CONFIG_FILE" "$BUILD_FLAVOR")"
+          echo "Resolved from $BUILD_CONFIG_FILE with --flavor $BUILD_FLAVOR:"
           echo "$resolved"
           if ! grep -qx 'APP_ENV=staging' <<<"$resolved"; then
             echo "::error::$BUILD_CONFIG_FILE does not resolve to APP_ENV=staging; refusing to build a staging CI artifact from it."
@@ -171,11 +176,14 @@ jobs:
 
       # Flutter runs `pod install` itself. No signing: CODE_SIGNING_ALLOWED=NO.
       - name: Build unsigned iOS app (release, no codesign)
-        run: flutter build ios --release --no-codesign --dart-define-from-file="$BUILD_CONFIG_FILE"
+        run: flutter build ios --release --no-codesign --flavor "$BUILD_FLAVOR" --dart-define-from-file="$BUILD_CONFIG_FILE"
 
       - name: Locate and inspect Runner.app
         run: |
-          app="$(find build/ios -maxdepth 3 -type d -name Runner.app -print 2>/dev/null | head -n1 || true)"
+          app="build/ios/Release-${BUILD_FLAVOR}-iphoneos/Runner.app"
+          if [ ! -d "$app" ]; then
+            app="$(find build/ios -maxdepth 3 -type d -name Runner.app -print 2>/dev/null | sort | head -n1 || true)"
+          fi
           if [ -z "$app" ]; then
             echo "::error::flutter build ios succeeded but no Runner.app was found under build/ios."
             find build/ios -maxdepth 3 2>/dev/null | head -n 40 || true
@@ -192,6 +200,7 @@ jobs:
           {
             echo "app_path=${app}"
             echo "bundle_id=$(plist CFBundleIdentifier)"
+            echo "bundle_display_name=$(plist CFBundleDisplayName)"
             echo "bundle_short_version=$(plist CFBundleShortVersionString)"
             echo "bundle_version=$(plist CFBundleVersion)"
             echo "executable_arch=${archs}"
@@ -217,6 +226,14 @@ jobs:
           fi
           expected="$(sed -n 's/^APP_ENV=//p' "$RUNNER_TEMP/resolved-build-config.txt" | head -n1)"
           /bin/bash tool/verify_build_config.sh check-binary "$expected" "$bin" | tee "$RUNNER_TEMP/binary-check.txt"
+
+      # Reads the bundle identifier, display name, versions and signing state from the built
+      # app itself and compares them with the flavor's identity matrix and pubspec.yaml.
+      - name: Verify the built app (bundle ID, name, version, unsigned)
+        run: |
+          app="$(cat "$RUNNER_TEMP/app-path.txt")"
+          expected="$(sed -n 's/^APP_ENV=//p' "$RUNNER_TEMP/resolved-build-config.txt" | head -n1)"
+          /bin/bash tool/verify_artifact.sh ios "$expected" "$app" --evidence "$RUNNER_TEMP/ios-evidence.txt"
 
       - name: Prepare labelled artifact
         id: prep

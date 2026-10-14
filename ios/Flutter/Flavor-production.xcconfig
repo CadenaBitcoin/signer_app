@@ -1,0 +1,7 @@
+// Native application identity of the "production" flavor (iOS). Selected by the Xcode
+// scheme "production" and its Debug/Profile/Release-production configurations, i.e. by
+// `flutter build ios --flavor production`. Only identity lives here; the environment
+// (backend, network) comes from config/build/production.json, and the build fails
+// unless the two agree (lib/config/build_config.dart). See docs/BUILD_CONFIGURATION.md.
+PRODUCT_BUNDLE_IDENTIFIER = com.app.cadenabitcoin
+APP_DISPLAY_NAME = Cadena Bitcoin
