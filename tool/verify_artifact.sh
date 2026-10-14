@@ -157,9 +157,15 @@ verify_apk() { # ENV FILE SIGNING
 
   kind=unsigned; dn=""; digest=""
   if sign_out=$("$apksigner" verify --print-certs "$file" 2>&1); then
-    dn=$(sed -n 's/^Signer #1 certificate DN: //p' <<<"$sign_out" | sed -n '1p')
-    digest=$(sed -n 's/^Signer #1 certificate SHA-256 digest: //p' <<<"$sign_out" | sed -n '1p')
-    case "$dn" in *"CN=Android Debug"*) kind=debug ;; *) kind="signed-by-other-key" ;; esac
+    # The label before "certificate DN:" differs between apksigner versions ("Signer #1 ..."
+    # up to build-tools 36, "V2 Signer: ..." in 37), so match on the part that does not.
+    # Every signer must be the debug key; a signature that cannot be read is not "debug".
+    dns=$(sed -n 's/^.*certificate DN: //p' <<<"$sign_out")
+    dn=$(sed -n '1p' <<<"$dns")
+    digest=$(sed -n 's/^.*certificate SHA-256 digest: //p' <<<"$sign_out" | sed -n '1p')
+    if [ -z "$dns" ]; then kind="signed-unidentified"
+    elif grep -qv 'CN=Android Debug' <<<"$dns"; then kind="signed-by-other-key"
+    else kind=debug; fi
   fi
   check_signing_expectation "$signing" "$kind"
 
