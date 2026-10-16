@@ -217,8 +217,9 @@ authorization:
   (`default-flavor`) or a second environment selector. `tool/verify_version.sh` checks the
   wiring, `tool/verify_artifact.sh` checks built artifacts, and the `build-variants`
   workflow compiles the five variants without signing credentials; it
-  can be run for all of them or for one chosen variant (`tool/plan_build_variants.sh`
-  decides what a trigger requires).
+  can be run for all of them or for one chosen variant, and a push (merge) to `staging`
+  runs the two staging variants and to `production` the three production variants
+  (`tool/plan_build_variants.sh` decides what a trigger requires; `docs/RELEASE_TRIGGERS.md`).
 - The release build currently uses the **debug signing config**
   (`android/app/build.gradle.kts`). An official release-signing procedure is **not
   yet established**.

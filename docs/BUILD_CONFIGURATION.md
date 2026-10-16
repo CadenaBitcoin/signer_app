@@ -28,6 +28,9 @@ tool/verify_artifact.sh        reads a BUILT artifact and checks it
 tool/build_config_probe.dart   helper compiled by verify_build_config.sh (not part of the app)
 .github/workflows/build-variants.yml   compiles and verifies the five variants (all, or one)
 tool/plan_build_variants.sh            which variants a run requires (trigger -> selection)
+tool/commit_parents.sh                 merge-commit detection that also works in a shallow checkout
+tool/check_verdict.sh                  the pass/fail decisions of the aggregate verdict
+tool/test_release_triggers.sh          tests of the three above, without a build
 ```
 
 | Key | Staging | Production |
@@ -298,15 +301,14 @@ file name:
 - **One implementation:** the builds are written once, in the `android` and `ios` jobs.
   `tool/plan_build_variants.sh` decides which variants a trigger requires, the `plan` job
   passes that as the jobs' matrix, and nothing else knows the mapping. It can be run
-  locally: `tool/plan_build_variants.sh push issue/65-x`,
-  `tool/plan_build_variants.sh workflow_dispatch x ios-staging`.
-- **Triggers today (temporary):** a push to `staging` or to an `issue/**` branch runs all
-  five, to establish the five-build baseline and to validate a feature branch before its
-  pull request exists. **Eventual architecture:** a merge into `staging` runs the two
-  staging builds and a merge into `production` the three production builds; both keep
-  manual execution of any single variant. Getting there changes only the push mapping in
-  `tool/plan_build_variants.sh` (its comment shows the two lines) and the branch list of
-  the workflow, not a build.
+  locally: `tool/plan_build_variants.sh push refs/heads/staging "" 2`,
+  `tool/plan_build_variants.sh workflow_dispatch refs/heads/x ios-staging`.
+- **Triggers:** a push to `staging` (a promotion merge) runs the two staging builds, a push
+  to `production` the three production builds, and a manual run any one variant or `all`.
+  Nothing else starts it: not `development`, not a feature branch, not a pull request. Use a
+  manual run to validate a feature branch. Reasoning, required branch protection, concurrency
+  and failure handling: [RELEASE_TRIGGERS.md](RELEASE_TRIGGERS.md). The trigger logic is
+  tested without a build by `tool/test_release_triggers.sh`.
 
 What a run does:
 
@@ -324,8 +326,9 @@ What a run does:
    the mismatched flavor/configuration pairing must fail; any tracked file other than
    `ios/Podfile.lock` changed by the build is an error, and `Podfile.lock` drift is
    **reported, not hidden**.
-6. *Verdict:* every required job must be `success` (and every unselected one `skipped`),
-   each required variant must have its evidence, and the cross-artifact checks that apply
+6. *Verdict (`tool/check_verdict.sh`):* every required job must be `success` (and every
+   unselected one `skipped`), each required variant must have its evidence and no other
+   variant may, and the cross-artifact checks that apply
    to the selection run: APK/AAB consistency (when both were built) and that staging and
    production differ on each platform (when both were built). The run summary lists each
    variant's identity, version, signing and SHA-256.
