@@ -31,24 +31,26 @@
 #   - Manual run (workflow_dispatch): choose `all` or exactly ONE variant. A single variant
 #     runs only its own build job plus the shared checks (`static`, and for an Android
 #     variant `reject`); the other four are not executed.
+#   - Release branches (docs/RELEASE_TRIGGERS.md): a push to `staging` runs the two staging
+#     variants and a push to `production` the three production variants. Both branches are
+#     protected and accept only pull-request merge commits, so such a push IS an authorized
+#     promotion; the plan additionally refuses a push that is not a merge commit. Creating
+#     the branch is not a promotion and runs nothing.
+#     Development, feature branches, tags and pull requests start nothing.
 #   - The final `verdict` job fails if any REQUIRED job failed, was cancelled or was skipped,
 #     or if a required variant has no verification evidence. Variants that were not selected
 #     are not required.
-# See docs/BUILD_CONFIGURATION.md and docs/RELEASE_IMPLEMENTATION_PLAN.md.
+# See docs/RELEASE_TRIGGERS.md, docs/BUILD_CONFIGURATION.md and
+# docs/RELEASE_IMPLEMENTATION_PLAN.md.
 
 name: Build variants (compile validation)
 
 on:
+  # A promotion = a pull-request merge into a release branch (see the header). Branches only:
+  # tags do not match. No path filter: a promotion that changes only documentation still
+  # builds. `production` does not exist yet; the entry is inert until it is created.
   push:
-    # TEMPORARY testing triggers that establish the five-build baseline (every push runs all
-    # five). `staging` like the CI validation workflows. `issue/**` so that a feature branch is
-    # validated on GitHub before its pull request is opened (a new workflow cannot be
-    # dispatched by hand until it exists on the default branch).
-    # Eventual architecture, to be switched on in tool/plan_build_variants.sh together with
-    # this list: merge into `staging` -> the two staging builds, merge into `production` ->
-    # the three production builds. Manual execution of any single variant stays available.
-    branches: [staging, "issue/**"]
-    paths-ignore: ["docs/**", "**/*.md"]
+    branches: [staging, production]
   # Manual run for any ref (once this file is on the default branch): all variants or one.
   workflow_dispatch:
     inputs:
@@ -70,18 +72,23 @@ on:
 permissions:
   contents: read
 
-# A newer push to a feature branch supersedes the older run; `staging` is never cancelled.
-# A manual run of one variant must not cancel a run of another variant on the same ref, so
-# the selection is part of the group.
+# Every promotion is built, none is superseded: the group of a push contains its commit, so
+# two quick merges never replace each other's pending run (GitHub keeps only one pending run
+# per group). A manual run of one variant must not cancel a run of another variant, so the
+# selection is part of the group; repeating the SAME manual run on the same commit replaces
+# the older one.
 concurrency:
-  group: build-variants-${{ github.ref }}-${{ github.event_name == 'workflow_dispatch' && inputs.variant || 'trigger' }}
-  cancel-in-progress: ${{ github.ref != 'refs/heads/staging' }}
+  group: build-variants-${{ github.event_name }}-${{ github.ref }}-${{ github.sha }}-${{ inputs.variant }}
+  cancel-in-progress: ${{ github.event_name == 'workflow_dispatch' }}
 
 jobs:
   # ---------------------------------------------------------------------------------------
   # Which variants does this run require? One decision, made by a tested script.
   plan:
     name: Plan (which variants this run requires)
+    # Creating a release branch is not a promotion: such a push runs nothing (every job is
+    # skipped). The first merge after the creation is the first promotion.
+    if: ${{ !(github.event_name == 'push' && github.event.created) }}
     runs-on: ubuntu-latest
     timeout-minutes: 5
     outputs:
@@ -98,26 +105,41 @@ jobs:
         with:
           persist-credentials: false
 
+      # The trigger mapping, the verdict decisions and the shape of this workflow are tested
+      # first, without a Flutter build (tool/test_release_triggers.sh).
+      - name: Test the trigger mapping, the verdict logic and the workflow definition
+        run: tool/test_release_triggers.sh
+
       - name: Plan
         id: plan
         env:
           EVENT_NAME: ${{ github.event_name }}
-          REF_NAME: ${{ github.ref_name }}
+          REF: ${{ github.ref }}
           INPUT_VARIANT: ${{ inputs.variant }}
+          CREATED: ${{ github.event.created }}
         run: |
-          tool/plan_build_variants.sh "$EVENT_NAME" "$REF_NAME" "$INPUT_VARIANT" | tee "$RUNNER_TEMP/plan.txt" >> "$GITHUB_OUTPUT"
+          # A promotion is a merge commit. The checkout is shallow, so the parents are read
+          # from the commit object (tool/commit_parents.sh), not from the history.
+          parents=""
+          if [ "$EVENT_NAME" = push ]; then
+            parents="$(tool/commit_parents.sh "$GITHUB_SHA")"
+          fi
+          # No pipe: a failing plan must fail this step (the default shell has no pipefail).
+          tool/plan_build_variants.sh "$EVENT_NAME" "$REF" "$INPUT_VARIANT" "$parents" "$CREATED" > "$RUNNER_TEMP/plan.txt"
+          cat "$RUNNER_TEMP/plan.txt" >> "$GITHUB_OUTPUT"
           {
             echo "### Plan: $(sed -n 's/^selection=//p' "$RUNNER_TEMP/plan.txt")"
             echo
             echo "Required variants ($(sed -n 's/^count=//p' "$RUNNER_TEMP/plan.txt")): \`$(sed -n 's/^variants=//p' "$RUNNER_TEMP/plan.txt")\`"
             echo
-            echo "Trigger: \`$EVENT_NAME\` on \`$REF_NAME\`. Variants not listed are not executed and not required."
+            echo "Trigger: \`$EVENT_NAME\` on \`$REF\`. Variants not listed are not executed and not required."
           } >> "$GITHUB_STEP_SUMMARY"
 
   # ---------------------------------------------------------------------------------------
   # Shared verification prerequisite: runs for every selection.
   static:
     name: Static checks (version wiring, configuration matrix, analyzer)
+    if: ${{ !(github.event_name == 'push' && github.event.created) }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
@@ -564,7 +586,7 @@ jobs:
   verdict:
     name: Required variants compiled and verified
     needs: [plan, static, reject, android, ios]
-    if: ${{ always() }}
+    if: ${{ always() && !(github.event_name == 'push' && github.event.created) }}
     runs-on: ubuntu-latest
     timeout-minutes: 15
     env:
@@ -578,38 +600,16 @@ jobs:
       REQUIRED_VARIANTS: ${{ needs.plan.outputs.variants }}
       SELECTION: ${{ needs.plan.outputs.selection }}
     steps:
-      # A required job must be `success`. A job that is not required must be `skipped`
-      # (it was not selected); anything else is a defect of the workflow itself.
-      - name: Every required job succeeded
-        run: |
-          echo "selection=$SELECTION required=[$REQUIRED_VARIANTS]"
-          echo "plan=$RESULT_PLAN static=$RESULT_STATIC reject=$RESULT_REJECT android=$RESULT_ANDROID ios=$RESULT_IOS"
-          fail=0
-          need() { # NAME RESULT REQUIRED(true|false)
-            if [ "$3" = true ]; then
-              [ "$2" = success ] || { echo "::error::$1 is required but its result is '$2'"; fail=1; }
-            else
-              [ "$2" = skipped ] || { echo "::error::$1 was not selected but its result is '$2'"; fail=1; }
-            fi
-          }
-          need plan "$RESULT_PLAN" true
-          need static "$RESULT_STATIC" true
-          need reject "$RESULT_REJECT" "${HAS_ANDROID:-false}"
-          need android "$RESULT_ANDROID" "${HAS_ANDROID:-false}"
-          need ios "$RESULT_IOS" "${HAS_IOS:-false}"
-          if [ "$fail" -ne 0 ]; then
-            echo "::error::A required job failed, was cancelled or did not run; the selected variants are NOT proven."
-            exit 1
-          fi
-          if [ -z "$REQUIRED_VARIANTS" ]; then
-            echo "::error::The plan selected no variant."
-            exit 1
-          fi
-
       - name: Checkout exact commit
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           persist-credentials: false
+
+      # A required job must be `success`. A job that is not required must be `skipped`
+      # (it was not selected); anything else is a defect of the workflow itself.
+      # The decision is tool/check_verdict.sh, which is tested.
+      - name: Every required job succeeded
+        run: tool/check_verdict.sh results
 
       - name: Download the evidence of the required variants
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
@@ -621,12 +621,8 @@ jobs:
       - name: Evidence check, cross-artifact checks and summary
         run: |
           ls -l evidence
-          for v in $REQUIRED_VARIANTS; do
-            if [ ! -s "evidence/$v.txt" ]; then
-              echo "::error::Missing verification evidence for $v"
-              exit 1
-            fi
-          done
+          # Evidence for every required variant, and for no other one.
+          tool/check_verdict.sh evidence evidence
           is_required() { case " $REQUIRED_VARIANTS " in *" $1 "*) return 0 ;; *) return 1 ;; esac; }
           get() { sed -n "s/^$2=//p" "evidence/$1.txt" | head -n1; }
           # The production APK and AAB must be one update family: same application ID,
