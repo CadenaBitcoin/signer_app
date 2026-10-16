@@ -105,6 +105,11 @@ jobs:
         with:
           persist-credentials: false
 
+      # The trigger mapping, the verdict decisions and the shape of this workflow are tested
+      # first, without a Flutter build (tool/test_release_triggers.sh).
+      - name: Test the trigger mapping, the verdict logic and the workflow definition
+        run: tool/test_release_triggers.sh
+
       - name: Plan
         id: plan
         env:
@@ -595,38 +600,16 @@ jobs:
       REQUIRED_VARIANTS: ${{ needs.plan.outputs.variants }}
       SELECTION: ${{ needs.plan.outputs.selection }}
     steps:
-      # A required job must be `success`. A job that is not required must be `skipped`
-      # (it was not selected); anything else is a defect of the workflow itself.
-      - name: Every required job succeeded
-        run: |
-          echo "selection=$SELECTION required=[$REQUIRED_VARIANTS]"
-          echo "plan=$RESULT_PLAN static=$RESULT_STATIC reject=$RESULT_REJECT android=$RESULT_ANDROID ios=$RESULT_IOS"
-          fail=0
-          need() { # NAME RESULT REQUIRED(true|false)
-            if [ "$3" = true ]; then
-              [ "$2" = success ] || { echo "::error::$1 is required but its result is '$2'"; fail=1; }
-            else
-              [ "$2" = skipped ] || { echo "::error::$1 was not selected but its result is '$2'"; fail=1; }
-            fi
-          }
-          need plan "$RESULT_PLAN" true
-          need static "$RESULT_STATIC" true
-          need reject "$RESULT_REJECT" "${HAS_ANDROID:-false}"
-          need android "$RESULT_ANDROID" "${HAS_ANDROID:-false}"
-          need ios "$RESULT_IOS" "${HAS_IOS:-false}"
-          if [ "$fail" -ne 0 ]; then
-            echo "::error::A required job failed, was cancelled or did not run; the selected variants are NOT proven."
-            exit 1
-          fi
-          if [ -z "$REQUIRED_VARIANTS" ]; then
-            echo "::error::The plan selected no variant."
-            exit 1
-          fi
-
       - name: Checkout exact commit
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           persist-credentials: false
+
+      # A required job must be `success`. A job that is not required must be `skipped`
+      # (it was not selected); anything else is a defect of the workflow itself.
+      # The decision is tool/check_verdict.sh, which is tested.
+      - name: Every required job succeeded
+        run: tool/check_verdict.sh results
 
       - name: Download the evidence of the required variants
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
@@ -638,12 +621,8 @@ jobs:
       - name: Evidence check, cross-artifact checks and summary
         run: |
           ls -l evidence
-          for v in $REQUIRED_VARIANTS; do
-            if [ ! -s "evidence/$v.txt" ]; then
-              echo "::error::Missing verification evidence for $v"
-              exit 1
-            fi
-          done
+          # Evidence for every required variant, and for no other one.
+          tool/check_verdict.sh evidence evidence
           is_required() { case " $REQUIRED_VARIANTS " in *" $1 "*) return 0 ;; *) return 1 ;; esac; }
           get() { sed -n "s/^$2=//p" "evidence/$1.txt" | head -n1; }
           # The production APK and AAB must be one update family: same application ID,
