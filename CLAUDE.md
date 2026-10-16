@@ -82,15 +82,20 @@ flutter pub get
 cd ../..
 
 flutter analyze
-flutter build apk --debug
+flutter build apk --debug --flavor staging --dart-define-from-file=config/build/staging.json
 ```
 
 - **Accepted analyzer baseline: 0 errors.** Existing warnings/info are technical
   debt. Do **not** mass-clean them during unrelated work.
 - The nested plugin's `pubspec.lock` and `.dart_tool/` are ignored by Git; never
   commit them.
-- A debug build compiles whatever environment constants are in
-  `lib/src/ui/controllers/appController.dart` (see section 10).
+- **Every build needs an explicit environment and the matching flavor**:
+  `--flavor staging --dart-define-from-file=config/build/staging.json` (or
+  `--flavor production ... production.json`) on `flutter run`, `flutter build ...` and IDE
+  run configurations. Without them, or with a flavor that does not match the file, the
+  build fails; there is no default (see section 10 and `docs/BUILD_CONFIGURATION.md`).
+  `flutter pub get` and `flutter analyze` need none. Use the staging pair with
+  disposable test accounts.
 
 ## 5. Security boundaries — what must never reach Claude or Git
 
@@ -126,7 +131,7 @@ Read the code path and report before changing anything in:
 - manual signing (`SignTransactionScreen.dart`) and automatic signing
   (`lib/services/auto_signing_service.dart`)
 - FFI boundaries and the Rust `dlcplazacryptlib` / `dlc_wallet` plugin
-- environment selection (`AppController` constants)
+- environment selection (`BuildConfig` and the `AppController` constants it feeds)
 - release signing
 - backend transport security (`DataService` HTTPS guard,
   `android:usesCleartextTraffic="false"`)
@@ -192,13 +197,29 @@ authorization:
   must not be inferred from branch names.
 - The application version source is the `version:` field in `pubspec.yaml`, not
   historical branch names.
-- **Environment selection is manual**: `USE_TESTNET`, `NETWORK_ENVIRONMENT` and
-  `API_BASE_URL` are source constants in `appController.dart`. Production is
-  `https://cadenabitcoin.com/app` (`false`, `"bitcoin"`); the verified staging
-  setup is `true`, `"signet"`, `https://staging.purabitcoin.com/app`. Switching is
-  for local testing only: **never commit a staging configuration**, and restore the
-  committed production values afterwards. This area still needs deliberate
-  treatment.
+- **Environment selection is explicit and fail-closed**: `BuildConfig`
+  (`lib/config/build_config.dart`) is the only source of `USE_TESTNET`,
+  `NETWORK_ENVIRONMENT` and `API_BASE_URL` (the `AppController` constants are
+  aliases of it). It is selected per build with
+  `--dart-define-from-file=config/build/staging.json` (`true`, `"signet"`,
+  `https://staging.purabitcoin.com/app`) or `production.json` (`false`,
+  `"bitcoin"`, `https://cadenabitcoin.com/app`). A missing, incomplete or
+  contradictory configuration fails the build, including release/AOT. Never edit the
+  `AppController` constants to switch environments, never add a default or a
+  fallback to `build_config.dart`, and treat changes to it as sensitive (section 6).
+  The files contain no secrets and are meant to be committed. See
+  `docs/BUILD_CONFIGURATION.md`.
+- **Two flavors, `staging` and `production`, select only the application identity**:
+  Android `com.app.cadenabitcoin.staging` / `com.app.cadenabitcoin`, iOS the same bundle
+  IDs, launcher names "Cadena Signer STAGING" / "Cadena Bitcoin". Staging and production
+  install side by side. The build fails unless the flavor equals `APP_ENV` of the
+  configuration file (`BuildConfig`, `FLUTTER_APP_FLAVOR`); do not add a default flavor
+  (`default-flavor`) or a second environment selector. `tool/verify_version.sh` checks the
+  wiring, `tool/verify_artifact.sh` checks built artifacts, and the `build-variants`
+  workflow compiles the five variants without signing credentials; it
+  can be run for all of them or for one chosen variant, and a push (merge) to `staging`
+  runs the two staging variants and to `production` the three production variants
+  (`tool/plan_build_variants.sh` decides what a trigger requires; `docs/RELEASE_TRIGGERS.md`).
 - The release build currently uses the **debug signing config**
   (`android/app/build.gradle.kts`). An official release-signing procedure is **not
   yet established**.

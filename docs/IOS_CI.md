@@ -5,10 +5,11 @@
 > **unsigned** `Runner.app`: it cannot be installed on a device, has not been run
 > anywhere, and is not a release, a TestFlight build or an App Store build.
 >
-> **It currently contains the PRODUCTION backend configuration**
-> (`https://cadenabitcoin.com/app`, `"bitcoin"`), because environment selection is
-> still the constants in `lib/src/ui/controllers/appController.dart`. The notice
-> inside every artifact says so.
+> **It is built with the STAGING configuration** (`config/build/staging.json`:
+> `https://staging.purabitcoin.com/app`, Signet), selected explicitly with
+> `--dart-define-from-file`, never by the branch name; a build without a complete
+> configuration fails (see [BUILD_CONFIGURATION.md](BUILD_CONFIGURATION.md)). The
+> notice inside every artifact states the resolved environment.
 
 Workflow: `.github/workflows/ios-ci-validation.yml` (companion to the Android
 workflow described in `docs/ANDROID_CI.md`).
@@ -51,24 +52,41 @@ iPhoneOS SDK version are recorded in the artifact notice.
 2. Select Xcode 16.4 and verify it. Install Flutter 3.35.3.
 3. Record and verify the toolchain (above).
 4. `flutter pub get --enforce-lockfile` (root), then in `flutter_plugin/flutter_plugin`.
-5. `flutter analyze --no-fatal-infos --no-fatal-warnings`: only analyzer errors
+5. `/bin/bash tool/verify_build_config.sh verify`: the configuration test matrix,
+   release/AOT compile checks, the analyzer guard and the portability scan, run
+   with macOS's system bash 3.2 on purpose. Then record what the app itself
+   resolves from `config/build/staging.json` with `--flavor staging` and require
+   `APP_ENV=staging`.
+6. `flutter analyze --no-fatal-infos --no-fatal-warnings`: only analyzer errors
    fail the build (baseline 0 errors; existing warnings/info are known technical
    debt, `CLAUDE.md` section 4). There is no `test/` directory, so no `flutter test`.
-6. Record the bundled Rust static library and verify it is unchanged (below).
-7. `flutter build ios --release --no-codesign`. Flutter runs `pod install` itself;
-   `--no-codesign` sets `CODE_SIGNING_ALLOWED=NO`, so no certificate or profile is needed.
-8. Locate `Runner.app`, check its executable is arm64, and read its bundle
+7. Record the bundled Rust static library and verify it is unchanged (below).
+8. `flutter build ios --release --no-codesign --flavor staging --dart-define-from-file=config/build/staging.json`.
+   Flutter runs `pod install` itself; `--no-codesign` sets `CODE_SIGNING_ALLOWED=NO`,
+   so no certificate or profile is needed. The `staging` flavor is the Xcode scheme
+   `staging` with the configurations `Debug|Profile|Release-staging`: bundle ID
+   `com.app.cadenabitcoin.staging`, display name "Cadena Signer STAGING".
+9. Locate `Runner.app`, check its executable is arm64, and read its bundle
    identifier and version.
-9. Zip the **complete** bundle with `ditto` (this preserves symlinks and
-   permissions), write the notice and a SHA-256 checksum file, and upload them.
+10. Check the compiled Dart snapshot (`Frameworks/App.framework/App`): it must contain
+    the staging backend URL and must not contain the production one. This is
+    supporting evidence, not proof of network isolation
+    ([BUILD_CONFIGURATION.md](BUILD_CONFIGURATION.md)).
+    Then `tool/verify_artifact.sh ios staging Runner.app`: bundle identifier, display
+    name, version fields and the unsigned state, read from the built app.
+11. Zip the **complete** bundle with `ditto` (this preserves symlinks and
+    permissions), write the notice and a SHA-256 checksum file, and upload them.
 
 Equivalent on a Mac (it cannot be run on Linux):
 
 ```bash
 flutter pub get --enforce-lockfile
 (cd flutter_plugin/flutter_plugin && flutter pub get)
-flutter build ios --release --no-codesign
+flutter build ios --release --no-codesign --flavor staging --dart-define-from-file=config/build/staging.json
 ```
+
+The five-variant compile validation (both iOS apps among them) is the separate
+`build-variants` workflow: [BUILD_CONFIGURATION.md](BUILD_CONFIGURATION.md#the-five-build-variants).
 
 ### External downloads (during `pod install`)
 
@@ -107,24 +125,28 @@ update that value in the same pull request.
 Artifact naming:
 
 ```text
-CI-VALIDATION-NOT-APPROVED-FOR-PUBLIC-DISTRIBUTION_cadena-signer-ios_v<version>_unsigned_<sha7>_run<run>-<attempt>
+CI-VALIDATION-NOT-APPROVED-FOR-PUBLIC-DISTRIBUTION_cadena-signer-ios_v<version>_<environment>_unsigned_<sha7>_run<run>-<attempt>
 ```
 
-`<version>` is the unchanged `version:` from `pubspec.yaml`, `<sha7>` the short commit
-SHA and `<run>-<attempt>` the GitHub run number and attempt. The notice also lists
-the full SHA, run URL, archive size and SHA-256, the toolchain, the Rust library
-details, the bundle identity and the production-configuration warning. The run
-summary and a workflow warning annotation repeat the warning.
+`<version>` is the unchanged `version:` from `pubspec.yaml`, `<environment>` the
+`APP_ENV` the app resolved (`staging`), `<sha7>` the short commit SHA and
+`<run>-<attempt>` the GitHub run number and attempt. The notice also lists the full
+SHA, run URL, archive size and SHA-256, the toolchain, the Rust library details, the
+bundle identity, the resolved environment values with the file that selected them,
+and the result of the built-app check. The run summary and a workflow annotation
+repeat the environment.
 
 ## Known limitations
 
 - **Unsigned and unrun.** Compilation and linking only; nothing has launched this
   app. Real signing, installation, TestFlight and App Store use need Apple
   credentials and a separate, reviewed design.
-- **Production configuration.** No build-configuration mechanism exists on this
-  branch, so the committed constants (production) apply. When the Android
-  build-configuration work lands, this workflow should pass the staging file with
-  `--dart-define-from-file` exactly as that workflow does.
+- **Staging configuration, compile-time validated only.** Use of this bundle against
+  the backend has not been exercised (it cannot be installed anyway).
+- **Build-configuration steps not yet confirmed on a hosted macOS run.** The
+  configuration verification under `/bin/bash` 3.2 and the check of
+  `App.framework/App` were validated on Linux only; they have to pass on a real
+  `macos-15` run before the change is accepted.
 - **First hosted run.** The workflow was validated locally with emulated macOS
   commands only (no Mac was available). Its first real run may need adjustment.
 - **Deployment targets are inconsistent** (project 14.0, `Podfile` 15.5,
@@ -132,9 +154,13 @@ summary and a workflow warning annotation repeat the warning.
   unless a real build failure shows it is needed.
 - **Xcode 16.4 is pinned** and must remain on the `macos-15` image; Xcode 26 and
   Flutter 3.35.3 are untested together.
-- **Versioning is undecided.** The version is not modified. iOS requires a numeric
-  `CFBundleShortVersionString`, so a prerelease suffix such as `-rc.1` cannot be
-  used there as is.
-- **Same bundle identifier** (`com.app.cadenabitcoin`) as Android and production.
+- **The version is not modified.** iOS requires a numeric
+  `CFBundleShortVersionString`, so a prerelease suffix such as `-rc.1` is never
+  embedded; staging candidates are named by a release identifier instead
+  ([RELEASE_POLICY.md](RELEASE_POLICY.md) section 7).
+- **Separate bundle identifier** `com.app.cadenabitcoin.staging` (the `staging` flavor),
+  the same value as the Android application ID and different from production's
+  `com.app.cadenabitcoin`. It is not registered with Apple; an unsigned build needs no
+  registration.
 - The `DEVELOPMENT_TEAM` value in the Xcode project is committed but unused by this
   build (no signing).

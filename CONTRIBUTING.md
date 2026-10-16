@@ -57,8 +57,13 @@ flutter pub get
 cd ../..
 
 flutter analyze
-flutter build apk --debug
+flutter build apk --debug --flavor staging --dart-define-from-file=config/build/staging.json
 ```
+
+Every build needs an explicit environment and the matching flavor
+(`--flavor staging --dart-define-from-file=config/build/staging.json`, or `production` for
+both); a build without them, or with a flavor that disagrees with the file, fails. See
+[docs/BUILD_CONFIGURATION.md](docs/BUILD_CONFIGURATION.md).
 
 `flutter analyze` must report **0 errors**. Existing warnings are known technical debt
 and must not be mass-cleaned in unrelated pull requests. Run any other relevant checks

@@ -18,7 +18,7 @@ Implements #<!-- issue number. Do not use automatic closing keywords (fixes/clos
 
 - [ ] `flutter pub get` (root and `flutter_plugin/flutter_plugin`)
 - [ ] `flutter analyze` — 0 errors
-- [ ] `flutter build apk --debug` (when the change can affect the build)
+- [ ] `flutter build apk --debug --flavor staging --dart-define-from-file=config/build/staging.json` (when the change can affect the build; every build needs an explicit environment and the matching flavor)
 - [ ] Runtime check, if relevant (describe, using test/staging credentials only)
 
 ## Security impact

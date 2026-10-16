@@ -55,7 +55,8 @@ human into the app, not into prompts, scripts or files.
    security (wallet, auth, signing, FFI, environment, release, transport).
 4. **Implement** the smallest coherent change; no unrelated cleanup.
 5. **Verify** with the baseline commands in `CLAUDE.md` section 4
-   (`flutter analyze` 0 errors, `flutter build apk --debug`) and, where relevant,
+   (`flutter analyze` 0 errors, `flutter build apk --debug` with the explicit
+   `--flavor staging --dart-define-from-file=config/build/staging.json`) and, where relevant,
    runtime checks on the Android emulator.
 6. **Inspect the diff** (`git diff --stat`, `git diff --check`, `git status`);
    confirm no temporary test configuration remains.
@@ -70,9 +71,11 @@ human into the app, not into prompts, scripts or files.
 Established while verifying #37:
 
 - Runtime tests use the **staging** backend and a dedicated test account, never
-  production. Staging is selected by temporarily editing the environment
-  constants in `appController.dart`; that edit is shown as a diff before running,
-  is **never committed**, and is reverted (restored from a saved copy) afterwards.
+  production. Staging is selected explicitly with
+  `--flavor staging --dart-define-from-file=config/build/staging.json` on `flutter run` /
+  `flutter build` (see `docs/BUILD_CONFIGURATION.md`); no source file is edited, so
+  there is nothing to revert, and a build without them fails rather than
+  falling back to another environment.
 - Secrets that must be typed (mnemonic, real passwords) are entered by the human
   in the emulator window. `adb shell input text` would put them in a command line
   and in `adbd` logs.

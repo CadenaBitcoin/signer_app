@@ -1,0 +1,7 @@
+// Native application identity of the "staging" flavor (iOS). Selected by the Xcode
+// scheme "staging" and its Debug/Profile/Release-staging configurations, i.e. by
+// `flutter build ios --flavor staging`. Only identity lives here; the environment
+// (backend, network) comes from config/build/staging.json, and the build fails
+// unless the two agree (lib/config/build_config.dart). See docs/BUILD_CONFIGURATION.md.
+PRODUCT_BUNDLE_IDENTIFIER = com.app.cadenabitcoin.staging
+APP_DISPLAY_NAME = Cadena Signer STAGING

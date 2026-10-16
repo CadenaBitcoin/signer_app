@@ -1,0 +1,652 @@
+# Five build variants: compile validation.
+#
+# Proves that the repository compiles every application variant of the release
+# architecture (docs/RELEASE_POLICY.md section 3) WITHOUT any signing credential:
+#
+#   1. staging    Android APK   flutter build apk       --release --flavor staging
+#   2. staging    iOS app       flutter build ios       --release --flavor staging    --no-codesign
+#   3. production Android APK   flutter build apk       --release --flavor production
+#   4. production Android AAB   flutter build appbundle --release --flavor production
+#   5. production iOS app       flutter build ios       --release --flavor production --no-codesign
+#
+# Every build selects its environment with `--dart-define-from-file=config/build/<env>.json`
+# and its application identity with `--flavor <env>`; the build fails unless the two agree
+# (lib/config/build_config.dart). Each built artifact is then read back by
+# tool/verify_artifact.sh (application ID / bundle ID, display name, version, signing status,
+# environment evidence) and the verdict is recorded as evidence.
+#
+# What this is NOT:
+#   - It is not signing and not distribution. Android release builds keep the repository's
+#     temporary debug signing; iOS builds are unsigned (--no-codesign). None of the five is
+#     installable as an official build, and none is distributable.
+#   - It uploads NO application binary. Only small text evidence files (identity, version,
+#     SHA-256 of the artifact, signer status, run metadata) are uploaded; the binaries stay on
+#     the runner. Production binaries are deliberately never retained.
+#   - It has no secrets, no deployment permission and no write access.
+#
+# Coordinated AND individual execution, from one set of build jobs:
+#   - A run executes the variants its trigger requires (tool/plan_build_variants.sh decides;
+#     the `plan` job hands the result to the build jobs as their matrix). The builds are
+#     written once, in the `android` and `ios` jobs below; there is no second copy.
+#   - Manual run (workflow_dispatch): choose `all` or exactly ONE variant. A single variant
+#     runs only its own build job plus the shared checks (`static`, and for an Android
+#     variant `reject`); the other four are not executed.
+#   - Release branches (docs/RELEASE_TRIGGERS.md): a push to `staging` runs the two staging
+#     variants and a push to `production` the three production variants. Both branches are
+#     protected and accept only pull-request merge commits, so such a push IS an authorized
+#     promotion; the plan additionally refuses a push that is not a merge commit. Creating
+#     the branch is not a promotion and runs nothing.
+#     Development, feature branches, tags and pull requests start nothing.
+#   - The final `verdict` job fails if any REQUIRED job failed, was cancelled or was skipped,
+#     or if a required variant has no verification evidence. Variants that were not selected
+#     are not required.
+# See docs/RELEASE_TRIGGERS.md, docs/BUILD_CONFIGURATION.md and
+# docs/RELEASE_IMPLEMENTATION_PLAN.md.
+
+name: Build variants (compile validation)
+
+on:
+  # A promotion = a pull-request merge into a release branch (see the header). Branches only:
+  # tags do not match. No path filter: a promotion that changes only documentation still
+  # builds. `production` does not exist yet; the entry is inert until it is created.
+  push:
+    branches: [staging, production]
+  # Manual run for any ref (once this file is on the default branch): all variants or one.
+  workflow_dispatch:
+    inputs:
+      variant:
+        description: Which variant to build and verify (a single variant runs nothing else)
+        type: choice
+        required: true
+        default: all
+        options:
+          - all
+          - android-staging-apk
+          - ios-staging
+          - android-production-apk
+          - android-production-aab
+          - ios-production
+
+# Least privilege: the jobs only read the repository. No release, no write access, and no
+# secret of any kind is used.
+permissions:
+  contents: read
+
+# Every promotion is built, none is superseded: the group of a push contains its commit, so
+# two quick merges never replace each other's pending run (GitHub keeps only one pending run
+# per group). A manual run of one variant must not cancel a run of another variant, so the
+# selection is part of the group; repeating the SAME manual run on the same commit replaces
+# the older one.
+concurrency:
+  group: build-variants-${{ github.event_name }}-${{ github.ref }}-${{ github.sha }}-${{ inputs.variant }}
+  cancel-in-progress: ${{ github.event_name == 'workflow_dispatch' }}
+
+jobs:
+  # ---------------------------------------------------------------------------------------
+  # Which variants does this run require? One decision, made by a tested script.
+  plan:
+    name: Plan (which variants this run requires)
+    # Creating a release branch is not a promotion: such a push runs nothing (every job is
+    # skipped). The first merge after the creation is the first promotion.
+    if: ${{ !(github.event_name == 'push' && github.event.created) }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      selection: ${{ steps.plan.outputs.selection }}
+      variants: ${{ steps.plan.outputs.variants }}
+      count: ${{ steps.plan.outputs.count }}
+      has_android: ${{ steps.plan.outputs.has_android }}
+      has_ios: ${{ steps.plan.outputs.has_ios }}
+      android_matrix: ${{ steps.plan.outputs.android_matrix }}
+      ios_matrix: ${{ steps.plan.outputs.ios_matrix }}
+    steps:
+      - name: Checkout exact commit
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+
+      # The trigger mapping, the verdict decisions and the shape of this workflow are tested
+      # first, without a Flutter build (tool/test_release_triggers.sh).
+      - name: Test the trigger mapping, the verdict logic and the workflow definition
+        run: tool/test_release_triggers.sh
+
+      - name: Plan
+        id: plan
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          REF: ${{ github.ref }}
+          INPUT_VARIANT: ${{ inputs.variant }}
+          CREATED: ${{ github.event.created }}
+        run: |
+          # A promotion is a merge commit. The checkout is shallow, so the parents are read
+          # from the commit object (tool/commit_parents.sh), not from the history.
+          parents=""
+          if [ "$EVENT_NAME" = push ]; then
+            parents="$(tool/commit_parents.sh "$GITHUB_SHA")"
+          fi
+          # No pipe: a failing plan must fail this step (the default shell has no pipefail).
+          tool/plan_build_variants.sh "$EVENT_NAME" "$REF" "$INPUT_VARIANT" "$parents" "$CREATED" > "$RUNNER_TEMP/plan.txt"
+          cat "$RUNNER_TEMP/plan.txt" >> "$GITHUB_OUTPUT"
+          {
+            echo "### Plan: $(sed -n 's/^selection=//p' "$RUNNER_TEMP/plan.txt")"
+            echo
+            echo "Required variants ($(sed -n 's/^count=//p' "$RUNNER_TEMP/plan.txt")): \`$(sed -n 's/^variants=//p' "$RUNNER_TEMP/plan.txt")\`"
+            echo
+            echo "Trigger: \`$EVENT_NAME\` on \`$REF\`. Variants not listed are not executed and not required."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  # ---------------------------------------------------------------------------------------
+  # Shared verification prerequisite: runs for every selection.
+  static:
+    name: Static checks (version wiring, configuration matrix, analyzer)
+    if: ${{ !(github.event_name == 'push' && github.event.created) }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout exact commit
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+
+      - name: Set up Flutter 3.35.3
+        uses: subosito/flutter-action@1a449444c387b1966244ae4d4f8c696479add0b2 # v2
+        with:
+          flutter-version: "3.35.3"
+          channel: stable
+          cache: true
+
+      - name: Resolve dependencies
+        run: |
+          flutter pub get --enforce-lockfile
+          (cd flutter_plugin/flutter_plugin && flutter pub get)
+
+      # Version wiring, the two flavors' identities, scheme and Podfile mappings.
+      - name: Verify version and flavor wiring
+        run: tool/verify_version.sh
+
+      - name: Verify build configuration (matrix, flavor agreement, release/AOT)
+        run: tool/verify_build_config.sh verify
+
+      # The accepted analyzer baseline is 0 errors (CLAUDE.md section 4).
+      - name: Analyze (errors fail; pre-existing warnings/info do not)
+        run: flutter analyze --no-fatal-infos --no-fatal-warnings
+
+  # ---------------------------------------------------------------------------------------
+  # Real Flutter builds that MUST fail: a flavor that disagrees with the configuration, a
+  # missing flavor and a missing configuration. Nothing may be produced.
+  # Needed by (and only run for) a selection that contains an Android variant; the iOS
+  # jobs carry their own rejection steps.
+  reject:
+    name: Mismatched or missing selection is rejected (real builds)
+    needs: [plan, static]
+    if: ${{ needs.plan.outputs.has_android == 'true' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Checkout exact commit
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@cf277c60eb25467037889841efdb72551f06f6c3 # v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Set up Flutter 3.35.3
+        uses: subosito/flutter-action@1a449444c387b1966244ae4d4f8c696479add0b2 # v2
+        with:
+          flutter-version: "3.35.3"
+          channel: stable
+          cache: true
+
+      - name: Resolve dependencies
+        run: |
+          flutter config --jdk-dir "$JAVA_HOME"
+          flutter pub get --enforce-lockfile
+          (cd flutter_plugin/flutter_plugin && flutter pub get)
+
+      - name: Each wrong selection fails the build and produces nothing
+        run: |
+          expect_rejected() { # NAME EXPECTED_MESSAGE_FRAGMENT FLUTTER_ARGS...
+            name="$1"; fragment="$2"; shift 2
+            rm -rf build/app/outputs
+            if flutter build apk --release "$@" >"$RUNNER_TEMP/$name.log" 2>&1; then
+              echo "::error::$name: the build SUCCEEDED but must be rejected"
+              exit 1
+            fi
+            if ! grep -qF -- "$fragment" "$RUNNER_TEMP/$name.log"; then
+              echo "::error::$name: failed, but not for the expected reason ('$fragment')"
+              tail -n 25 "$RUNNER_TEMP/$name.log"
+              exit 1
+            fi
+            if find build/app/outputs \( -name '*.apk' -o -name '*.aab' \) 2>/dev/null | grep -q .; then
+              echo "::error::$name: a rejected build left an artifact behind"
+              exit 1
+            fi
+            echo "::notice title=rejected as required::$name -> $fragment"
+          }
+          expect_rejected staging-flavor-with-production-config 'Build flavor "staging" does not match APP_ENV "production"' \
+            --flavor staging --dart-define-from-file=config/build/production.json
+          expect_rejected production-flavor-with-staging-config 'Build flavor "production" does not match APP_ENV "staging"' \
+            --flavor production --dart-define-from-file=config/build/staging.json
+          # Without --flavor Gradle assembles every flavor with the one configuration, so the
+          # flavor that does not match it rejects the build.
+          expect_rejected no-flavor-with-staging-config 'does not match APP_ENV "staging"' \
+            --dart-define-from-file=config/build/staging.json
+          expect_rejected flavor-without-configuration 'No build configuration was supplied' \
+            --flavor staging
+
+  # ---------------------------------------------------------------------------------------
+  # The matrix (variant, env, kind, flutter_command) comes from the plan.
+  android:
+    name: ${{ matrix.variant }}
+    needs: [plan, static]
+    if: ${{ needs.plan.outputs.has_android == 'true' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.plan.outputs.android_matrix) }}
+    env:
+      BUILD_VARIANT: ${{ matrix.variant }}
+      BUILD_ENV: ${{ matrix.env }}
+      BUILD_KIND: ${{ matrix.kind }}
+      FLUTTER_COMMAND: ${{ matrix.flutter_command }}
+      BUILD_CONFIG_FILE: config/build/${{ matrix.env }}.json
+      # Pinned: the SHA-256 is that of the release asset (GitHub records the same digest).
+      BUNDLETOOL_URL: https://github.com/google/bundletool/releases/download/1.18.3/bundletool-all-1.18.3.jar
+      BUNDLETOOL_SHA256: a099cfa1543f55593bc2ed16a70a7c67fe54b1747bb7301f37fdfd6d91028e29
+    steps:
+      - name: Checkout exact commit
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@cf277c60eb25467037889841efdb72551f06f6c3 # v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Set up Flutter 3.35.3
+        uses: subosito/flutter-action@1a449444c387b1966244ae4d4f8c696479add0b2 # v2
+        with:
+          flutter-version: "3.35.3"
+          channel: stable
+          cache: true
+
+      - name: Show toolchain
+        run: |
+          flutter config --jdk-dir "$JAVA_HOME"
+          flutter --version
+          java -version
+          echo "ANDROID_HOME=${ANDROID_HOME:-unset}"
+
+      - name: Resolve dependencies
+        run: |
+          flutter pub get --enforce-lockfile
+          (cd flutter_plugin/flutter_plugin && flutter pub get)
+
+      # The flavor equals the environment, so the same word selects both; the probe fails if
+      # the configuration file does not resolve to exactly that environment.
+      - name: Resolve the configuration for this variant
+        run: |
+          resolved="$(tool/verify_build_config.sh resolve "$BUILD_CONFIG_FILE" "$BUILD_ENV")"
+          echo "$resolved"
+          if ! grep -qx "APP_ENV=$BUILD_ENV" <<<"$resolved"; then
+            echo "::error::$BUILD_CONFIG_FILE does not resolve to APP_ENV=$BUILD_ENV"
+            exit 1
+          fi
+
+      - name: Build (${{ matrix.variant }})
+        run: flutter build "$FLUTTER_COMMAND" --release --flavor "$BUILD_ENV" --dart-define-from-file="$BUILD_CONFIG_FILE"
+
+      - name: Locate the built artifact
+        run: |
+          if [ "$BUILD_KIND" = "apk" ]; then
+            artifact="build/app/outputs/flutter-apk/app-${BUILD_ENV}-release.apk"
+          else
+            artifact="build/app/outputs/bundle/${BUILD_ENV}Release/app-${BUILD_ENV}-release.aab"
+          fi
+          if [ ! -f "$artifact" ]; then
+            echo "::error::Expected artifact not found: $artifact"
+            find build/app/outputs -maxdepth 4 -type f 2>/dev/null | head -n 30
+            exit 1
+          fi
+          ls -l "$artifact"
+          echo "ARTIFACT_PATH=$artifact" >> "$GITHUB_ENV"
+
+      - name: Install the pinned bundletool
+        if: matrix.kind == 'aab'
+        run: |
+          curl -fsSL --retry 3 -o "$RUNNER_TEMP/bundletool.jar" "$BUNDLETOOL_URL"
+          echo "$BUNDLETOOL_SHA256  $RUNNER_TEMP/bundletool.jar" | sha256sum -c -
+          echo "BUNDLETOOL_JAR=$RUNNER_TEMP/bundletool.jar" >> "$GITHUB_ENV"
+
+      # Positive: the artifact says what it should. Negative (selftest): the same artifact is
+      # rejected for the other environment and when claimed unsigned. Signing is the repository's
+      # temporary debug signing (an ephemeral runner key): the artifact is NOT distributable.
+      - name: Verify the built artifact (identity, version, signing, environment)
+        run: |
+          tool/verify_artifact.sh selftest "$BUILD_KIND" "$BUILD_ENV" "$ARTIFACT_PATH" --signing debug
+          tool/verify_artifact.sh "$BUILD_KIND" "$BUILD_ENV" "$ARTIFACT_PATH" --signing debug --evidence "$RUNNER_TEMP/artifact-evidence.txt"
+
+      - name: Record evidence (metadata and SHA-256 only; no binary)
+        run: |
+          mkdir -p evidence
+          flutter_version="$(flutter --version | head -n1)"
+          java_version="$(java -version 2>&1 | head -n1)"
+          {
+            echo "variant=$BUILD_VARIANT"
+            echo "build_command=flutter build $FLUTTER_COMMAND --release --flavor $BUILD_ENV --dart-define-from-file=$BUILD_CONFIG_FILE"
+            echo "config_file=$BUILD_CONFIG_FILE"
+            echo "config_file_sha256=$(sha256sum "$BUILD_CONFIG_FILE" | cut -d' ' -f1)"
+            echo "commit=$GITHUB_SHA"
+            echo "ref=$GITHUB_REF_NAME"
+            echo "run=$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID (attempt $GITHUB_RUN_ATTEMPT)"
+            echo "flutter=$flutter_version"
+            echo "java=$java_version"
+            cat "$RUNNER_TEMP/artifact-evidence.txt"
+          } > "evidence/$BUILD_VARIANT.txt"
+          cat "evidence/$BUILD_VARIANT.txt"
+          {
+            echo "### $BUILD_VARIANT: compiled and verified"
+            echo
+            echo "Temporary debug signing; **not distributable**. No binary uploaded."
+            echo
+            echo '```'
+            cat "evidence/$BUILD_VARIANT.txt"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload evidence (text only)
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: build-evidence_${{ matrix.variant }}_a${{ github.run_attempt }}
+          path: evidence/
+          if-no-files-found: error
+          retention-days: 14
+
+  # ---------------------------------------------------------------------------------------
+  # The matrix (variant, env, other) comes from the plan.
+  ios:
+    name: ${{ matrix.variant }}
+    needs: [plan, static]
+    if: ${{ needs.plan.outputs.has_ios == 'true' }}
+    # macos-15 is the arm64 image. Same pinned toolchain as the iOS CI validation build.
+    runs-on: macos-15
+    timeout-minutes: 75
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.plan.outputs.ios_matrix) }}
+    env:
+      BUILD_VARIANT: ${{ matrix.variant }}
+      BUILD_ENV: ${{ matrix.env }}
+      OTHER_ENV: ${{ matrix.other }}
+      BUILD_CONFIG_FILE: config/build/${{ matrix.env }}.json
+      XCODE_APP: /Applications/Xcode_16.4.app
+      EXPECTED_XCODE: "16.4"
+      EXPECTED_FLUTTER: "3.35.3"
+      EXPECTED_FLUTTER_REVISION: a402d9a437
+      EXPECTED_DART: "3.9.2"
+      # Prebuilt Rust static library linked by the dlc_wallet plugin; never rebuilt here.
+      RUST_LIB: flutter_plugin/flutter_plugin/ios/Classes/libdlcplazacryptlib.a
+      EXPECTED_RUST_LIB_SHA256: 203dcd7abe4187de0b756638a55f691b2d5c680b17d4fbfa7dda550ed703949b
+    steps:
+      - name: Checkout exact commit
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+
+      - name: Select Xcode 16.4
+        run: |
+          sudo xcode-select -s "$XCODE_APP/Contents/Developer"
+          xcodebuild -version
+          actual="$(xcodebuild -version | sed -n '1s/^Xcode //p')"
+          if [ "$actual" != "$EXPECTED_XCODE" ]; then
+            echo "::error::Expected Xcode $EXPECTED_XCODE at $XCODE_APP but xcodebuild reports '$actual'."
+            exit 1
+          fi
+
+      - name: Set up Flutter 3.35.3
+        uses: subosito/flutter-action@1a449444c387b1966244ae4d4f8c696479add0b2 # v2
+        with:
+          flutter-version: "3.35.3"
+          channel: stable
+          cache: true
+
+      - name: Record and verify toolchain
+        run: |
+          arch="$(uname -m)"
+          flutter_json="$(flutter --version --machine)"
+          field() { printf '%s' "$flutter_json" | python3 -I -c "import sys,json; print(json.load(sys.stdin).get('$1',''))"; }
+          flutter_version="$(field frameworkVersion)"
+          flutter_revision="$(field frameworkRevision)"
+          dart_version="$(field dartSdkVersion | awk '{print $1}')"
+          {
+            echo "runner_image=${ImageOS:-unknown} ${ImageVersion:-unknown}"
+            echo "runner_arch=${arch}"
+            echo "xcode=$(xcodebuild -version | sed -n '1s/^Xcode //p') ($(xcodebuild -version | sed -n '2s/^Build version //p'))"
+            echo "iphoneos_sdk=$(xcrun --sdk iphoneos --show-sdk-version)"
+            echo "flutter=${flutter_version} (revision ${flutter_revision:0:10})"
+            echo "dart=${dart_version}"
+            echo "cocoapods=$(pod --version)"
+          } > "$RUNNER_TEMP/toolchain.txt"
+          cat "$RUNNER_TEMP/toolchain.txt"
+          fail=0
+          if [ "$arch" != "arm64" ]; then echo "::error::Runner architecture is '$arch', expected arm64."; fail=1; fi
+          if [ "$flutter_version" != "$EXPECTED_FLUTTER" ]; then echo "::error::Flutter is '$flutter_version', expected $EXPECTED_FLUTTER."; fail=1; fi
+          case "$flutter_revision" in
+            "$EXPECTED_FLUTTER_REVISION"*) ;;
+            *) echo "::error::Flutter revision is '$flutter_revision', expected $EXPECTED_FLUTTER_REVISION*."; fail=1 ;;
+          esac
+          if [ "$dart_version" != "$EXPECTED_DART" ]; then echo "::error::Dart is '$dart_version', expected $EXPECTED_DART."; fail=1; fi
+          [ "$fail" -eq 0 ] || exit 1
+
+      - name: Resolve dependencies
+        run: |
+          flutter pub get --enforce-lockfile
+          (cd flutter_plugin/flutter_plugin && flutter pub get)
+
+      # Deliberately the system /bin/bash (3.2 on macOS): the tools must stay portable to it.
+      - name: Resolve the configuration for this variant
+        run: |
+          resolved="$(/bin/bash tool/verify_build_config.sh resolve "$BUILD_CONFIG_FILE" "$BUILD_ENV")"
+          echo "$resolved"
+          if ! grep -qx "APP_ENV=$BUILD_ENV" <<<"$resolved"; then
+            echo "::error::$BUILD_CONFIG_FILE does not resolve to APP_ENV=$BUILD_ENV"
+            exit 1
+          fi
+          /bin/bash tool/verify_version.sh
+
+      - name: Check the prebuilt Rust static library is the audited one
+        run: |
+          sha="$(shasum -a 256 "$RUST_LIB" | awk '{print $1}')"
+          echo "rust_lib_sha256=$sha"
+          if [ "$sha" != "$EXPECTED_RUST_LIB_SHA256" ]; then
+            echo "::error::$RUST_LIB changed (sha256 $sha, audited $EXPECTED_RUST_LIB_SHA256). Re-review it, then update EXPECTED_RUST_LIB_SHA256."
+            exit 1
+          fi
+
+      # A missing flavor is rejected by Flutter before CocoaPods or Xcode run.
+      - name: Missing flavor is rejected
+        run: |
+          if flutter build ios --release --no-codesign --dart-define-from-file="$BUILD_CONFIG_FILE" >"$RUNNER_TEMP/noflavor.log" 2>&1; then
+            echo "::error::an iOS build WITHOUT --flavor succeeded; it must be rejected"
+            exit 1
+          fi
+          if ! grep -q 'specify a --flavor' "$RUNNER_TEMP/noflavor.log"; then
+            echo "::error::the unflavored iOS build failed, but not because the flavor is missing"
+            tail -n 25 "$RUNNER_TEMP/noflavor.log"
+            exit 1
+          fi
+          echo "::notice title=rejected as required::iOS build without --flavor"
+
+      # Flutter runs `pod install` itself. No signing: CODE_SIGNING_ALLOWED=NO.
+      - name: Build (${{ matrix.variant }})
+        run: flutter build ios --release --no-codesign --flavor "$BUILD_ENV" --dart-define-from-file="$BUILD_CONFIG_FILE"
+
+      - name: Locate the built app
+        run: |
+          app="build/ios/Release-${BUILD_ENV}-iphoneos/Runner.app"
+          if [ ! -d "$app" ]; then
+            app="$(find build/ios -maxdepth 3 -type d -name Runner.app -print 2>/dev/null | sort | head -n1 || true)"
+          fi
+          if [ -z "$app" ] || [ ! -d "$app" ]; then
+            echo "::error::flutter build ios succeeded but no Runner.app was found under build/ios."
+            find build/ios -maxdepth 3 2>/dev/null | head -n 40 || true
+            exit 1
+          fi
+          echo "$app"
+          echo "APP_PATH=$app" >> "$GITHUB_ENV"
+
+      - name: Verify the built app (bundle ID, name, version, unsigned, environment)
+        run: |
+          /bin/bash tool/verify_artifact.sh selftest ios "$BUILD_ENV" "$APP_PATH"
+          /bin/bash tool/verify_artifact.sh ios "$BUILD_ENV" "$APP_PATH" --evidence "$RUNNER_TEMP/artifact-evidence.txt"
+
+      # The build may rewrite ios/Podfile.lock (CocoaPods): that drift must stay VISIBLE and is
+      # not hidden or committed here. Any other tracked file changing is an error.
+      - name: Tracked files changed by the build
+        run: |
+          changed="$(git status --porcelain --untracked-files=no)"
+          if [ -z "$changed" ]; then
+            echo "No tracked file was modified by the build."
+            echo "PODFILE_LOCK_DRIFT=no" >> "$GITHUB_ENV"
+            exit 0
+          fi
+          echo "$changed"
+          git diff --stat
+          git diff -- ios/Podfile.lock | head -n 80
+          other="$(printf '%s\n' "$changed" | grep -v ' ios/Podfile.lock$' || true)"
+          if [ -n "$other" ]; then
+            echo "::error::The build modified tracked files other than ios/Podfile.lock:"
+            echo "$other"
+            exit 1
+          fi
+          echo "::warning title=ios/Podfile.lock drift::CocoaPods rewrote ios/Podfile.lock during the build. Not committed, not hidden; unrelated dependency maintenance is out of scope."
+          echo "PODFILE_LOCK_DRIFT=yes" >> "$GITHUB_ENV"
+
+      # The Dart flavor/environment check is platform independent, but this proves the iOS
+      # scheme passes the flavor to Dart: the wrong pairing must now fail the iOS build too.
+      - name: Mismatched flavor and configuration is rejected (iOS)
+        run: |
+          if flutter build ios --release --no-codesign --flavor "$BUILD_ENV" --dart-define-from-file="config/build/${OTHER_ENV}.json" >"$RUNNER_TEMP/mismatch.log" 2>&1; then
+            echo "::error::an iOS build with --flavor $BUILD_ENV and the $OTHER_ENV configuration succeeded; it must be rejected"
+            exit 1
+          fi
+          if ! grep -qF "does not match APP_ENV \"$OTHER_ENV\"" "$RUNNER_TEMP/mismatch.log"; then
+            echo "::error::the mismatched iOS build failed, but not by the flavor/environment check"
+            tail -n 40 "$RUNNER_TEMP/mismatch.log"
+            exit 1
+          fi
+          echo "::notice title=rejected as required::iOS --flavor $BUILD_ENV with config/build/$OTHER_ENV.json"
+
+      - name: Record evidence (metadata and SHA-256 only; no binary)
+        run: |
+          mkdir -p evidence
+          {
+            echo "variant=$BUILD_VARIANT"
+            echo "build_command=flutter build ios --release --no-codesign --flavor $BUILD_ENV --dart-define-from-file=$BUILD_CONFIG_FILE"
+            echo "config_file=$BUILD_CONFIG_FILE"
+            echo "config_file_sha256=$(shasum -a 256 "$BUILD_CONFIG_FILE" | awk '{print $1}')"
+            echo "commit=$GITHUB_SHA"
+            echo "ref=$GITHUB_REF_NAME"
+            echo "run=$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID (attempt $GITHUB_RUN_ATTEMPT)"
+            echo "podfile_lock_drift=${PODFILE_LOCK_DRIFT:-unknown}"
+            echo "rust_lib_sha256=$EXPECTED_RUST_LIB_SHA256"
+            sed 's/^/toolchain./' "$RUNNER_TEMP/toolchain.txt"
+            cat "$RUNNER_TEMP/artifact-evidence.txt"
+          } > "evidence/$BUILD_VARIANT.txt"
+          cat "evidence/$BUILD_VARIANT.txt"
+          {
+            echo "### $BUILD_VARIANT: compiled and verified"
+            echo
+            echo "**Unsigned** (\`--no-codesign\`); not installable, not distributable. No binary uploaded."
+            echo
+            echo '```'
+            cat "evidence/$BUILD_VARIANT.txt"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload evidence (text only)
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: build-evidence_${{ matrix.variant }}_a${{ github.run_attempt }}
+          path: evidence/
+          if-no-files-found: error
+          retention-days: 14
+
+  # ---------------------------------------------------------------------------------------
+  # One verdict for the variants this run REQUIRED, plus the cross-artifact checks that apply
+  # to the selected variants. Always runs, and fails if a required job failed, was cancelled
+  # or was skipped, or if a required variant lacks its evidence.
+  verdict:
+    name: Required variants compiled and verified
+    needs: [plan, static, reject, android, ios]
+    if: ${{ always() && !(github.event_name == 'push' && github.event.created) }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      RESULT_PLAN: ${{ needs.plan.result }}
+      RESULT_STATIC: ${{ needs.static.result }}
+      RESULT_REJECT: ${{ needs.reject.result }}
+      RESULT_ANDROID: ${{ needs.android.result }}
+      RESULT_IOS: ${{ needs.ios.result }}
+      HAS_ANDROID: ${{ needs.plan.outputs.has_android }}
+      HAS_IOS: ${{ needs.plan.outputs.has_ios }}
+      REQUIRED_VARIANTS: ${{ needs.plan.outputs.variants }}
+      SELECTION: ${{ needs.plan.outputs.selection }}
+    steps:
+      - name: Checkout exact commit
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+
+      # A required job must be `success`. A job that is not required must be `skipped`
+      # (it was not selected); anything else is a defect of the workflow itself.
+      # The decision is tool/check_verdict.sh, which is tested.
+      - name: Every required job succeeded
+        run: tool/check_verdict.sh results
+
+      - name: Download the evidence of the required variants
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          pattern: build-evidence_*_a${{ github.run_attempt }}
+          merge-multiple: true
+          path: evidence
+
+      - name: Evidence check, cross-artifact checks and summary
+        run: |
+          ls -l evidence
+          # Evidence for every required variant, and for no other one.
+          tool/check_verdict.sh evidence evidence
+          is_required() { case " $REQUIRED_VARIANTS " in *" $1 "*) return 0 ;; *) return 1 ;; esac; }
+          get() { sed -n "s/^$2=//p" "evidence/$1.txt" | head -n1; }
+          # The production APK and AAB must be one update family: same application ID,
+          # name, version name/code and signing kind. Only when both were built.
+          if is_required android-production-apk && is_required android-production-aab; then
+            tool/verify_artifact.sh consistent evidence/android-production-apk.txt evidence/android-production-aab.txt
+          fi
+          # Staging and production must be different applications on each platform.
+          for pair in android-staging-apk:android-production-apk ios-staging:ios-production; do
+            a="${pair%%:*}"
+            b="${pair##*:}"
+            if is_required "$a" && is_required "$b" && [ "$(get "$a" application_id)" = "$(get "$b" application_id)" ]; then
+              echo "::error::$a and $b share the application identity $(get "$a" application_id)"
+              exit 1
+            fi
+          done
+          {
+            echo "## Build variants ($SELECTION): all required variants compiled and verified"
+            echo
+            echo "No signing credentials. Android: temporary debug signing; iOS: unsigned. **None of these is distributable**, and no binary was uploaded."
+            echo
+            echo "| Variant | Application ID | Name | Version | Build | Signing | SHA-256 |"
+            echo "|---|---|---|---|---|---|---|"
+            for v in $REQUIRED_VARIANTS; do
+              echo "| $v | \`$(get "$v" application_id)\` | $(get "$v" display_name) | $(get "$v" version_name) | $(get "$v" version_code) | $(get "$v" signing) | \`$(get "$v" artifact_sha256 | cut -c1-16)\` |"
+            done
+          } >> "$GITHUB_STEP_SUMMARY"
