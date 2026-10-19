@@ -220,6 +220,11 @@ authorization:
   can be run for all of them or for one chosen variant, and a push (merge) to `staging`
   runs the two staging variants and to `production` the three production variants
   (`tool/plan_build_variants.sh` decides what a trigger requires; `docs/RELEASE_TRIGGERS.md`).
+  Every build also writes a JSON build manifest (source commit, run, version, toolchain,
+  artifact SHA-256, signing status; `tool/build_manifest.py`), and
+  `config/release/published_versions.json` records the version codes already published:
+  never reuse one (`docs/RELEASE_VERSIONING.md`). The application version changes only by a
+  reviewed edit of `pubspec.yaml`; no workflow may write or override it.
 - The release build currently uses the **debug signing config**
   (`android/app/build.gradle.kts`). An official release-signing procedure is **not
   yet established**.

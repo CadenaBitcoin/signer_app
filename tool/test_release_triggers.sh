@@ -214,12 +214,18 @@ evidence_case() { # NAME EXPECTED VARS files...
   rc=$?
   if { [ "$expect" = pass ] && [ "$rc" -eq 0 ]; } || { [ "$expect" = fail ] && [ "$rc" -eq 1 ]; }; then ok "evidence: $name"; else bad "evidence: $name" "exit $rc, expected $expect"; fi
 }
-evidence_case "exactly the staging pair" pass "$STAGING" android-staging-apk.txt ios-staging.txt
-evidence_case "exactly the production triple" pass "$PRODUCTION" android-production-apk.txt android-production-aab.txt ios-production.txt
-evidence_case "a required variant has no evidence" fail "$STAGING" android-staging-apk.txt
-evidence_case "a required variant has empty evidence" fail "$STAGING" android-staging-apk.txt empty:ios-staging.txt
-evidence_case "evidence of an unselected variant" fail "$STAGING" android-staging-apk.txt ios-staging.txt ios-production.txt
-evidence_case "an unexpected extra file" fail "$STAGING" android-staging-apk.txt ios-staging.txt notes.md
+SA=android-staging-apk
+SI=ios-staging
+evidence_case "exactly the staging pair (text + manifest)" pass "$STAGING" $SA.txt $SA.manifest.json $SI.txt $SI.manifest.json
+evidence_case "exactly the production triple (text + manifest)" pass "$PRODUCTION" android-production-apk.txt android-production-apk.manifest.json android-production-aab.txt android-production-aab.manifest.json ios-production.txt ios-production.manifest.json
+evidence_case "a required variant has no evidence" fail "$STAGING" $SA.txt $SA.manifest.json
+evidence_case "a required variant has no manifest" fail "$STAGING" $SA.txt $SA.manifest.json $SI.txt
+evidence_case "a required variant has only a manifest" fail "$STAGING" $SA.txt $SA.manifest.json $SI.manifest.json
+evidence_case "a required variant has empty evidence" fail "$STAGING" $SA.txt $SA.manifest.json empty:$SI.txt $SI.manifest.json
+evidence_case "a required variant has an empty manifest" fail "$STAGING" $SA.txt $SA.manifest.json $SI.txt empty:$SI.manifest.json
+evidence_case "evidence of an unselected variant" fail "$STAGING" $SA.txt $SA.manifest.json $SI.txt $SI.manifest.json ios-production.txt
+evidence_case "a manifest of an unselected variant" fail "$STAGING" $SA.txt $SA.manifest.json $SI.txt $SI.manifest.json ios-production.manifest.json
+evidence_case "an unexpected extra file" fail "$STAGING" $SA.txt $SA.manifest.json $SI.txt $SI.manifest.json notes.md
 evidence_case "no evidence at all" fail "$STAGING"
 if REQUIRED_VARIANTS="$STAGING" "$verdict" evidence "$tmp/does-not-exist" >/dev/null 2>&1; then bad "evidence: missing directory"; else ok "evidence: missing directory fails"; fi
 

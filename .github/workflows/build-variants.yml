@@ -20,8 +20,9 @@
 #     temporary debug signing; iOS builds are unsigned (--no-codesign). None of the five is
 #     installable as an official build, and none is distributable.
 #   - It uploads NO application binary. Only small text evidence files (identity, version,
-#     SHA-256 of the artifact, signer status, run metadata) are uploaded; the binaries stay on
-#     the runner. Production binaries are deliberately never retained.
+#     SHA-256 of the artifact, signer status, run metadata) and one JSON build manifest per
+#     variant (tool/build_manifest.py; docs/RELEASE_VERSIONING.md) are uploaded; the binaries
+#     stay on the runner. Production binaries are deliberately never retained.
 #   - It has no secrets, no deployment permission and no write access.
 #
 # Coordinated AND individual execution, from one set of build jobs:
@@ -90,7 +91,7 @@ jobs:
     # skipped). The first merge after the creation is the first promotion.
     if: ${{ !(github.event_name == 'push' && github.event.created) }}
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 10
     outputs:
       selection: ${{ steps.plan.outputs.selection }}
       variants: ${{ steps.plan.outputs.variants }}
@@ -109,6 +110,11 @@ jobs:
       # first, without a Flutter build (tool/test_release_triggers.sh).
       - name: Test the trigger mapping, the verdict logic and the workflow definition
         run: tool/test_release_triggers.sh
+
+      # The version rules and the build manifest (tool/build_manifest.py) are tested the same
+      # way (docs/RELEASE_VERSIONING.md).
+      - name: Test the version policy and the build manifests
+        run: tool/test_release_versioning.sh
 
       - name: Plan
         id: plan
@@ -351,6 +357,20 @@ jobs:
             cat "$RUNNER_TEMP/artifact-evidence.txt"
           } > "evidence/$BUILD_VARIANT.txt"
           cat "evidence/$BUILD_VARIANT.txt"
+          # The structured manifest of this build (tool/build_manifest.py): the same facts plus
+          # the run identity and the toolchain, checked against the repository at this commit.
+          {
+            echo "flutter=$flutter_version"
+            echo "dart=$(dart --version 2>&1 | awk '{print $4}')"
+            echo "java=$java_version"
+            echo "runner_image=${ImageOS:-unknown} ${ImageVersion:-unknown}"
+            sdk="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-$(sed -n 's/^sdk\.dir=//p' android/local.properties)}}"
+            echo "android_build_tools=$(ls -1 "$sdk/build-tools" | sort -V | tail -n1)"
+            if [ "$BUILD_KIND" = aab ]; then echo "bundletool=${BUNDLETOOL_URL##*/}"; fi
+          } > "$RUNNER_TEMP/toolchain.txt"
+          python3 -I tool/build_manifest.py create --evidence "evidence/$BUILD_VARIANT.txt" --toolchain "$RUNNER_TEMP/toolchain.txt" --out "evidence/$BUILD_VARIANT.manifest.json"
+          python3 -I tool/build_manifest.py verify "evidence/$BUILD_VARIANT.manifest.json" --repo . --evidence "evidence/$BUILD_VARIANT.txt"
+          cat "evidence/$BUILD_VARIANT.manifest.json"
           {
             echo "### $BUILD_VARIANT: compiled and verified"
             echo
@@ -561,6 +581,9 @@ jobs:
             cat "$RUNNER_TEMP/artifact-evidence.txt"
           } > "evidence/$BUILD_VARIANT.txt"
           cat "evidence/$BUILD_VARIANT.txt"
+          python3 -I tool/build_manifest.py create --evidence "evidence/$BUILD_VARIANT.txt" --toolchain "$RUNNER_TEMP/toolchain.txt" --out "evidence/$BUILD_VARIANT.manifest.json"
+          python3 -I tool/build_manifest.py verify "evidence/$BUILD_VARIANT.manifest.json" --repo . --evidence "evidence/$BUILD_VARIANT.txt"
+          cat "evidence/$BUILD_VARIANT.manifest.json"
           {
             echo "### $BUILD_VARIANT: compiled and verified"
             echo
@@ -623,6 +646,10 @@ jobs:
           ls -l evidence
           # Evidence for every required variant, and for no other one.
           tool/check_verdict.sh evidence evidence
+          # Every manifest is valid for this repository state, agrees with its text evidence, and
+          # the manifests of this run agree with each other (one commit, one run, one version,
+          # unique build identifiers).
+          python3 -I tool/build_manifest.py verify-dir evidence --variants "$REQUIRED_VARIANTS" --repo .
           is_required() { case " $REQUIRED_VARIANTS " in *" $1 "*) return 0 ;; *) return 1 ;; esac; }
           get() { sed -n "s/^$2=//p" "evidence/$1.txt" | head -n1; }
           # The production APK and AAB must be one update family: same application ID,
