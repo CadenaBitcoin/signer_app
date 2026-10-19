@@ -1,0 +1,20 @@
+{
+  "schema": "cadena-published-versions/1",
+  "purpose": "Facts about versions that are already published. A new release of the same application must use a build number above every published one on its platform; tool/build_manifest.py reads this file to enforce that. It records history, it does not authorize anything. Changing it needs a maintainer's confirmation from the store console.",
+  "entries": [
+    {
+      "platform": "android",
+      "channel": "google-play",
+      "package": "com.cadenabitcoin.mobile.signer",
+      "version_name": "1.0.3",
+      "version_code": 1000034,
+      "status": "fully-rolled-out",
+      "recorded": "2026-10-19",
+      "source": "Google Play Console production release, confirmed by the repository owner (Issue #68)"
+    }
+  ],
+  "not_recorded": [
+    "Android: earlier Google Play releases (all have a versionCode below 1000034) and any website or internal-test APKs",
+    "iOS / App Store: not examined; no iOS build number is recorded, so no iOS floor is enforced"
+  ]
+}
