@@ -49,7 +49,7 @@ name: Build variants (compile validation)
 on:
   # A promotion = a pull-request merge into a release branch (see the header). Branches only:
   # tags do not match. No path filter: a promotion that changes only documentation still
-  # builds. `production` does not exist yet; the entry is inert until it is created.
+  # builds. `production` exists (Issue #68); a push to it runs the three production variants.
   push:
     branches: [staging, production]
   # Manual run for any ref (once this file is on the default branch): all variants or one.

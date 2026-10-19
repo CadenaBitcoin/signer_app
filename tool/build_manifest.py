@@ -150,6 +150,13 @@ def floor_for(entries, platform):
     return max(codes) if codes else None
 
 
+def identity_differs(entries, platform, app_id):
+    """True when the platform has a published package and app_id is not one of them: a release
+    with this identity would not be an update of the published app."""
+    packages = {e["package"] for e in entries if e["platform"] == platform}
+    return bool(packages) and app_id not in packages
+
+
 def identities(root):
     """Expected application ID and display name per environment: the single copy lives in
     tool/verify_artifact.sh; it is asked, not duplicated."""
@@ -196,8 +203,7 @@ def derive_gate(platform, environment, build, app_id, entries):
             issues.append("version-code-not-above-published-floor")
     else:
         status = "above-floor"
-    packages = {e["package"] for e in entries if e["platform"] == platform}
-    if platform == "android" and packages and app_id not in packages:
+    if platform == "android" and identity_differs(entries, platform, app_id):
         issues.append("application-id-differs-from-published-app")
     return {"status": status, "published_floor": floor}, sorted(issues)
 
@@ -780,9 +786,11 @@ def cmd_name(args):
 
 
 def cmd_gate(args):
-    """The release gate: a release build must have a build number above every published one.
-    Not part of a compile-validation build (which may equal the published number); the signed
-    release pipeline (#72) must run it and fail on a non-zero status."""
+    """The production release gate has two independent rules: a release build must have a build
+    number above every published one, and its Android application ID must be the published
+    package (otherwise the build is not an update of the published app; #72). Either rule fails
+    the gate, whatever the other says. Not part of a compile-validation build (which may equal the
+    published number); the signed release pipeline (#72) must run it and fail on a non-zero status."""
     opts = parse_opts(args, {"--channel": 1, "--repo": 1})
     channel = need_opt(opts, "--channel")
     if channel not in ("staging", "production"):
@@ -793,6 +801,7 @@ def cmd_gate(args):
         print("PASS  staging: no published record applies (staging is a separate application)")
         return 0
     entries = load_ledger(root)
+    app_id = identities(root)["production"][0]
     bad = 0
     for platform in ("android", "ios"):
         floor = floor_for(entries, platform)
@@ -803,6 +812,12 @@ def cmd_gate(args):
         else:
             print("FAIL  %s: build %d is not above the published build number %d (pubspec %s)" % (platform, build, floor, pub))
             bad += 1
+    if identity_differs(entries, "android", app_id):
+        published = ", ".join(sorted({e["package"] for e in entries if e["platform"] == "android"}))
+        print("FAIL  android: the production application ID %s is not the published package %s" % (app_id, published))
+        bad += 1
+    else:
+        print("PASS  android: the production application ID matches the published package (or none is recorded)")
     print("RESULT: %s" % ("FAILED (%d)" % bad if bad else "OK"))
     return 1 if bad else 0
 

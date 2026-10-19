@@ -68,7 +68,12 @@ issue branch → development → staging → production
 | Distribution | iOS: restricted TestFlight (mandatory). Android: internal only, never public (section 8) | Not by the merge. Separately authorized publication |
 | Protected environments | Staging signing/deployment context | Production signing/deployment context |
 
-### 2.1 Creating `production` (Decided: required; not done)
+### 2.1 Creating `production` (Decided: required; branch created, Issue #68)
+
+*Status, not a decision:* the branch exists. It was created at the adopted initial
+baseline `7b63c97` and is protected by rulesets. Requirements 3 and 4 below are not yet
+met; the only merge into it so far was a compile-only infrastructure acceptance under a
+one-time exception approved by the owner (Issue #68).
 
 `production` is not created by this document or without approval. It requires:
 
@@ -470,7 +475,7 @@ without a record, or from a commit that was not approved, is not official.
 | Item | State |
 |---|---|
 | `development`, `staging` | Exist, protected |
-| `production` | **Does not exist** |
+| `production` | Exists, protected (created at the adopted baseline `7b63c97`, Issue #68); compile-only builds only |
 | Android CI validation (debug-signed APK), iOS CI validation (unsigned `Runner.app`) | Working; unchanged; **not** among the five artifacts |
 | Signing credentials, protected release environments, release workflows | **None** |
 | Tags, GitHub Releases | None |

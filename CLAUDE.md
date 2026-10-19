@@ -29,13 +29,15 @@ Branch model, authority levels and contribution rules: `GOVERNANCE.md`,
 ## 2. Source of truth and branch policy
 
 - **Current branch model** (see `GOVERNANCE.md`): `development` (default,
-  integration) → `staging` (Signet promotion) → `production` (planned Mainnet
+  integration) → `staging` (Signet promotion) → `production` (Mainnet
   release branch). Promotion is forward only; no application logic is developed
   independently on `staging` or `production`.
 - `development` is the **active integration and GitHub default branch**. `staging`
   is a protected promotion branch. `main` is legacy and is not an integration
-  target. `production` has not yet been created because release provenance must be
-  established first.
+  target. `production` exists and is protected; it was created at the adopted
+  initial baseline `7b63c97` (Issue #68), the best-supported historical commit and not
+  an exact reconstruction of the published application, and it changes only by
+  promotion pull requests from `staging`.
 - Every issue starts from `development` (`git switch development &&
   git pull --ff-only`, confirm clean, then branch). Branch name:
   `issue/<N>-<short-name>` (older branches use other spellings).

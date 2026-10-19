@@ -65,15 +65,21 @@ confirmed from the store console:
 Not recorded: earlier Android releases (all below 1000034), website or internal-test
 APKs, and anything on iOS. No iOS floor is enforced.
 
-- **A release build must have a build number above every published one on its platform.**
-  `tool/build_manifest.py gate --channel production` fails otherwise. The signed release
-  pipeline (#72) must run it before building and must not bypass it. Compile validation
-  does **not** run it: validation builds may equal the published number because they are
-  not releases.
-- **Today the repository is at `1.0.3+1000034`**, equal to the published number. The gate
-  therefore fails for production, on purpose: a release from the current `pubspec.yaml`
-  would reuse a published version code. The first production release needs a reviewed commit
-  that raises the build number to at least `1000035`.
+- **The production release gate has two independent rules.** `tool/build_manifest.py gate
+  --channel production` fails if *either* fails, and reports both:
+  1. the build number is above every published one on its platform (a version code is
+     never reused), and
+  2. the Android application ID of the production build is the published package (a build
+     with another ID is not an update of the published app; #72).
+
+  A high build number does not satisfy rule 2, and the right ID does not satisfy rule 1.
+  The signed release pipeline (#72) must run the gate before building and must not bypass
+  it. Compile validation does **not** run it: validation builds may equal the published
+  number and carry another ID because they are not releases.
+- **Today the repository is at `1.0.3+1000034`** with the ID `com.app.cadenabitcoin`. The
+  gate therefore fails for production on both rules, on purpose. Raising the build number
+  to at least `1000035` (a reviewed commit) clears rule 1 only; the gate keeps failing on
+  rule 2 until the ID question of #72 is settled by a reviewed change.
 - The floor applies to the Google Play application. The repository builds
   `com.app.cadenabitcoin`, which is **not** that application; whichever ID #72 settles on,
   an update of the published app needs a versionCode above 1000034 *and* the published
@@ -162,7 +168,8 @@ A manifest that claims a release (classification `release-candidate` or `release
 
 - its build number is not above the published floor (`release_gate.status` is
   `blocked-not-above-floor`), or
-- any known issue is open, for example `application-id-differs-from-published-app`.
+- any known issue is open, for example `application-id-differs-from-published-app`
+  (this one stays open at any build number, however high, until the ID matches).
 
 With `--repo` both values are recomputed from the repository's ledger, so they cannot be
 edited away in the manifest; the `verdict` job always verifies with `--repo`. The Android
@@ -237,6 +244,35 @@ Under the policy (7.1, 7.4), and unchanged by this document:
   open decisions 5 and 6; until they are decided, compile-validation manifests carry
   `release_id: null`, and **no tag or release exists**.
 
+### Showing that a production revision is a tested candidate (no tag needed)
+
+Promotion is a pull-request **merge commit**, so the commit that is built on `production`
+has a different SHA from the commit that was tested on `staging`. "The same source
+revision" therefore means the same **source tree**:
+
+```bash
+# <p> = the merge commit on production; its second parent is the staging commit it promoted
+git rev-parse <p>^{tree} <p>^2^{tree}      # equal trees: production holds exactly the staging content
+```
+
+Observed today: the first promotion `fceeb66` (PR #75) has the tree `2eff33b0…`, equal to
+the tree of the staging commit `e198139` it promoted; `staging` `a4df412` (PR #77) has the
+tree `2af980a3…`, equal to that of `development` `465a367`. This needs no tag, release or
+workflow input.
+
+Limits, stated plainly:
+
+- It shows equal **content**, nothing more: not that the revision was tested or approved,
+  not which candidate it is (there is no identifier), and nothing about the binary, which is
+  not reproducible bit for bit.
+- It is a manual check. No workflow, tool or ruleset enforces it.
+- It fails, correctly, if `production` carries content that `staging` does not.
+
+**Release-candidate identity remains an open requirement.** No release identifier is
+implemented: `release_id` is `null` in every manifest, no tag exists, and `--release-id` only
+checks the form of an identifier given to the tool by hand. Where `vX.Y.Z-rc.N` comes from,
+who creates the tag and how the pipeline checks it are open decisions 1–3 below.
+
 ## Retention of binaries (interface only)
 
 **Today no binary is retained**: the workflow uploads text and JSON only (policy section 3
@@ -287,26 +323,41 @@ of policy section 9, and the tester sign-off of policy 2.2.
 
 ## Version-transition test (needs explicit authorization)
 
-Issue #69 requires one authorized version transition on staging. It is **not** run by this
-change. Proposed procedure, to be started only on the owner's written authorization naming
-the new version:
+Issue #69 requires one authorized version transition. It is **not** run by this change, and
+this change does not alter the application version. The transition needs no governed branch:
+`build-variants.yml` can be run manually on any ref, so the test runs on a throw-away branch
+that is never merged. Proposed procedure, to be started only on the owner's written
+authorization naming the new version. The owner has approved the test version
+`1.0.3+1000035` **exclusively** for this isolated branch; the application version must not
+change on `development`, `staging` or `production`, and the branch is created and pushed only
+after a separate authorization of the exercise (and after the corrective tests are merged):
 
-1. An issue branch changes only the `version:` line of `pubspec.yaml` (for example
-   `1.0.3+1000034` → `1.0.3+1000035`), reviewed and merged into `development` like any PR.
-2. `tool/verify_version.sh` and `tool/test_release_versioning.sh` pass; the PR states that
-   production is not touched.
-3. The reviewed `development → staging` promotion triggers `build-variants.yml` (two
-   staging variants). Expected: both manifests say `1.0.3+1000035`, Android `versionCode`
-   and iOS `CFBundleVersion` 1000035, the same commit and run, and `verdict` is green.
-4. `tool/build_manifest.py gate --channel production` now passes locally (1000035 > 1000034).
-5. `production` is **not** promoted; no tag, release or signing is involved.
+1. A branch `test/69-version-transition` is created from `development`. One signed commit
+   changes only the `version:` line of `pubspec.yaml` (for example `1.0.3+1000034` →
+   `1.0.3+1000035`). No pull request is opened; nothing is merged.
+2. `tool/verify_version.sh` and `tool/test_release_versioning.sh` pass on the branch (the
+   tests use pinned fixtures and do not depend on the version being 1000034).
+3. `Build variants` is run manually on that branch for `android-staging-apk` and for
+   `ios-staging`. Expected: both manifests say `1.0.3+1000035`, Android `versionCode` and
+   iOS `CFBundleVersion` are 1000035, `version.platform_build_number` equals the pubspec
+   build, the configuration is `config/build/staging.json`, the commit is the branch tip, and
+   the verdict is green.
+4. `tool/build_manifest.py gate --channel production` on the branch reports rule 1 as passed
+   (1000035 > 1000034) and **still fails** on rule 2 (the application ID, #72), exit status 1.
+5. The branch is deleted afterwards. `staging` and `production` are not touched; no tag,
+   release, signing or retained binary is involved.
+
+Raising the version on `development` and promoting it to `staging` is a separate decision
+that depends on open decision 3 (where the build number is raised); it is not needed for
+this test.
 
 ## Open decisions
 
 These need a maintainer decision (policy section 11); this change does not take them:
 
 1. **Source of the release identifier and of `N`** (policy open decision 6; proposal:
-   `RELEASE_IDENTIFIER` in the staging configuration).
+   `RELEASE_IDENTIFIER` in the staging configuration). Release-candidate identity is an
+   **open requirement** until decisions 1–3 are taken.
 2. **Who creates tags and with which identity** (decision 5), and when.
 3. **Where the build number is raised for each promotion** (decision 4; proposal: in the
    promotion pull request, checked by the pipeline).
@@ -326,7 +377,7 @@ tool/test_release_triggers.sh                # triggers and the verdict (unchang
 tool/verify_version.sh                       # source wiring
 tool/build_manifest.py verify M.json --repo . --evidence M.txt
 tool/build_manifest.py check-file M.json app-production-release.apk   # does this file match its manifest?
-tool/build_manifest.py gate --channel production   # a release build needs a new build number
+tool/build_manifest.py gate --channel production   # a release build needs a new build number AND the published ID
 ```
 
 Both test scripts run in the `plan` job of every run of `build-variants.yml` before any

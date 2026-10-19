@@ -194,12 +194,13 @@ can.
 
 - A push runs the workflow file **as it is on the pushed commit**. The first promotion that
   brings this file to `staging` therefore starts it on that very merge.
-- `production` does not exist and is not created by this change. The entry in the trigger
-  list is inert until it does.
-- The literal `production` trigger cannot be demonstrated on GitHub before the branch
-  exists and receives its first merge; until then it is covered by the planner tests and by
-  review. The branch-creation behavior depends on GitHub's `created` event field and is
-  likewise demonstrated only by the real creation (a skipped run is the expected result).
+- `production` was created after this change (Issue #68); until then the entry in the
+  trigger list was inert.
+- The literal `production` trigger was demonstrated by the first merge into the branch
+  (PR #75, run 39237471969: the three production variants). The branch-creation behavior
+  depends on GitHub's `created` event field; creating `production` ran no workflow at all,
+  because its baseline commit predates the workflow files, so the `created` guard is still
+  covered only by the planner tests and by review.
 
 ## Verification record
 
