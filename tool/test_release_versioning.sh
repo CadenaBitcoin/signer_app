@@ -59,6 +59,10 @@ open(p, "w").write(s.replace(old, new, 1))
 ' "$1" "$2" "$3"
 }
 
+t() { local name="$1"; shift; if "$@"; then ok "$name"; else bad "$name"; fi; }
+eq() { [ "$1" = "$2" ]; }
+has() { grep -qF -- "$2" <<<"$1"; }
+
 # ---------------------------------------------------------------------------------------------
 # 1. verify_version.sh on a throw-away copy of the repository (text files only)
 # ---------------------------------------------------------------------------------------------
@@ -149,8 +153,28 @@ expect_rc "version: an unknown channel is a usage error" 2 "" VV --channel qa --
 # ---------------------------------------------------------------------------------------------
 Z="$(printf '%064d' 0 | tr 0 a)"
 Y="$(printf '%064d' 0 | tr 0 b)"
-FIX="$root"
-TOOLPY="$tool"
+
+# The controlled fixture: the real tools, configuration and native projects, but a PINNED application
+# version and a PINNED published-versions ledger. Every boundary test below runs on it, so none depends
+# on the version the live repository has today, nor on entries that a later release adds to the live
+# ledger. What does read the live repository is marked "live" and asserts only what holds at any version.
+FLOOR=1000034                           # the pinned Google Play build number
+PUBLISHED_ID=com.cadenabitcoin.mobile.signer # the pinned published package (not the production application ID)
+PROD_ID=com.app.cadenabitcoin           # the production application ID of the repository (#72)
+ledger_json() { # PACKAGE FLOOR
+  printf '{"schema":"cadena-published-versions/1","entries":[{"platform":"android","channel":"google-play","package":"%s","version_name":"1.0.3","version_code":%s,"status":"fully-rolled-out","recorded":"2026-10-19","source":"test fixture"}]}\n' "$1" "$2"
+}
+# mkfix DEST BUILD PACKAGE [FLOOR]: a repository at version 1.0.3+BUILD whose ledger publishes PACKAGE at FLOOR
+mkfix() {
+  rm -rf "$1" && cp -R "$base" "$1"
+  edit "$1/pubspec.yaml" "version: $(sed -n 's/^version: *//p' "$root/pubspec.yaml")" "version: 1.0.3+$2"
+  mkdir -p "$1/config/release"
+  ledger_json "$3" "${4:-$FLOOR}" >"$1/config/release/published_versions.json"
+}
+fx="$tmp/fx"
+mkfix "$fx" "$FLOOR" "$PUBLISHED_ID"
+FIX="$fx"
+TOOLPY="$fx/tool/build_manifest.py"     # create() reads the pubspec and ledger of the repository holding the tool
 cfg_sha() { sha256sum "$FIX/config/build/$1.json" 2>/dev/null | cut -d' ' -f1 || shasum -a 256 "$FIX/config/build/$1.json" | cut -d' ' -f1; }
 COMMIT=7b63c9791fccc8f9711ed853e2294967899be972
 RUN=39237471969
@@ -237,7 +261,7 @@ good="$tmp/good"
 for v in $VARS; do
   ev="$tmp/good/$v.txt"
   if mkman "$v" "$good" "$COMMIT" push "$(case "$v" in *staging*) echo staging ;; *) echo production ;; esac)"; then
-    accepted "manifest: $v is created and verified against the repository and its evidence" BM verify "$good/$v.manifest.json" --repo "$root" --evidence "$ev"
+    accepted "manifest: $v is created and verified against the repository and its evidence" BM verify "$good/$v.manifest.json" --repo "$fx" --evidence "$ev"
     accepted "manifest: $v verifies without --repo" BM verify "$good/$v.manifest.json"
   else
     bad "manifest: $v could not be created"
@@ -250,8 +274,8 @@ sd="$tmp/stg"; pd="$tmp/prd"
 mkdir -p "$sd" "$pd"
 for v in android-staging-apk ios-staging; do mkman "$v" "$sd" "$COMMIT" push staging; done
 for v in android-production-apk android-production-aab ios-production; do mkman "$v" "$pd" "$COMMIT" push production; done
-accepted "manifest: the staging pair is consistent" BM verify-dir "$sd" --variants "android-staging-apk ios-staging" --repo "$root"
-accepted "manifest: the production triple is consistent" BM verify-dir "$pd" --variants "android-production-apk android-production-aab ios-production" --repo "$root"
+accepted "manifest: the staging pair is consistent" BM verify-dir "$sd" --variants "android-staging-apk ios-staging" --repo "$fx"
+accepted "manifest: the production triple is consistent" BM verify-dir "$pd" --variants "android-production-apk android-production-aab ios-production" --repo "$fx"
 
 M="$good/android-production-apk.manifest.json"
 mrej() { # NAME FRAGMENT 'python using m' [extra verify args...]
@@ -297,15 +321,14 @@ mrej "a version name that differs from the pubspec" "differs from pubspec" 'm["v
 mrej "a platform version name that differs from the product version" "differs from the product version" 'm["version"]["platform_version_name"]="1.0.3-rc.1"'
 mrej "a build number that differs from the pubspec build" "differs from the pubspec build" 'm["version"]["platform_build_number"]=m["version"]["platform_build_number"]+1'
 mrej "a versionCode above Google Play's limit" "limit" 'm["version"]["pubspec"]="1.0.3+2100000001"; m["version"]["pubspec_build"]=2100000001; m["version"]["platform_build_number"]=2100000001'
-fresh
-edit "$tmp/w/pubspec.yaml" "version: $(sed -n 's/^version: *//p' "$root/pubspec.yaml")" "version: 1.0.3+1000099"
+mkfix "$tmp/w" 1000099 "$PUBLISHED_ID"
 rejected "manifest: the repository's pubspec changed since the manifest was written" "the repository says" BM verify "$M" --repo "$tmp/w"
 # identity and configuration
 mrej "the staging application ID on a production build" "application.id" 'm["application"]["id"]="com.app.cadenabitcoin.staging"'
 mrej "another display name" "display_name" 'm["application"]["display_name"]="Cadena Signer"'
 mrej "the staging configuration on a production build" "configuration.file" 'm["configuration"]["file"]="config/build/staging.json"'
 mrej "a configuration digest that is not a SHA-256" "configuration.sha256" 'm["configuration"]["sha256"]="abc"'
-mrej "a configuration file that changed" "changed since" 'm["configuration"]["sha256"]="'"$Z"'"' --repo "$root"
+mrej "a configuration file that changed" "changed since" 'm["configuration"]["sha256"]="'"$Z"'"' --repo "$fx"
 mrej "a build command with another flavor" "flavor and configuration" 'm["configuration"]["build_command"]=m["configuration"]["build_command"].replace("--flavor production","--flavor staging")'
 mrej "a build command that overrides the version" "overrides the version" 'm["configuration"]["build_command"]+=" --build-number 7"'
 # toolchain and native libraries
@@ -337,9 +360,9 @@ rejected "manifest: an iOS artifact that is not unsigned" "iOS compile-validatio
 mut "$im" "$tmp/bad.json" 'm["artifact"]["digest_kind"]="file"'
 rejected "manifest: a raw-file digest on an iOS directory artifact" "digest_kind" BM verify "$tmp/bad.json"
 # the repository's ledger decides the gate and the known issues; they cannot be dropped or edited
-mrej "a dropped known issue" "cannot be dropped" 'm["known_issues"]=[]' --repo "$root"
+mrej "a dropped known issue" "cannot be dropped" 'm["known_issues"]=[]' --repo "$fx"
 mrej "a known issue that is not in the vocabulary" "known_issues" 'm["known_issues"]=["whatever"]'
-mrej "a release gate that was opened by hand" "release_gate" 'm["release_gate"]={"status":"above-floor","published_floor":1000034}' --repo "$root"
+mrej "a release gate that was opened by hand" "release_gate" 'm["release_gate"]={"status":"above-floor","published_floor":1000034}' --repo "$fx"
 mrej "an unknown gate status" "release_gate.status" 'm["release_gate"]["status"]="open"'
 # the text evidence must say the same
 cp "$good/android-production-apk.txt" "$tmp/ev2.txt"
@@ -351,12 +374,12 @@ rejected "manifest: text evidence from another attempt" "run line" BM verify "$M
 # create refuses what it cannot represent
 cp "$good/android-production-apk.txt" "$tmp/ev4.txt"
 edit "$tmp/ev4.txt" "signing=debug" "signing=signed-by-other-key"
-expect_rc "create: a signing kind of a release is refused" 2 "cannot be recorded" env GITHUB_RUN_ID=$RUN GITHUB_RUN_ATTEMPT=1 GITHUB_SERVER_URL=https://github.com GITHUB_REPOSITORY=CadenaBitcoin/signer_app GITHUB_SHA=$COMMIT python3 -I "$tool" create --evidence "$tmp/ev4.txt" --toolchain "$good/android-production-apk.toolchain" --out "$tmp/x.json"
-expect_rc "create: no run identity is refused" 2 "GITHUB_RUN_ID" env -u GITHUB_RUN_ID -u GITHUB_RUN_ATTEMPT python3 -I "$tool" create --evidence "$good/android-production-apk.txt" --toolchain "$good/android-production-apk.toolchain" --out "$tmp/x.json"
-expect_rc "create: a commit that differs from the evidence is refused" 2 "differs from the evidence" env GITHUB_RUN_ID=$RUN GITHUB_RUN_ATTEMPT=1 GITHUB_SERVER_URL=https://github.com GITHUB_REPOSITORY=CadenaBitcoin/signer_app GITHUB_SHA=0000000000000000000000000000000000000001 python3 -I "$tool" create --evidence "$good/android-production-apk.txt" --toolchain "$good/android-production-apk.toolchain" --out "$tmp/x.json"
+expect_rc "create: a signing kind of a release is refused" 2 "cannot be recorded" env GITHUB_RUN_ID=$RUN GITHUB_RUN_ATTEMPT=1 GITHUB_SERVER_URL=https://github.com GITHUB_REPOSITORY=CadenaBitcoin/signer_app GITHUB_SHA=$COMMIT python3 -I "$TOOLPY" create --evidence "$tmp/ev4.txt" --toolchain "$good/android-production-apk.toolchain" --out "$tmp/x.json"
+expect_rc "create: no run identity is refused" 2 "GITHUB_RUN_ID" env -u GITHUB_RUN_ID -u GITHUB_RUN_ATTEMPT python3 -I "$TOOLPY" create --evidence "$good/android-production-apk.txt" --toolchain "$good/android-production-apk.toolchain" --out "$tmp/x.json"
+expect_rc "create: a commit that differs from the evidence is refused" 2 "differs from the evidence" env GITHUB_RUN_ID=$RUN GITHUB_RUN_ATTEMPT=1 GITHUB_SERVER_URL=https://github.com GITHUB_REPOSITORY=CadenaBitcoin/signer_app GITHUB_SHA=0000000000000000000000000000000000000001 python3 -I "$TOOLPY" create --evidence "$good/android-production-apk.txt" --toolchain "$good/android-production-apk.toolchain" --out "$tmp/x.json"
 cp "$good/android-production-apk.txt" "$tmp/ev5.txt"
 printf 'signing=unsigned\n' >>"$tmp/ev5.txt"
-expect_rc "create: ambiguous evidence (a repeated key) is refused" 2 "repeats the key" env GITHUB_RUN_ID=$RUN GITHUB_RUN_ATTEMPT=1 GITHUB_SERVER_URL=https://github.com GITHUB_REPOSITORY=CadenaBitcoin/signer_app GITHUB_SHA=$COMMIT python3 -I "$tool" create --evidence "$tmp/ev5.txt" --toolchain "$good/android-production-apk.toolchain" --out "$tmp/x.json"
+expect_rc "create: ambiguous evidence (a repeated key) is refused" 2 "repeats the key" env GITHUB_RUN_ID=$RUN GITHUB_RUN_ATTEMPT=1 GITHUB_SERVER_URL=https://github.com GITHUB_REPOSITORY=CadenaBitcoin/signer_app GITHUB_SHA=$COMMIT python3 -I "$TOOLPY" create --evidence "$tmp/ev5.txt" --toolchain "$good/android-production-apk.toolchain" --out "$tmp/x.json"
 
 # the manifests of one run
 dirx="$tmp/dx"
@@ -364,34 +387,34 @@ PROD3="android-production-apk android-production-aab ios-production"
 fresh_run() { rm -rf "$dirx" && cp -R "$pd" "$dirx"; }
 fresh_run
 mkman ios-production "$dirx" 1111111111111111111111111111111111111111 push production
-rejected "run: manifests of different commits" "disagree on source.commit" BM verify-dir "$dirx" --variants "$PROD3" --repo "$root"
+rejected "run: manifests of different commits" "disagree on source.commit" BM verify-dir "$dirx" --variants "$PROD3" --repo "$fx"
 fresh_run
 rm "$dirx/ios-production.manifest.json"
-rejected "run: a missing manifest" "missing" BM verify-dir "$dirx" --variants "$PROD3" --repo "$root"
+rejected "run: a missing manifest" "missing" BM verify-dir "$dirx" --variants "$PROD3" --repo "$fx"
 fresh_run
 rm "$dirx/ios-production.txt"
-rejected "run: missing text evidence" "missing" BM verify-dir "$dirx" --variants "$PROD3" --repo "$root"
+rejected "run: missing text evidence" "missing" BM verify-dir "$dirx" --variants "$PROD3" --repo "$fx"
 fresh_run
 cp "$pd/android-production-apk.manifest.json" "$dirx/android-production-aab.manifest.json"
-rejected "run: a manifest filed under another variant" "describes variant" BM verify-dir "$dirx" --variants "$PROD3" --repo "$root"
+rejected "run: a manifest filed under another variant" "describes variant" BM verify-dir "$dirx" --variants "$PROD3" --repo "$fx"
 fresh_run
 EV_SIGNING=unsigned mkman android-production-aab "$dirx" "$COMMIT" push production
-accepted "run: (control) an unsigned AAB is a valid manifest on its own" BM verify "$dirx/android-production-aab.manifest.json" --repo "$root"
-rejected "run: an APK and an AAB of one release must be signed alike" "differ in signing.status" BM verify-dir "$dirx" --variants "$PROD3" --repo "$root"
+accepted "run: (control) an unsigned AAB is a valid manifest on its own" BM verify "$dirx/android-production-aab.manifest.json" --repo "$fx"
+rejected "run: an APK and an AAB of one release must be signed alike" "differ in signing.status" BM verify-dir "$dirx" --variants "$PROD3" --repo "$fx"
 fresh_run
 apk_sha="$(python3 -I -c 'import json,sys; print(json.load(open(sys.argv[1]))["artifact"]["sha256"])' "$pd/android-production-apk.manifest.json")"
 mut "$pd/android-production-aab.manifest.json" "$dirx/android-production-aab.manifest.json" 'm["artifact"]["sha256"]="'"$apk_sha"'"'
 edit "$dirx/android-production-aab.txt" "artifact_sha256=$(printf '%064d' 0 | tr 0 d)" "artifact_sha256=$apk_sha"
-rejected "run: two variants with one artifact digest" "not unique" BM verify-dir "$dirx" --variants "$PROD3" --repo "$root"
+rejected "run: two variants with one artifact digest" "not unique" BM verify-dir "$dirx" --variants "$PROD3" --repo "$fx"
 fresh_run
 mut "$pd/android-production-aab.manifest.json" "$dirx/android-production-aab.manifest.json" 'm["ci"]["build_id"]=json.load(open("'"$pd"'/android-production-apk.manifest.json"))["ci"]["build_id"]'
-rejected "run: a build identifier used twice is refused (also fails on its own variant)" "build_id" BM verify-dir "$dirx" --variants "$PROD3" --repo "$root"
+rejected "run: a build identifier used twice is refused (also fails on its own variant)" "build_id" BM verify-dir "$dirx" --variants "$PROD3" --repo "$fx"
 mixed="$tmp/mixed"; rm -rf "$mixed"; mkdir -p "$mixed"
 mkman android-production-apk "$mixed" "$COMMIT" workflow_dispatch feature
 mkman android-staging-apk "$mixed" 1111111111111111111111111111111111111111 workflow_dispatch feature
-rejected "run: variants built from two commits" "disagree on source.commit" BM verify-dir "$mixed" --variants "android-production-apk android-staging-apk" --repo "$root"
-accepted "run: a manual run of one variant" BM verify-dir "$good" --variants "android-production-aab" --repo "$root"
-accepted "run: a manual run of all five variants from one branch" BM verify-dir "$allrun" --variants "$VARS" --repo "$root"
+rejected "run: variants built from two commits" "disagree on source.commit" BM verify-dir "$mixed" --variants "android-production-apk android-staging-apk" --repo "$fx"
+accepted "run: a manual run of one variant" BM verify-dir "$good" --variants "android-production-aab" --repo "$fx"
+accepted "run: a manual run of all five variants from one branch" BM verify-dir "$allrun" --variants "$VARS" --repo "$fx"
 
 # canonical names
 n1="$(BM name "$M")"
@@ -404,50 +427,80 @@ case "$t_ios" in *-ios-app-*.app) ok "name: the iOS app is named as a directory"
 all_names="$(for v in $VARS; do BM name "$good/$v.manifest.json"; done | sort | uniq -d)"
 if [ -z "$all_names" ]; then ok "name: the five variants of one run have distinct names"; else bad "name: the five variants of one run have distinct names" "$all_names"; fi
 
-# the gate: a release needs a build number above every published one
-gate_repo() { # BUILD
-  rm -rf "$tmp/g" && mkdir -p "$tmp/g/config/release"
-  printf 'version: 1.0.3+%s\n' "$1" >"$tmp/g/pubspec.yaml"
-  cp "$root/config/release/published_versions.json" "$tmp/g/config/release/"
-}
-gate_repo 1000034; rejected "gate: the published build number itself is not releasable" "not above the published" BM gate --channel production --repo "$tmp/g"
-gate_repo 1000033; rejected "gate: a lower build number is not releasable" "not above the published" BM gate --channel production --repo "$tmp/g"
-gate_repo 1000035; accepted "gate: the next build number is releasable" BM gate --channel production --repo "$tmp/g"
-gate_repo 1000034; accepted "gate: staging is a separate application, no floor applies" BM gate --channel staging --repo "$tmp/g"
-gate_repo 1000035; edit "$tmp/g/config/release/published_versions.json" '"version_code": 1000034' '"version_code": 1000036'
-rejected "gate: a higher published number (ledger edited) blocks again" "not above the published" BM gate --channel production --repo "$tmp/g"
-gate_repo 1; printf '{"schema":"cadena-published-versions/1","entries":[]}' >"$tmp/g/config/release/published_versions.json"
-accepted "gate: with no published record there is no floor" BM gate --channel production --repo "$tmp/g"
+# the production release gate has two independent rules, each tested alone and together on fixtures:
+#   (1) the build number is above every published one   (2) the Android application ID is the published package
+gate_repo() { mkfix "$tmp/g" "$@"; } # BUILD PACKAGE [FLOOR]
+GATE() { BM gate --channel production --repo "$tmp/g"; }
+# rule 1 alone: the ledger publishes the production application ID, so only the number can fail
+gate_repo 1000033 "$PROD_ID"; rejected "gate: a lower build number is not releasable" "not above the published" GATE
+gate_repo 1000034 "$PROD_ID"; rejected "gate: the published build number itself is not releasable" "not above the published" GATE
+gate_repo 1000035 "$PROD_ID"; expect_rc "gate: the next build number is releasable" 0 "build 1000035 is above the published floor 1000034" GATE
+gate_repo 1000099 "$PROD_ID"; expect_rc "gate: a future version far above the floor satisfies the build-number rule" 0 "is above the published floor 1000034" GATE
+gate_repo 1000035 "$PROD_ID" 1000036; rejected "gate: a higher published number (ledger edited) blocks again" "not above the published" GATE
+gate_repo 1000034 "$PROD_ID"; accepted "gate: staging is a separate application, no floor applies" BM gate --channel staging --repo "$tmp/g"
+# rule 2 alone: the build number is far above the floor, the identity is not the published one (#72)
+gate_repo 1000035 "$PUBLISHED_ID"; rejected "gate: build 1000035 with the production application ID unpublished is blocked" "is not the published package $PUBLISHED_ID" GATE
+gate_repo 1000099 "$PUBLISHED_ID"; rejected "gate: build 1000099 is blocked by the application ID too, whatever the number" "is not the published package $PUBLISHED_ID" GATE
+gate_repo 2000000000 "$PUBLISHED_ID"; rejected "gate: even a huge build number does not hide the application-ID mismatch" "is not the published package" GATE
+gate_repo 1000099 "$PUBLISHED_ID"; expect_rc "gate: the build-number rule still reports its own pass beside the ID failure" 1 "build 1000099 is above the published floor" GATE
+# both rules fail together: both are reported
+gate_repo 1000034 "$PUBLISHED_ID"; rejected "gate: both rules fail and both are reported" "FAILED (2)" GATE
+# no record, unreadable record
+gate_repo 1 "$PUBLISHED_ID"; printf '{"schema":"cadena-published-versions/1","entries":[]}' >"$tmp/g/config/release/published_versions.json"
+accepted "gate: with no published record there is no floor and no identity to match" GATE
 printf '{"schema":"other","entries":[]}' >"$tmp/g/config/release/published_versions.json"
-expect_rc "gate: an unreadable ledger is an error, not a pass" 2 "unexpected schema" BM gate --channel production --repo "$tmp/g"
-# the repository itself, as it is today
-expect_rc "gate: today's repository (1000034) is NOT releasable to production" 1 "not above the published" BM gate --channel production
+expect_rc "gate: an unreadable ledger is an error, not a pass" 2 "unexpected schema" GATE
+# live: the repository as it is today. Whatever its version, the gate agrees with the arithmetic and with the
+# identity rule (the version moves with later releases; these assertions hold at every version).
 ledger_floor="$(python3 -I -c 'import json,sys; print(max(e["version_code"] for e in json.load(open(sys.argv[1]))["entries"] if e["platform"]=="android"))' "$root/config/release/published_versions.json")"
+ledger_pkgs="$(python3 -I -c 'import json,sys; print(" ".join(sorted({e["package"] for e in json.load(open(sys.argv[1]))["entries"] if e["platform"]=="android"})))' "$root/config/release/published_versions.json")"
 pub_build="$(sed -n 's/^version: *[0-9.]*+//p' "$root/pubspec.yaml")"
-if [ "$pub_build" -gt "$ledger_floor" ] || [ "$pub_build" -eq "$ledger_floor" ]; then ok "ledger: the pubspec build is not below the published floor"; else bad "ledger: the pubspec build is below the published floor" "$pub_build < $ledger_floor"; fi
+live_id="$(cd "$root" && bash tool/verify_artifact.sh matrix | sed -n "s/^production[[:space:]]\{1,\}\([^[:space:]]\{1,\}\).*/\1/p")"
+live_out="$(BM gate --channel production 2>&1)"; live_rc=$?
+if [ "$pub_build" -gt "$ledger_floor" ]; then want_frag="build $pub_build is above the published floor"; else want_frag="build $pub_build is not above the published build number"; fi
+t "live gate: the build-number verdict agrees with the pubspec ($pub_build) and the ledger ($ledger_floor)" has "$live_out" "$want_frag"
+if [ " $ledger_pkgs " = " $live_id " ] || [ -z "$ledger_pkgs" ]; then
+  t "live gate: the production application ID ($live_id) matches the published package" has "$live_out" "PASS  android: the production application ID matches"
+else
+  t "live gate: the production application ID ($live_id) differs from the published package ($ledger_pkgs) and the gate says so" has "$live_out" "is not the published package"
+  t "live gate: an unresolved application-ID mismatch fails the gate whatever the version (exit 1)" eq "$live_rc" 1
+fi
+if [ "$pub_build" -ge "$ledger_floor" ]; then ok "ledger: the pubspec build is not below the published floor"; else bad "ledger: the pubspec build is below the published floor" "$pub_build < $ledger_floor"; fi
 
 # a release cannot be claimed while the published-version protections are open
 RELCLAIM='m["classification"]="release"; m["signing"]["status"]="release"; m["signing"]["signer_dn"]="CN=Cadena Release"; m["source"]["release_id"]="v1.0.3"; m["distribution"]["distributable"]=True'
-mrej "a release claimed with a build number that is not above the published floor" "not above the published floor" "$RELCLAIM" --repo "$root"
+mrej "a release claimed with a build number that is not above the published floor" "not above the published floor" "$RELCLAIM" --repo "$fx"
 mrej "a release claimed while the application ID differs from the published app" "known issues are open: application-id-differs-from-published-app" "$RELCLAIM; m['release_gate']={'status':'above-floor','published_floor':1000034}; m['known_issues']=['application-id-differs-from-published-app']"
 mrej "a release candidate classification is claimed under the same rule" "not above the published floor" 'm["classification"]="release-candidate"'
 # positive control: once the build number is above the floor AND the identity matches the published app
 # (what #72 must achieve), the same claim is no longer blocked by these two rules
-rm -rf "$tmp/fut" && cp -R "$base" "$tmp/fut"
-edit "$tmp/fut/pubspec.yaml" "version: $(sed -n 's/^version: *//p' "$root/pubspec.yaml")" "version: 1.0.3+1000035"
-python3 -I -c '
-import json, sys
-p = sys.argv[1]
-d = json.load(open(p))
-d["entries"][0]["package"] = "com.app.cadenabitcoin"
-json.dump(d, open(p, "w"))
-' "$tmp/fut/config/release/published_versions.json"
+mkfix "$tmp/fut" 1000035 "$PROD_ID"
 FIX="$tmp/fut" TOOLPY="$tmp/fut/tool/build_manifest.py" mkman android-production-apk "$tmp/futm" "$COMMIT" push production
 mut "$tmp/futm/android-production-apk.manifest.json" "$tmp/futrel.json" "$RELCLAIM; m['signing']['signer_cert_sha256']=''"
 rejected "future: a release claim is still refused without a fingerprint of a release key" "release-signed artifact must record" python3 -I "$tmp/fut/tool/build_manifest.py" verify "$tmp/futrel.json" --repo "$tmp/fut"
 mut "$tmp/futm/android-production-apk.manifest.json" "$tmp/futrel.json" "$RELCLAIM; m['signing']['signer_cert_sha256']='$Y'"
 accepted "future: with build 1000035 and the published identity a (hypothetical) release manifest passes" python3 -I "$tmp/fut/tool/build_manifest.py" verify "$tmp/futrel.json" --repo "$tmp/fut"
-rejected "future: the same manifest is refused against today's repository (another pubspec, ledger)" "the repository says" BM verify "$tmp/futrel.json" --repo "$root"
+rejected "future: the same manifest is refused against the fixture at the published floor (another pubspec, ledger)" "the repository says" BM verify "$tmp/futrel.json" --repo "$fx"
+t "future: its gate is above the floor and no known issue is open" eq "$(python3 -I -c 'import json,sys; m=json.load(open(sys.argv[1])); print(m["release_gate"]["status"], m["known_issues"])' "$tmp/futm/android-production-apk.manifest.json")" "above-floor []"
+
+# the complete gate regardless of the version number: a REAL manifest (written by the tool, not edited) of a build
+# far above the floor, whose application ID is not the published one (#72), cannot claim a release
+for hb in 1000035 1000099 2000000000; do
+  mkfix "$tmp/hi" "$hb" "$PUBLISHED_ID"
+  rm -rf "$tmp/him"
+  FIX="$tmp/hi" TOOLPY="$tmp/hi/tool/build_manifest.py" mkman android-production-apk "$tmp/him" "$COMMIT" push production
+  HM="$tmp/him/android-production-apk.manifest.json"
+  t "id-mismatch $hb: the tool records an open gate above the floor and the known issue" eq "$(python3 -I -c 'import json,sys; m=json.load(open(sys.argv[1])); print(m["release_gate"]["status"], m["known_issues"])' "$HM")" "above-floor ['application-id-differs-from-published-app']"
+  accepted "id-mismatch $hb: as compile validation the manifest is valid" python3 -I "$tmp/hi/tool/build_manifest.py" verify "$HM" --repo "$tmp/hi"
+  mut "$HM" "$tmp/hirel.json" "$RELCLAIM; m['signing']['signer_cert_sha256']='$Y'"
+  rejected "id-mismatch $hb: a release claim is refused although the number is above the floor" "known issues are open: application-id-differs-from-published-app" python3 -I "$tmp/hi/tool/build_manifest.py" verify "$tmp/hirel.json" --repo "$tmp/hi"
+  mut "$HM" "$tmp/hidrop.json" "m['known_issues']=[]"
+  rejected "id-mismatch $hb: the known issue cannot be dropped to pass" "cannot be dropped" python3 -I "$tmp/hi/tool/build_manifest.py" verify "$tmp/hidrop.json" --repo "$tmp/hi"
+  mut "$HM" "$tmp/hidrop2.json" "$RELCLAIM; m['signing']['signer_cert_sha256']='$Y'; m['known_issues']=[]"
+  rejected "id-mismatch $hb: a release claim with the issue dropped is refused" "cannot be dropped" python3 -I "$tmp/hi/tool/build_manifest.py" verify "$tmp/hidrop2.json" --repo "$tmp/hi"
+  mkfix "$tmp/g" "$hb" "$PUBLISHED_ID"
+  rejected "id-mismatch $hb: the production gate fails" "is not the published package" GATE
+done
 
 # a retained binary and its manifest: what can be verified from the two files alone
 bin="$tmp/retained/app.apk"; mkdir -p "$tmp/retained"
@@ -507,9 +560,6 @@ if [ -z "$cat_check" ]; then ok "catalogue: platform, kind and environment of ev
 # ---------------------------------------------------------------------------------------------
 wf="$tmp/workflow.yml"
 grep -v '^[[:space:]]*#' "$workflow" >"$wf"
-t() { local name="$1"; shift; if "$@"; then ok "$name"; else bad "$name"; fi; }
-eq() { [ "$1" = "$2" ]; }
-has() { grep -qF -- "$2" <<<"$1"; }
 lacks() { ! has "$1" "$2"; }
 lacksre() { ! grep -qE -- "$2" <<<"$1"; }
 count() { grep -cF -- "$2" <<<"$1" || true; }
