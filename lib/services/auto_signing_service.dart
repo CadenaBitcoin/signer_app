@@ -75,7 +75,7 @@ class AutoSigningService extends GetxService {
       
       print('AutoSigningService: Background service initialized');
     } catch (e) {
-      print('AutoSigningService: Error initializing background service: $e');
+      print('AutoSigningService: Error initializing background service: ${e.runtimeType}');
     }
   }
   
@@ -105,7 +105,7 @@ class AutoSigningService extends GetxService {
         _startPolling();
       }
     } catch (e) {
-      print('Error loading auto-signing settings: $e');
+      print('Error loading auto-signing settings: ${e.runtimeType}');
     }
   }
   
@@ -114,7 +114,7 @@ class AutoSigningService extends GetxService {
       await _storage.write(key: _autoSigningKey, value: _isAutoSigningEnabled.toString());
       await _storage.write(key: _lastProcessedTimeKey, value: lastProcessedTime.value.toIso8601String());
     } catch (e) {
-      print('Error saving auto-signing settings: $e');
+      print('Error saving auto-signing settings: ${e.runtimeType}');
     }
   }
   
@@ -151,6 +151,10 @@ class AutoSigningService extends GetxService {
   }
   
   void _startPolling() {
+    if (!_appController.backendSessionActive.value) {
+      print('AutoSigningService: Backend session inactive, not starting polling');
+      return;
+    }
     print('AutoSigningService: Starting polling...');
     
     // Cancel existing timers
@@ -193,10 +197,22 @@ class AutoSigningService extends GetxService {
     _pollingTimer?.cancel();
     _backgroundTimer?.cancel();
     _persistentTimer?.cancel();
+    _foregroundTimer?.cancel();
     _pollingTimer = null;
     _backgroundTimer = null;
     _persistentTimer = null;
+    _foregroundTimer = null;
     _isPersistentTimerRunning = false;
+  }
+
+  /// Stop all auth/session-related polling and background work.
+  /// Used after Session Invalid → Reset Data so a deleted session cannot keep retrying.
+  Future<void> stopAllSessionActivity() async {
+    print('AutoSigningService: Stopping all session activity (invalid session teardown)');
+    isProcessing.value = false;
+    _hasProcessedData = false;
+    _stopPolling();
+    await _stopBackgroundService();
   }
   
   /// Start background service using WorkManager
@@ -254,7 +270,7 @@ class AutoSigningService extends GetxService {
       
       print('AutoSigningService: Background service started');
     } catch (e) {
-      print('AutoSigningService: Error starting background service: $e');
+      print('AutoSigningService: Error starting background service: ${e.runtimeType}');
     }
   }
   
@@ -277,12 +293,18 @@ class AutoSigningService extends GetxService {
       _isBackgroundServiceRunning = false;
       print('AutoSigningService: Background service stopped');
     } catch (e) {
-      print('AutoSigningService: Error stopping background service: $e');
+      print('AutoSigningService: Error stopping background service: ${e.runtimeType}');
     }
   }
   
   Future<void> _pollForTransactions() async {
     if (isProcessing.value) return;
+
+    // After Session Invalid reset, do not reuse the deleted/invalid session
+    if (!_appController.backendSessionActive.value) {
+      print('AutoSigningService: Backend session inactive, skipping transaction polling');
+      return;
+    }
     
     // Check if user is authenticated by checking if user profile exists
     if (_appController.userProfileObject.value.payload == null) {
@@ -348,7 +370,7 @@ class AutoSigningService extends GetxService {
         }
       }
     } catch (e) {
-      print('Error polling for transactions: $e');
+      print('Error polling for transactions: ${e.runtimeType}');
       
       // Show error notification in background to help debug
       // if (!_isAppInForeground) {
@@ -460,7 +482,7 @@ class AutoSigningService extends GetxService {
       // Show a persistent notification indicating background processing is active
       await _notificationService.showBackgroundProcessingNotification();
     } catch (e) {
-      print('AutoSigningService: Error showing background processing notification: $e');
+      print('AutoSigningService: Error showing background processing notification: ${e.runtimeType}');
     }
   }
   
@@ -471,7 +493,7 @@ class AutoSigningService extends GetxService {
       print('AutoSigningService: Showing transaction available notification for $transactionCount transactions');
       await _notificationService.showTransactionAvailableNotification(transactionCount);
     } catch (e) {
-      print('AutoSigningService: Error showing transaction available notification: $e');
+      print('AutoSigningService: Error showing transaction available notification: ${e.runtimeType}');
     }
   }
   
@@ -481,7 +503,7 @@ class AutoSigningService extends GetxService {
       print('AutoSigningService: Showing signing success notification for $transactionCount transactions');
       await _notificationService.showSigningSuccessNotification(transactionCount);
     } catch (e) {
-      print('AutoSigningService: Error showing signing success notification: $e');
+      print('AutoSigningService: Error showing signing success notification: ${e.runtimeType}');
     }
   }
   
@@ -608,7 +630,7 @@ class AutoSigningService extends GetxService {
     try {
       return await StorageService.getLoggedInEmail();
     } catch (e) {
-      print('AutoSigningService: Error getting user email: $e');
+      print('AutoSigningService: Error getting user email: ${e.runtimeType}');
       return null;
     }
   }
@@ -727,7 +749,7 @@ class AutoSigningService extends GetxService {
       
       print('AutoSigningService: Completed processing all ${dlcsToProcess.length} DLCs');
     } catch (e) {
-      print('Error in auto signing: $e');
+      print('Error in auto signing: ${e.runtimeType}');
       _hasProcessedData = false; // Reset to allow retry
       
       // Show error notification in background
@@ -823,9 +845,7 @@ class AutoSigningService extends GetxService {
           throw Exception('Invalid signature request parameters');
         }
 
-        print('hash: $hash');
         final signature = await DlcWallet.signHashEcdsa(hash, signerIndex, signerPubkey);
-        print('ECDSA Signature: $signature');
         fundingSignatures.add(signature);
       }
 
@@ -836,7 +856,6 @@ class AutoSigningService extends GetxService {
         final refundReq = refundReqs[0];
         if (refundReq.sighash != null && refundReq.signerIndex != null && refundReq.signerPubkey != null) {
           refundSignature = await DlcWallet.signHashEcdsa(refundReq.sighash!, refundReq.signerIndex!, refundReq.signerPubkey!);
-          print('Refund Signature: $refundSignature');
         }
       }
 
@@ -875,9 +894,8 @@ class AutoSigningService extends GetxService {
 
           adaptorSigPoints = signatures.join(' '); // Space-separated signatures
           print('Generated ${signatures.length} CET adaptor signatures');
-          print('Adaptor Signature Points: $adaptorSigPoints');
         } catch (e) {
-          print('Error creating CET adaptor signatures: $e');
+          print('Error creating CET adaptor signatures: ${e.runtimeType}');
           // Continue without adaptor signatures
         }
       }
@@ -976,7 +994,7 @@ class AutoSigningService extends GetxService {
         _hasProcessedData = false;
       }
     } catch (e) {
-      print('Error in signFundingInput: $e');
+      print('Error in signFundingInput: ${e.runtimeType}');
       Get.snackbar(
         'Error',
         'An error occurred while signing transactions: ${e.toString()}',
@@ -1003,6 +1021,10 @@ class AutoSigningService extends GetxService {
   bool get isEnabled => _isAutoSigningEnabled;
   
   void resumePolling() {
+    if (!_appController.backendSessionActive.value) {
+      print('AutoSigningService: Backend session inactive, not resuming polling');
+      return;
+    }
     if (_isAutoSigningEnabled && _pollingTimer == null) {
       _startPolling();
     }
@@ -1019,7 +1041,8 @@ class AutoSigningService extends GetxService {
   
   Future<void> forceRefresh() async {
     // Check if user is authenticated
-    if (_appController.userProfileObject.value.payload == null) {
+    if (!_appController.backendSessionActive.value ||
+        _appController.userProfileObject.value.payload == null) {
       Get.snackbar(
         'Authentication Required',
         'Please log in to check for transactions',
@@ -1049,7 +1072,8 @@ class AutoSigningService extends GetxService {
   // Method to manually trigger a check for new transactions
   Future<void> checkForNewTransactions() async {
     // Check if user is authenticated
-    if (_appController.userProfileObject.value.payload == null) {
+    if (!_appController.backendSessionActive.value ||
+        _appController.userProfileObject.value.payload == null) {
       Get.snackbar(
         'Authentication Required',
         'Please log in to check for transactions',
@@ -1143,6 +1167,17 @@ class AutoSigningService extends GetxService {
   
   // Background processing methods
   Future<void> handleAppLifecycleChange(AppLifecycleState state) async {
+    if (!_appController.backendSessionActive.value) {
+      print('AutoSigningService: Backend session inactive — ignoring lifecycle poll/restart');
+      if (state == AppLifecycleState.resumed) {
+        _isAppInForeground = true;
+      } else if (state == AppLifecycleState.paused ||
+          state == AppLifecycleState.detached) {
+        _isAppInForeground = false;
+      }
+      return;
+    }
+
     switch (state) {
       case AppLifecycleState.resumed:
         // App came to foreground
@@ -1155,7 +1190,7 @@ class AutoSigningService extends GetxService {
         
         // Also poll again after a short delay to catch any missed transactions
         Future.delayed(Duration(seconds: 2), () async {
-          if (_isAppInForeground) {
+          if (_isAppInForeground && _appController.backendSessionActive.value) {
             print('AutoSigningService: Follow-up poll after app resume');
             await _pollForTransactions();
           }
@@ -1234,7 +1269,7 @@ class AutoSigningService extends GetxService {
         await _checkForNewTransactions();
       }
     } catch (e) {
-      print('AutoSigningService: Error checking for pending transactions: $e');
+      print('AutoSigningService: Error checking for pending transactions: ${e.runtimeType}');
     }
   }
   
@@ -1250,6 +1285,10 @@ class AutoSigningService extends GetxService {
   
   /// Start persistent timer that works in all app states
   void _startPersistentTimer() {
+    if (!_appController.backendSessionActive.value) {
+      print('AutoSigningService: Backend session inactive, not starting persistent timer');
+      return;
+    }
     if (_isPersistentTimerRunning) return;
     
     _isPersistentTimerRunning = true;
@@ -1268,7 +1307,7 @@ class AutoSigningService extends GetxService {
           print('AutoSigningService: Persistent timer skipped - already processing');
         }
       } catch (e) {
-        print('AutoSigningService: Persistent timer error: $e');
+        print('AutoSigningService: Persistent timer error: ${e.runtimeType}');
       }
     });
     
@@ -1318,7 +1357,7 @@ void callbackDispatcher() {
       
       return Future.value(true);
     } catch (e) {
-      print('Background task error: $e');
+      print('Background task error: ${e.runtimeType}');
       return Future.value(false);
     }
   });
@@ -1347,6 +1386,6 @@ Future<void> _handleAutoSigningTask() async {
       print('Background task: Auto-signing is disabled, skipping transaction check');
     }
   } catch (e) {
-    print('Background task: Error in auto-signing task: $e');
+    print('Background task: Error in auto-signing task: ${e.runtimeType}');
   }
 }

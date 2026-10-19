@@ -4,3 +4,9 @@
 /.dart_tool
 .DS_Store
 /.idea
+
+# Flutter generated state for the local dlc_wallet plugin
+/flutter_plugin/flutter_plugin/.dart_tool/
+
+# dlc_wallet is a reusable Flutter plugin; resolve its dependencies locally
+/flutter_plugin/flutter_plugin/pubspec.lock

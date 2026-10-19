@@ -257,7 +257,6 @@ class _SignUpScreenState extends State<SignUpScreen> {
   Future<String> generateMeneMonic() async {
     final mnemonic = generateMnemonic();
 
-    debugPrint('🧠 Mnemonic: $mnemonic');
 
     return mnemonic;
   }

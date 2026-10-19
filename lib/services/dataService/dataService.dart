@@ -21,7 +21,25 @@ class DataService {
 
   var _response;
 
+  /// Authenticated backend traffic is HTTPS-only. Never fall back to cleartext.
+  bool get _isSecureBaseUrl => Uri.tryParse(_baseURL)?.scheme == 'https';
+
+  /// Status code of the synthetic response returned when a call is refused
+  /// because the base URL is not HTTPS. Distinct from any real HTTP status
+  /// and from a plain network failure (which yields a null response).
+  static const int insecureTransportStatus = -1;
+
+  Response _insecureTransportRefusal(String api) {
+    print("Refusing backend call: base URL is not HTTPS");
+    return Response(
+      requestOptions: RequestOptions(path: api),
+      statusCode: insecureTransportStatus,
+      statusMessage: 'INSECURE_TRANSPORT_REFUSED',
+    );
+  }
+
   Future<Response?> genericDioGetCall(String api) async {
+    if (!_isSecureBaseUrl) return _insecureTransportRefusal(api);
     print(_baseURL + '$api');
 
     final appController = getX.Get.find<AppController>();
@@ -29,7 +47,6 @@ class DataService {
     // Inner function to make the GET request with the current token
     Future<Response?> _makeRequest() async {
       final token = await getToken();
-      print("$api --- *$token");
 
       var _dio = Dio(
         BaseOptions(
@@ -43,7 +60,7 @@ class DataService {
 
       try {
         _response = await _dio.get(_baseURL + '$api');
-        print("response --- $_response");
+        print("GET $api -> ${_response?.statusCode}");
       } on DioError catch (e) {
         if (e.response != null) {
           // Check if this is a token expiration error
@@ -101,6 +118,7 @@ class DataService {
     String? token,
     bool isFormUrlEncoded = false,
   }) async {
+    if (!_isSecureBaseUrl) return _insecureTransportRefusal(api);
     Response? _response;
     String? _authToken;
     final appController = getX.Get.find<AppController>();
@@ -120,7 +138,6 @@ class DataService {
       final dio = Dio(BaseOptions(baseUrl: _baseURL, headers: headers));
 
       print("URL: $_baseURL$api");
-      print("DATA: $data");
 
       try {
         Response response;
@@ -137,10 +154,10 @@ class DataService {
         } else {
           response = await dio.post(api, data: data);
         }
-        print("Response: ${response.data}");
+        print("POST $api -> ${response.statusCode}");
         return response;
       } on DioError catch (e) {
-        print("DioError: ${e.response?.data}");
+        print("POST $api failed: ${e.type} status=${e.response?.statusCode}");
 
         // Check if this is the "already exists and is confirmed" error
         final errorDetail = e.response?.data?['detail'] ?? '';
@@ -220,7 +237,6 @@ Future<String> refreshToken() async {
     print("No logged-in email found");
     return 'FAILED';
   }
-  print("Logged-in email: $email");
 
   // 2. Fetch user data from your storage
   final user = await StorageService.getUserByEmail(email);
@@ -229,9 +245,6 @@ Future<String> refreshToken() async {
     return 'FAILED';
   }
 
-  print("User data found:");
-  print("Email: ${user['email']}");
-  print("Password: ${user['password']}");
 
   // 3. Prepare data for API call
   final data = {
@@ -249,8 +262,7 @@ Future<String> refreshToken() async {
     isFormUrlEncoded: true,
   );
 
-  print("Login response: ${response?.data}");
-  print("Status Code: ${response?.statusCode}");
+  print("Token refresh response status: ${response?.statusCode}");
 
   // 5. Handle response
   if (response != null && response.statusCode == 200 && response.data != null) {

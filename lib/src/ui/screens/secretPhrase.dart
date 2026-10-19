@@ -5,7 +5,7 @@ import 'package:get/get.dart';
 import 'package:signer/src/ui/widgets/primaryButton.dart';
 
 import '../controllers/appController.dart';
-import '../theme/app_text_styles.dart';
+import '../theme/app_Text_Styles.dart';
 import '../theme/colors.dart';
 
 class SecretPhraseScreen extends StatefulWidget {

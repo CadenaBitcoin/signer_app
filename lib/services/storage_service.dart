@@ -12,9 +12,7 @@ class StorageService {
   static const String _userListKey = 'registered_users';
 
   getUserData({String? email}) async {
-    print("====>>>>>$email");
     var userData = await _storage.read(key: 'user_$email');
-    print("=======$userData");
   }
 
   /// Save a new user

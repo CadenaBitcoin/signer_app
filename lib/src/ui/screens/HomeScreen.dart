@@ -19,6 +19,7 @@ import 'package:signer/src/ui/screens/splashScreen.dart';
 import 'package:signer/src/ui/screens/verify_password_screen.dart';
 import 'package:signer/src/ui/theme/app_Text_Styles.dart';
 import 'package:signer/src/ui/theme/colors.dart';
+import 'package:signer/src/ui/widgets/connect_to_cadena_button.dart';
 
 import '../../../models/user_profile_model.dart';
 
@@ -57,7 +58,6 @@ class _HomeScreenState extends State<HomeScreen> {
     final emailKey = 'logged_in_user_email';
 
     final storedData = await _storage.read(key: emailKey);
-    print("storedData ${storedData}");
 
     final mnemonic = await getMnemonic("${storedData}");
     if (mnemonic == null) {
@@ -68,6 +68,11 @@ class _HomeScreenState extends State<HomeScreen> {
 
   var qrText = ''.obs;
   Timer? _profileTimer;
+  bool _isConnectingToCadena = false;
+
+  /// True while local credentials exist but Cadena connect step still needed.
+  bool get _needsCadenaConnectAttention =>
+      appController.showVerifyButton.value;
 
   Future<String> _getLocalEmail() async {
     return await StorageService.getLoggedInEmail() ?? '';
@@ -220,7 +225,7 @@ class _HomeScreenState extends State<HomeScreen> {
         );
       }
     } catch (e) {
-      print('Error launching KYC: $e');
+      print('Error launching KYC: ${e.runtimeType}');
       Get.snackbar(
         'KYC',
         'An error occurred while launching KYC: $e',
@@ -249,14 +254,24 @@ class _HomeScreenState extends State<HomeScreen> {
     final SharedPreferences prefs = await SharedPreferences.getInstance();
     final jwtToken = prefs.getString('jwtToken');
 
-    if (jwtToken != null && jwtToken.isNotEmpty) {
+    if (jwtToken != null &&
+        jwtToken.isNotEmpty &&
+        appController.backendSessionActive.value) {
       debugPrint("JWT token found, starting periodic timer");
       // Start timer only if JWT token exists
+      _profileTimer?.cancel();
       _profileTimer = Timer.periodic(Duration(seconds: 10), (timer) {
+        if (!appController.backendSessionActive.value) {
+          timer.cancel();
+          _profileTimer = null;
+          return;
+        }
         ApiService().getUserProfile();
       });
     } else {
       debugPrint("No JWT token found, timer not started");
+      _profileTimer?.cancel();
+      _profileTimer = null;
     }
   }
 
@@ -287,12 +302,14 @@ class _HomeScreenState extends State<HomeScreen> {
         appController.showScanButton.value = false;
       }
     } catch (e) {
-      debugPrint("Error checking token in initState: $e");
+      debugPrint("Error checking token in initState: ${e.runtimeType}");
       appController.showScanButton.value = false;
     }
   }
 
   Future<void> _verifyUser() async {
+    if (_isConnectingToCadena) return;
+    setState(() => _isConnectingToCadena = true);
     try {
       // Call the existing _initializeUserData which does login + getUserProfile
       await _initializeUserData();
@@ -300,7 +317,6 @@ class _HomeScreenState extends State<HomeScreen> {
       // After API calls, check if JWT token exists
       final SharedPreferences prefs = await SharedPreferences.getInstance();
       final jwtToken = prefs.getString('jwtToken');
-      print('jwtToken $jwtToken');
 
       if (jwtToken != null && jwtToken.isNotEmpty) {
         print("User verified successfully");
@@ -310,7 +326,9 @@ class _HomeScreenState extends State<HomeScreen> {
         print("User verification failed");
       }
     } catch (e) {
-      print("Error during verification: $e");
+      print("Error during verification: ${e.runtimeType}");
+    } finally {
+      if (mounted) setState(() => _isConnectingToCadena = false);
     }
   }
 
@@ -321,13 +339,12 @@ class _HomeScreenState extends State<HomeScreen> {
       final userData = await StorageService.getUserByEmail(loggedInEmail ?? '');
 
       if (userData != null && userData['email'] != null && userData['password'] != null) {
-        print(userData);
         await _performVerificationProcess(userData['email'] ?? '', userData['password'] ?? '');
       } else {
         print("No user credentials found in local storage");
       }
     } catch (e) {
-      print("Error initializing user data: $e");
+      print("Error initializing user data: ${e.runtimeType}");
     }
   }
 
@@ -478,7 +495,7 @@ class _HomeScreenState extends State<HomeScreen> {
         isHaltState: false,
       );
     } catch (e) {
-      print("Error in verification process: $e");
+      print("Error in verification process: ${e.runtimeType}");
       _showLoginFailureDialog();
     }
   }
@@ -492,7 +509,7 @@ class _HomeScreenState extends State<HomeScreen> {
         email: email,
         pass: password,
       );
-      print("Step 2: Attempting login...${loginResult}");
+      print("Step 2: Login result: $loginResult");
       if (loginResult == 'OK') {
         print("Login successful");
 
@@ -521,7 +538,7 @@ class _HomeScreenState extends State<HomeScreen> {
         _showLoginFailureDialog();
       }
     } catch (e) {
-      print("Error in login process: $e");
+      print("Error in login process: ${e.runtimeType}");
       _showLoginFailureDialog();
     }
   }
@@ -741,20 +758,7 @@ class _HomeScreenState extends State<HomeScreen> {
 
   Future<void> _wipeAllData() async {
     try {
-      // Set xpub mismatch flag to block API calls
-      appController.setXpubMismatchDetected();
-      // Clear all user data from StorageService
-      await StorageService.clearAllUsers();
-
-      // Clear SharedPreferences
-      final SharedPreferences prefs = await SharedPreferences.getInstance();
-      await prefs.clear();
-
-      // Clear FlutterSecureStorage
-      const FlutterSecureStorage storage = FlutterSecureStorage();
-      await storage.deleteAll();
-
-      print("All data wiped successfully - API calls will be blocked until next login");
+      await appController.wipeAllLocalDataAndEnterOffline();
 
       Get.snackbar(
         'Data Cleared',
@@ -764,7 +768,7 @@ class _HomeScreenState extends State<HomeScreen> {
         colorText: Colors.white,
       );
     } catch (e) {
-      print("Error wiping data: $e");
+      print("Error wiping data: ${e.runtimeType}");
     }
   }
 
@@ -812,7 +816,7 @@ class _HomeScreenState extends State<HomeScreen> {
   //       );
   //     }
   //   } catch (e) {
-  //     print("Error checking local user data: $e");
+  //     print("Error checking local user data: ${e.runtimeType}");
   //     // show error case
   //     Get.snackbar(
   //       'User Unverified',
@@ -922,13 +926,33 @@ class _HomeScreenState extends State<HomeScreen> {
                   },
                 ),
                 const SizedBox(height: 16),
+                // Prominent Cadena connect CTA (after credentials created/restored)
+                Obx(() => appController.showVerifyButton.value
+                    ? Padding(
+                        padding: const EdgeInsets.only(bottom: 16),
+                        child: ConnectToCadenaButton(
+                          isLoading: _isConnectingToCadena,
+                          onTap: () {
+                            _verifyUser().then((_) {
+                              initWallet();
+                              ApiService().getUserProfile();
+                              _checkTokenAndStartTimer();
+                            });
+                          },
+                        ),
+                      )
+                    : const SizedBox.shrink()),
                 // KYC Status Card (chip opens Sumsub when actionable)
+                // Card is always visible; only the Verify action needs an
+                // online session, so it is offered only after Cadena connect.
                 Obx(() {
-                  final kycStatus = appController.userProfileObject.value.payload?.kycStatus;
+                  final kycStatus =
+                      appController.userProfileObject.value.payload?.kycStatus;
                   final display = _kycDisplayText(kycStatus);
                   final actionable = _kycIsActionable(kycStatus) &&
                       !_kycIsVerified(kycStatus) &&
-                      !_kycIsInProgress(kycStatus);
+                      !_kycIsInProgress(kycStatus) &&
+                      !_needsCadenaConnectAttention;
 
                   return _buildInfoCard(
                     title: "KYC Status",
@@ -947,9 +971,12 @@ class _HomeScreenState extends State<HomeScreen> {
                                 color: primaryColor.value.withOpacity(0.2),
                                 borderRadius: BorderRadius.circular(20),
                               ),
-                              child:  Text('Verify',style: AppTextStyles.caption.copyWith(
-                                color: subTextColor.value,
-                              ),),
+                              child: Text(
+                                'Verify',
+                                style: AppTextStyles.caption.copyWith(
+                                  color: subTextColor.value,
+                                ),
+                              ),
                             ),
                           )
                         : null,
@@ -1086,6 +1113,7 @@ class _HomeScreenState extends State<HomeScreen> {
                 const SizedBox(height: 16),
 
                 // Quick Actions Buttons
+                // Refresh / Pair are shown only when their own state flags allow it
                 Row(
                   spacing: 16,
                   children: [
@@ -1104,9 +1132,7 @@ class _HomeScreenState extends State<HomeScreen> {
                               label: "Pair",
                               onTap: () async {
                                 Get.to(() => QrScanner())?.then((onValue) async {
-                                  debugPrint('onValue : $onValue');
                                   qrText.value = onValue ?? '';
-                                  debugPrint(' qrText.value  : ${qrText.value}');
 
                                   if (onValue != null && onValue.isNotEmpty) {
                                     try {
@@ -1158,7 +1184,7 @@ class _HomeScreenState extends State<HomeScreen> {
                                         print("No upgradeURL found in QR data");
                                       }
                                     } catch (e) {
-                                      print("Error parsing QR data: $e");
+                                      print("Error parsing QR data: ${e.runtimeType}");
                                     }
                                   }
                                 });
@@ -1168,28 +1194,9 @@ class _HomeScreenState extends State<HomeScreen> {
                         : SizedBox.shrink()),
                   ],
                 ),
-                // if (showVerifyButton) const Spacer(),
-                // appController.userProfileObject.value.payload?.uuid != null &&
-                //         appController.userProfileObject.value.payload?.uuid !=
-                //             ""
-                //     ? SizedBox.shrink()
-                //     :
                 SizedBox(
                   height: 16,
                 ),
-                Obx(() => appController.showVerifyButton.value
-                    ? _buildActionButton(
-                        icon: Icons.refresh,
-                        label: "Please Verify",
-                        onTap: () {
-                          _verifyUser().then((_) {
-                            initWallet();
-                            ApiService().getUserProfile();
-                            _checkTokenAndStartTimer();
-                          });
-                        },
-                      )
-                    : SizedBox.shrink()),
                 Obx(() => appController.showResetButton.value
                     ? _buildActionButton(
                         icon: Icons.restart_alt,

@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:get/get.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:signer/config/build_config.dart';
 import 'package:signer/models/appVersionEPModel.dart';
 import 'package:signer/models/sigReqsByDlcIdsModel.dart';
 import 'package:signer/models/userOfferDlcPollModel.dart';
@@ -9,17 +10,17 @@ import 'package:signer/models/user_profile_model.dart';
 import 'package:signer/models/xpub_validation_model.dart';
 import 'package:signer/models/dlc_signature_response_model.dart';
 import 'package:signer/services/storage_service.dart';
+import 'package:signer/services/auto_signing_service.dart';
 import 'package:signer/src/ui/screens/splashScreen.dart';
 import 'package:bip32/bip32.dart'as bip32;
 
 /// AppController - Central configuration for network settings
-/// 
-/// EASY NETWORK SWITCHING:
-/// To switch between mainnet and testnet, simply change these two variables:
-/// 
-/// 1. USE_TESTNET = false (for mainnet) or true (for testnet/signet)
-/// 2. API_BASE_URL = "http://cadenabitcoin.com/app" (mainnet) or "http://staging.purabitcoin.com/app" (staging)
-/// 
+///
+/// NETWORK SWITCHING:
+/// The environment (backend URL and Bitcoin network) is selected explicitly at
+/// build time through BuildConfig and config/build/*.json; there is no default.
+/// See docs/BUILD_CONFIGURATION.md. HTTPS is required for every backend URL.
+///
 /// NETWORK TYPES:
 /// - MAINNET_NATIVE_SEGWIT: Generates vpub/vprv (recommended for mainnet)
 /// - MAINNET_LEGACY: Generates xpub/xprv (legacy mainnet)
@@ -70,23 +71,30 @@ class AppController extends GetxController {
   var consecutive401Count = 0.obs;
   static const int max401BeforeWipe = 10;
 
+  /// When false, the app is in offline / not-connected mode after session teardown.
+  /// Auth retries and 401 wipe dialogs must not run until a new login succeeds.
+  var backendSessionActive = true.obs;
+
   // ========================================
   // NETWORK CONFIGURATION - EASY SWITCHING
   // ========================================
   
-  /// Set to true for testnet/signet, false for mainnet
-  /// 
-  /// EXAMPLE SWITCHING:
-  /// For MAINNET: USE_TESTNET = false, API_BASE_URL = "http://cadenabitcoin.com/app"
-  /// For STAGING: USE_TESTNET = true, API_BASE_URL = "http://staging.purabitcoin.com/app"
-  static const bool USE_TESTNET = false;
-  
+  /// These three values come from [BuildConfig] (lib/config/build_config.dart)
+  /// and are selected at build time, not by editing source:
+  ///   --dart-define-from-file=config/build/staging.json
+  ///   --dart-define-from-file=config/build/production.json
+  /// There is no default: a build without a complete, consistent configuration
+  /// fails compilation.
+
+  /// True for testnet/signet, false for mainnet
+  static const bool USE_TESTNET = BuildConfig.useTestnet;
+
   /// Environment string for API calls: "bitcoin" for mainnet, "signet" for testnet
-  static const String NETWORK_ENVIRONMENT = "bitcoin";
-  
-  /// API Base URL - change this for different environments
-  static const String API_BASE_URL = "http://cadenabitcoin.com/app";
-  // For mainnet: "http://cadenabitcoin.com/app"
+  static const String NETWORK_ENVIRONMENT = BuildConfig.networkEnvironment;
+
+  /// API Base URL for the selected environment
+  static const String API_BASE_URL = BuildConfig.apiBaseUrl;
+  // Must be https:// — DataService refuses any other scheme.
   
   // ========================================
   // BIP32 NETWORK TYPES
@@ -186,7 +194,7 @@ class AppController extends GetxController {
         showScanButton.value = false;
       }
     } catch (e) {
-      print("Error checking JWT token: $e");
+      print("Error checking JWT token: ${e.runtimeType}");
       showVerifyButton.value = true;
       showScanButton.value = false;
     }
@@ -358,6 +366,10 @@ class AppController extends GetxController {
 
   /// Handle consecutive 401 authentication failures.
   Future<void> handleAuth401() async {
+    if (!backendSessionActive.value) {
+      // Session already torn down (e.g. after Reset Data) — do not retry or re-prompt.
+      return;
+    }
     consecutive401Count.value++;
     if (consecutive401Count.value >= max401BeforeWipe) {
       consecutive401Count.value = 0;
@@ -368,6 +380,14 @@ class AppController extends GetxController {
   /// Reset the 401 counter on successful authenticated calls.
   void resetAuth401Counter() {
     consecutive401Count.value = 0;
+  }
+
+  /// Mark backend session as active after a successful login / CONNECT.
+  void activateBackendSession() {
+    backendSessionActive.value = true;
+    resetAuth401Counter();
+    clearXpubMismatchDetected();
+    setServerReachable(true);
   }
 
   Future<void> _showAuthFailureResetDialog() async {
@@ -384,7 +404,7 @@ class AppController extends GetxController {
           TextButton(
             onPressed: () async {
               Get.back();
-              await _wipeAllData();
+              await wipeAllLocalDataAndEnterOffline();
               Get.offAll(() => SplashScreen());
             },
             child: const Text(
@@ -398,20 +418,64 @@ class AppController extends GetxController {
     );
   }
 
-  /// Wipe all local data (shared with auth failure and xpub mismatch flows)
-  Future<void> _wipeAllData() async {
+  /// Wipe local data, stop auth retries/polling, and enter offline / not-connected state.
+  /// Does not require backend availability. Safe to call from Session Invalid or other reset flows.
+  Future<void> wipeAllLocalDataAndEnterOffline() async {
+    // Stop retries first so wiped credentials cannot keep being used,
+    // even if a later storage wipe step fails on a given platform.
+    backendSessionActive.value = false;
+    resetAuth401Counter();
+
+    try {
+      final autoSigning = Get.find<AutoSigningService>();
+      await autoSigning.stopAllSessionActivity();
+    } catch (e) {
+      print("AutoSigningService not available during session wipe: ${e.runtimeType}");
+    }
+
     try {
       await StorageService.clearAllUsers();
+    } catch (e) {
+      print("Error clearing users during session wipe: ${e.runtimeType}");
+    }
 
+    try {
       final SharedPreferences prefs = await SharedPreferences.getInstance();
       await prefs.clear();
+    } catch (e) {
+      print("Error clearing SharedPreferences during session wipe: ${e.runtimeType}");
+    }
 
+    try {
       const FlutterSecureStorage storage = FlutterSecureStorage();
       await storage.deleteAll();
-
-      print("All data wiped due to repeated authentication failures");
     } catch (e) {
-      print("Error wiping data after auth failures: $e");
+      print("Error clearing secure storage during session wipe: ${e.runtimeType}");
     }
+
+    // Discard invalid in-memory session / API state
+    userProfileObject.value = UserProfileModel();
+    xpubValidationObject.value = XpubValidationModel();
+    userOfferDlcIdsPollObject.value = UserOfferDlcIdsPoll();
+    sigReqsByDlcIdsModelObject.value = SigReqsByDlcIdsModel();
+    dlcSignatureResponseObject.value = DlcSignatureResponseModel();
+    appVersionObject.value = AppVersionEPModel();
+
+    // Offline / not-connected posture — local credential create/restore remains allowed
+    setServerReachable(false);
+    xpubMismatchDetected.value = false;
+    showVerifyButton.value = true;
+    showScanButton.value = false;
+    showResetButton.value = false;
+    selectedBottomTabIndex.value = 0;
+
+    // Re-assert after storage steps in case of concurrent updates
+    backendSessionActive.value = false;
+    resetAuth401Counter();
+
+    print("Session wiped — offline / not-connected; auth retries stopped");
   }
+
+  /// Legacy name used by older call sites; delegates to [wipeAllLocalDataAndEnterOffline].
+  Future<void> _wipeAllData() => wipeAllLocalDataAndEnterOffline();
 }

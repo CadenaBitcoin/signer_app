@@ -38,7 +38,6 @@ class ApiService {
       isFormUrlEncoded: true,
     );
 
-    print("Login response: ${response?.data}");
     print("Status Code: ${response?.statusCode}");
 
     appController.loginLoader.value = false;
@@ -48,6 +47,7 @@ class ApiService {
         response.data != null) {
       // Clear XPUB mismatch flag BEFORE saving token so the rest of the app can call APIs again.
       appController.clearXpubMismatchDetected();
+      appController.activateBackendSession();
       saveToken(response.data['access_token']);
       return 'OK';
     } else {
@@ -87,7 +87,6 @@ class ApiService {
         isFormUrlEncoded: false,
       );
 
-      print("Register response: ${response?.data}");
       print("Status Code: ${response?.statusCode}");
 
       if (response == null) return 'FAILED';
@@ -149,7 +148,7 @@ class ApiService {
       return 'FAILED';
     } catch (e, st) {
       // Log and surface failure
-      print('registerNewUser exception: $e\n$st');
+      print('registerNewUser exception: ${e.runtimeType}');
       return 'FAILED';
     } finally {
       // Ensure loader is reset
@@ -239,7 +238,6 @@ class ApiService {
       '/auth/users-app-profile',
     );
 
-    print("user profile response after hit Verify button: ${response?.data}");
     print("Status Code: ${response?.statusCode}");
 
     if (response != null &&
@@ -321,12 +319,10 @@ class ApiService {
         return false;
       }
       
-      print("Local XPUB: $localXpub");
-      print("Server XPUB: $serverXpub");
       
       return localXpub == serverXpub;
     } catch (e) {
-      print("Error comparing XPUB: $e");
+      print("Error comparing XPUB: ${e.runtimeType}");
       return false;
     }
   }
@@ -336,7 +332,6 @@ class ApiService {
     appController.userUpgradeLoader.value = true;
 
     final data = {"xpub": "$xpub"};
-    print("===========${data}");
 
     final response = await DataService().genericDioPostCall(
       '/dlca/v0/user-auth-s-upgrade',
@@ -344,7 +339,6 @@ class ApiService {
       isFormUrlEncoded: false,
     );
 
-    print("Login response: ${response?.data}");
     print("Status Code: ${response?.statusCode}");
 
     appController.userUpgradeLoader.value = false;
@@ -372,7 +366,6 @@ class ApiService {
     appController.userUpgradeLoader.value = true;
 
     final data = {"xpub": xpub};
-    print("data inside userUpgradePubx$data");
     print("Using dynamic upgradeURL: $upgradeURL");
 
     // Extract the path from the full URL
@@ -390,7 +383,6 @@ class ApiService {
       isFormUrlEncoded: false,
     );
 
-    print("response of userUpgradePubx: ${response?.data}");
     print("Status Code of userUpgradePubx: ${response?.statusCode}");
 
     appController.userUpgradeLoader.value = false;
@@ -418,7 +410,6 @@ class ApiService {
       '/dlca/v0/xpub-validation?xpub=$xpub',
     );
 
-    print("user profile response: ${response?.data}");
     print("Status Code: ${response?.statusCode}");
 
     if (response != null &&
@@ -454,7 +445,6 @@ class ApiService {
 
     final response = await DataService().genericDioGetCall('$url');
 
-    print("user profile response: ${response?.data}");
     print("Status Code: ${response?.statusCode}");
 
     if (response != null &&
@@ -490,7 +480,6 @@ class ApiService {
 
     final response = await DataService().genericDioGetCall('$url');
 
-    print("user profile response: ${response?.data}");
     print("Status Code: ${response?.statusCode}");
 
     if (response != null &&
@@ -526,7 +515,6 @@ class ApiService {
 
     final response = await DataService().genericDioGetCall('$url');
 
-    print("user profile response: ${response?.data}");
     print("Status Code: ${response?.statusCode}");
 
     if (response != null &&
@@ -567,7 +555,6 @@ class ApiService {
         "refund_sig": "$refund_sig",
         "adaptor_sig_points": "$adaptor_sig_points"
       };
-      print("Submitting DLC signatures: ${data}");
 
       final response = await DataService().genericDioPostCall(
         '/dlca/v0/offer-dlc-signatures',
@@ -575,7 +562,6 @@ class ApiService {
         isFormUrlEncoded: false,
       );
 
-      print("DLC signatures response: ${response?.data}");
       print("Status Code: ${response?.statusCode}");
 
       appController.offerDlcSignaturesLoader.value = false;
@@ -585,8 +571,7 @@ class ApiService {
           response.data != null) {
         appController.dlcSignatureResponseObject.value =
             DlcSignatureResponseModel.fromJson(response.data);
-        print(
-            "DLC signatures submitted successfully: ${response.data['message']}");
+        print("DLC signatures submitted successfully");
         return 'OK';
       } else if (response?.statusCode == 400) {
         print("Bad Request: Missing or invalid dlc_id provided");
@@ -608,9 +593,6 @@ class ApiService {
         if (response?.data != null) {
           appController.dlcSignatureResponseObject.value =
               DlcSignatureResponseModel.fromJson(response!.data);
-          if (response?.data['detail'] != null) {
-            print("Error detail: ${response?.data['detail']}");
-          }
         }
         return 'SERVER_ERROR';
       } else {
@@ -618,13 +600,12 @@ class ApiService {
         if (response?.data != null) {
           appController.dlcSignatureResponseObject.value =
               DlcSignatureResponseModel.fromJson(response!.data);
-          print("Response data: ${response?.data}");
         }
         return 'FAILED';
       }
     } catch (e) {
       appController.offerDlcSignaturesLoader.value = false;
-      print("Exception in offerDlcSignatures: $e");
+      print("Exception in offerDlcSignatures: ${e.runtimeType}");
       return 'FAILED';
     }
   }
@@ -638,15 +619,15 @@ class ApiService {
       );
 
       if (response != null && response.statusCode == 200 && response.data != null) {
-        print("ApiService: App version response received $response");
+        print("ApiService: App version response received");
         appController.appVersionObject.value = AppVersionEPModel.fromJson(response.data);
         return 'OK';
       } else {
-        print("ApiService: Failed to get app version - response: $response");
+        print("ApiService: Failed to get app version - status: ${response?.statusCode}");
         return 'FAILED';
       }
     } catch (e) {
-      print("Exception in getAppVersion: $e");
+      print("Exception in getAppVersion: ${e.runtimeType}");
       return 'FAILED';
     }
   }
@@ -666,11 +647,11 @@ class ApiService {
         print("ApiService: Server is reachable");
         return 'OK';
       } else {
-        print("ApiService: Server is not reachable - response: $response");
+        print("ApiService: Server is not reachable - status: ${response?.statusCode}");
         return 'FAILED';
       }
     } catch (e) {
-      print("Exception in checkServerStatus: $e");
+      print("Exception in checkServerStatus: ${e.runtimeType}");
       return 'FAILED';
     }
   }
@@ -703,7 +684,7 @@ class ApiService {
       print("ApiService: Failed to start KYC - response: ${response?.statusCode}");
       return null;
     } catch (e) {
-      print("Exception in kycStartApp: $e");
+      print("Exception in kycStartApp: ${e.runtimeType}");
       return null;
     }
   }
@@ -741,11 +722,11 @@ class ApiService {
       }
 
       print(
-        "ApiService: kycAppStatus non-success - status: ${response?.statusCode}, data: ${response?.data}",
+        "ApiService: kycAppStatus non-success - status: ${response?.statusCode}",
       );
       return false;
     } catch (e) {
-      print("Exception in kycAppStatus: $e");
+      print("Exception in kycAppStatus: ${e.runtimeType}");
       return false;
     }
   }

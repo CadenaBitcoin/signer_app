@@ -58,7 +58,7 @@ class NotificationService extends GetxService {
       _isInitialized = true;
       print('NotificationService: Initialized successfully');
     } catch (e) {
-      print('NotificationService: Error initializing notifications: $e');
+      print('NotificationService: Error initializing notifications: ${e.runtimeType}');
     }
   }
   
@@ -102,7 +102,7 @@ class NotificationService extends GetxService {
         print('NotificationService: Android notification channels created');
       }
     } catch (e) {
-      print('NotificationService: Error creating notification channels: $e');
+      print('NotificationService: Error creating notification channels: ${e.runtimeType}');
     }
   }
   
@@ -146,7 +146,7 @@ class NotificationService extends GetxService {
         }
       }
     } catch (e) {
-      print('NotificationService: Error requesting permissions: $e');
+      print('NotificationService: Error requesting permissions: ${e.runtimeType}');
     }
   }
   
@@ -178,7 +178,7 @@ class NotificationService extends GetxService {
       
       return false;
     } catch (e) {
-      print('NotificationService: Error checking notification status: $e');
+      print('NotificationService: Error checking notification status: ${e.runtimeType}');
       return false;
     }
   }
@@ -212,7 +212,7 @@ class NotificationService extends GetxService {
         }
       }
     } catch (e) {
-      print('NotificationService: Error checking iOS notification settings: $e');
+      print('NotificationService: Error checking iOS notification settings: ${e.runtimeType}');
     }
   }
   
@@ -222,7 +222,7 @@ class NotificationService extends GetxService {
       print('NotificationService: Requesting permissions again...');
       await _requestPermissions();
     } catch (e) {
-      print('NotificationService: Error requesting permissions again: $e');
+      print('NotificationService: Error requesting permissions again: ${e.runtimeType}');
     }
   }
   
@@ -234,7 +234,7 @@ class NotificationService extends GetxService {
       try {
         Get.find<AppController>().selectedBottomTabIndex.value = 1;
       } catch (e) {
-        print('NotificationService: Error navigating to sign screen: $e');
+        print('NotificationService: Error navigating to sign screen: ${e.runtimeType}');
       }
     }
   }
@@ -312,7 +312,7 @@ class NotificationService extends GetxService {
       
       print('NotificationService: Transaction ready notification shown with ID: $notificationId');
     } catch (e) {
-      print('NotificationService: Error showing notification: $e');
+      print('NotificationService: Error showing notification: ${e.runtimeType}');
     }
   }
   
@@ -367,7 +367,7 @@ class NotificationService extends GetxService {
       
       print('NotificationService: Transaction signed notification shown');
     } catch (e) {
-      print('NotificationService: Error showing notification: $e');
+      print('NotificationService: Error showing notification: ${e.runtimeType}');
     }
   }
   
@@ -426,7 +426,7 @@ class NotificationService extends GetxService {
       
       print('NotificationService: Background processing notification shown');
     } catch (e) {
-      print('NotificationService: Error showing background processing notification: $e');
+      print('NotificationService: Error showing background processing notification: ${e.runtimeType}');
     }
   }
   
@@ -496,7 +496,7 @@ class NotificationService extends GetxService {
       
       print('NotificationService: Background processing test notification shown with ID: $notificationId');
     } catch (e) {
-      print('NotificationService: Error showing background processing test notification: $e');
+      print('NotificationService: Error showing background processing test notification: ${e.runtimeType}');
     }
   }
   
@@ -566,7 +566,7 @@ class NotificationService extends GetxService {
       
       print('NotificationService: Persistent timer test notification shown with ID: $notificationId');
     } catch (e) {
-      print('NotificationService: Error showing persistent timer test notification: $e');
+      print('NotificationService: Error showing persistent timer test notification: ${e.runtimeType}');
     }
   }
   
@@ -638,7 +638,7 @@ class NotificationService extends GetxService {
       
       print('NotificationService: Transaction available notification shown with ID: $notificationId');
     } catch (e) {
-      print('NotificationService: Error showing transaction available notification: $e');
+      print('NotificationService: Error showing transaction available notification: ${e.runtimeType}');
     }
   }
   
@@ -707,7 +707,7 @@ class NotificationService extends GetxService {
       
       print('NotificationService: Signing success notification shown with ID: $notificationId');
     } catch (e) {
-      print('NotificationService: Error showing signing success notification: $e');
+      print('NotificationService: Error showing signing success notification: ${e.runtimeType}');
     }
   }
   
@@ -718,7 +718,7 @@ class NotificationService extends GetxService {
       await _notifications.cancelAll();
       print('NotificationService: All notifications cancelled');
     } catch (e) {
-      print('NotificationService: Error cancelling notifications: $e');
+      print('NotificationService: Error cancelling notifications: ${e.runtimeType}');
     }
   }
 }

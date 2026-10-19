@@ -33,17 +33,11 @@ class _BottomNavBarState extends State<BottomNavBar> {
 
   void fetchUser() async {
     var email = await getLoggedInEmail();
-    print("logedin email:$email");
 
     final user = await StorageService.getUserByEmail('${email}');
 
     if (user != null) {
-      print("User data:");
-      print("Email: ${user['email']}");
-      print("Password: ${user['password']}");
-      print("Mnemonic: ${user['mnemonic']}");
-      print("BTC Address: ${user['btc_address']}");
-      print("Private Key: ${user['private_key']}");
+      print("User data found");
     } else {
       print("User not found");
     }

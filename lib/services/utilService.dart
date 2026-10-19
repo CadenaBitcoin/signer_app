@@ -36,7 +36,7 @@ class UtilService {
           return values[0].replaceAllMapped(RegExp(r'(\d{1,3})(?=(\d{3})+(?!\d))'), (Match m) => '${m[1]},');
         }
       } catch (e) {
-        print('Error parsing data: $e');
+        print('Error parsing data: ${e.runtimeType}');
         return '0';
       }
     }
@@ -117,28 +117,6 @@ class UtilService {
     SharedPreferences _prefs = await SharedPreferences.getInstance();
     selectedLanguage = _prefs.getString('SELECTED_LANGUAGE') ?? 'uk';
     print("getStatic $selectedLanguage");
-  }
-
-  bool automationEmailExists(String email) {
-    const validEmails = {
-      'automation@extsy.com',
-      'seller-p2p@extsy.com',
-      'buyer-p2p@extsy.com',
-      'awais.3utt@gmail.com',
-      'kyc@gmail.com',
-      'referral@extsy.com',
-      'settings@extsy.com',
-      'mail-captcha3@yopmail.com',
-      'trading@extsy.com',
-      'swap-coins@extsy.com',
-      'aml-check@extsy.com',
-      'forgot-pass@extsy.com',
-      'extsy@yopmail.com',
-      'mail-captcha1@yopmail.com',
-      'delete-user@extsy.com',
-    };
-
-    return validEmails.contains(email.toLowerCase());
   }
 }
 
