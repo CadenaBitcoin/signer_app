@@ -244,6 +244,35 @@ Under the policy (7.1, 7.4), and unchanged by this document:
   open decisions 5 and 6; until they are decided, compile-validation manifests carry
   `release_id: null`, and **no tag or release exists**.
 
+### Showing that a production revision is a tested candidate (no tag needed)
+
+Promotion is a pull-request **merge commit**, so the commit that is built on `production`
+has a different SHA from the commit that was tested on `staging`. "The same source
+revision" therefore means the same **source tree**:
+
+```bash
+# <p> = the merge commit on production; its second parent is the staging commit it promoted
+git rev-parse <p>^{tree} <p>^2^{tree}      # equal trees: production holds exactly the staging content
+```
+
+Observed today: the first promotion `fceeb66` (PR #75) has the tree `2eff33b0…`, equal to
+the tree of the staging commit `e198139` it promoted; `staging` `a4df412` (PR #77) has the
+tree `2af980a3…`, equal to that of `development` `465a367`. This needs no tag, release or
+workflow input.
+
+Limits, stated plainly:
+
+- It shows equal **content**, nothing more: not that the revision was tested or approved,
+  not which candidate it is (there is no identifier), and nothing about the binary, which is
+  not reproducible bit for bit.
+- It is a manual check. No workflow, tool or ruleset enforces it.
+- It fails, correctly, if `production` carries content that `staging` does not.
+
+**Release-candidate identity remains an open requirement.** No release identifier is
+implemented: `release_id` is `null` in every manifest, no tag exists, and `--release-id` only
+checks the form of an identifier given to the tool by hand. Where `vX.Y.Z-rc.N` comes from,
+who creates the tag and how the pipeline checks it are open decisions 1–3 below.
+
 ## Retention of binaries (interface only)
 
 **Today no binary is retained**: the workflow uploads text and JSON only (policy section 3
@@ -298,7 +327,10 @@ Issue #69 requires one authorized version transition. It is **not** run by this 
 this change does not alter the application version. The transition needs no governed branch:
 `build-variants.yml` can be run manually on any ref, so the test runs on a throw-away branch
 that is never merged. Proposed procedure, to be started only on the owner's written
-authorization naming the new version:
+authorization naming the new version. The owner has approved the test version
+`1.0.3+1000035` **exclusively** for this isolated branch; the application version must not
+change on `development`, `staging` or `production`, and the branch is created and pushed only
+after a separate authorization of the exercise (and after the corrective tests are merged):
 
 1. A branch `test/69-version-transition` is created from `development`. One signed commit
    changes only the `version:` line of `pubspec.yaml` (for example `1.0.3+1000034` →
@@ -324,7 +356,8 @@ this test.
 These need a maintainer decision (policy section 11); this change does not take them:
 
 1. **Source of the release identifier and of `N`** (policy open decision 6; proposal:
-   `RELEASE_IDENTIFIER` in the staging configuration).
+   `RELEASE_IDENTIFIER` in the staging configuration). Release-candidate identity is an
+   **open requirement** until decisions 1–3 are taken.
 2. **Who creates tags and with which identity** (decision 5), and when.
 3. **Where the build number is raised for each promotion** (decision 4; proposal: in the
    promotion pull request, checked by the pipeline).

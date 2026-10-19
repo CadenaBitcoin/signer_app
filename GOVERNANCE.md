@@ -6,10 +6,10 @@ changes; only explicitly authorized people may merge, promote, release or sign.
 
 > **Status.** The repository is owned by the `CadenaBitcoin` GitHub
 > Organization. `development` is the GitHub default and active integration
-> branch; `staging` is a protected promotion branch. GitHub rulesets enforce the
-> maintainer-controlled pull-request workflow on both branches. `production` has
-> not yet been created because authoritative release provenance must be
-> established first.
+> branch; `staging` and `production` are protected promotion branches. GitHub
+> rulesets enforce the maintainer-controlled pull-request workflow on all three
+> branches. `production` was created at the adopted initial baseline `7b63c97`
+> (Issue #68).
 
 ## 1. Authority
 
@@ -68,7 +68,7 @@ production
 |---|---|
 | `development` | GitHub default branch and normal pull-request target. The active integration branch and normal issue completion point. Ordinary issues are **Done** when accepted into it, unless the issue explicitly carries staging or production scope. It does **not** automatically produce or deploy distributable application builds. Automatic CI verification (analyze, tests) may be added later and is distinct from application builds. |
 | `staging` | Signet promotion branch. Promotion target from `development`; not a place for ordinary feature development. It is protected now. The intended design is that a merge triggers the staging build pipeline, which builds and signs the staging artifacts (Android and iOS, a separate staging application on Signet) for restricted internal testing. A merge builds; it does not publish. See [docs/RELEASE_POLICY.md](docs/RELEASE_POLICY.md). Today only unsigned, compile-only workflows run on `staging`: the CI validation workflows and the two-build `build-variants` workflow ([docs/RELEASE_TRIGGERS.md](docs/RELEASE_TRIGGERS.md)). |
-| `production` | Planned Mainnet release branch and promotion target from `staging`. It has **not yet been created** because authoritative production source/artifact provenance must be established first. When established, it will receive the strongest protection, and a merge into it will trigger the production build pipeline (Android APK, Android AAB, iOS). A merge builds and signs; publication to the website, Google Play or the App Store remains a separately authorized release action. Creation requirements and the promotion procedure: [docs/RELEASE_POLICY.md](docs/RELEASE_POLICY.md) section 2. |
+| `production` | Mainnet release branch and promotion target from `staging`. It exists and is protected. It was created at the adopted initial baseline `7b63c97` (Issue #68), the best-supported historical commit and not an exact reconstruction of the published application. A merge into it triggers the production build pipeline (Android APK, Android AAB, iOS). Today only unsigned, compile-only workflows run on `production` ([docs/RELEASE_TRIGGERS.md](docs/RELEASE_TRIGGERS.md)); the intended design is that a merge builds and signs; publication to the website, Google Play or the App Store remains a separately authorized release action. Creation requirements and the promotion procedure: [docs/RELEASE_POLICY.md](docs/RELEASE_POLICY.md) section 2. |
 
 Rules for all work:
 
@@ -196,8 +196,10 @@ This permits authorized Contributors to work directly on ordinary repository
 branches while preventing them from updating or merging into `development` or
 `staging`.
 
-`production` protection will be configured when that branch is established
-after release provenance is known.
+`production` has its own pair of rulesets (a pull-request policy and a protection
+ruleset). They require a pull request with an approval from
+`CadenaBitcoin/Maintainers`, allow merge commits only, and block deletion and
+force pushes; none of the release-branch rulesets has a bypass actor.
 
 ## 7. AI-assisted changes
 
@@ -214,22 +216,25 @@ The governance migration has been performed:
 
 - the repository is owned by the `CadenaBitcoin` GitHub Organization;
 - `development` exists and is the GitHub default / active integration branch;
-- `staging` is a protected promotion branch;
+- `staging` and `production` are protected promotion branches;
 - the `Maintainers` and `Contributors` Teams provide the technical access model;
 - branch rulesets enforce Maintainer-controlled pull-request merges on
-  `development` and `staging`; and
+  `development`, `staging` and `production`; and
 - GitHub Private Vulnerability Reporting is enabled.
 
 `main` remains a legacy branch and is not an integration or promotion target.
 
-`production` has not been created. It will be initialized only after the
-authoritative currently released source commit and artifact lineage are
-confirmed.
+`production` was created at the adopted initial baseline `7b63c97` after the
+released source lineage was examined (Issue #68). The baseline is the
+best-supported historical commit, not an exact reconstruction of the published
+application; the Android application ID of the repository differs from the
+published one (Issue #72).
 
 ## Pending follow-ups
 
-- Establish `production` once release provenance is known, then configure its
-  protection and release/build semantics.
+- Establish the production release/build semantics: the branch exists
+  (Issue #68), but its pipeline is compile-only and signing and publication are
+  not established.
 - Decide what to do with the legacy `main` branch.
 - Designate release maintainers and signing custodians.
 - Build the staging and production release pipelines (five signed artifacts), the
