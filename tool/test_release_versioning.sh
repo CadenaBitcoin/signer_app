@@ -8,6 +8,8 @@
 #                               for each kind of missing, malformed, inconsistent or contradictory
 #                               metadata; cross-checks of the manifests of one run; canonical names;
 #                               the published-version gate
+#   3. the workflow             the manifest steps exist, nothing but evidence is uploaded, nothing
+#                               writes or overrides the version
 #
 #   tool/test_release_versioning.sh
 #
@@ -19,6 +21,7 @@ set -uo pipefail
 
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 tool="$root/tool/build_manifest.py"
+workflow="$root/.github/workflows/build-variants.yml"
 BM() { python3 -I "$tool" "$@"; }
 
 pass=0
@@ -498,6 +501,32 @@ for line in cat.replace("CATALOGUE=\x27", "").replace("\x27", "").splitlines():
 print(";".join(bad))
 ')"
 if [ -z "$cat_check" ]; then ok "catalogue: platform, kind and environment of every variant agree with the planner"; else bad "catalogue: platform, kind and environment disagree" "$cat_check"; fi
+
+# ---------------------------------------------------------------------------------------------
+# 3. the workflow definition (read as text; comment lines removed first)
+# ---------------------------------------------------------------------------------------------
+wf="$tmp/workflow.yml"
+grep -v '^[[:space:]]*#' "$workflow" >"$wf"
+t() { local name="$1"; shift; if "$@"; then ok "$name"; else bad "$name"; fi; }
+eq() { [ "$1" = "$2" ]; }
+has() { grep -qF -- "$2" <<<"$1"; }
+lacks() { ! has "$1" "$2"; }
+lacksre() { ! grep -qE -- "$2" <<<"$1"; }
+count() { grep -cF -- "$2" <<<"$1" || true; }
+wft="$(cat "$wf")"
+t "workflow: the manifest is created in both build jobs (Android and iOS)" eq "$(count "$wft" 'tool/build_manifest.py create --evidence')" 2
+t "workflow: every manifest is verified against the repository and its text evidence" eq "$(count "$wft" 'tool/build_manifest.py verify "evidence/$BUILD_VARIANT.manifest.json" --repo . --evidence')" 2
+t "workflow: the plan job runs this test before any build" has "$wft" 'run: tool/test_release_versioning.sh'
+t "workflow: the verdict verifies the manifests of the run together" has "$wft" 'tool/build_manifest.py verify-dir evidence --variants "$REQUIRED_VARIANTS" --repo .'
+t "workflow: the verdict still checks the exact evidence set first" has "$wft" 'tool/check_verdict.sh evidence evidence'
+t "workflow: only evidence is uploaded (two uploads)" eq "$(count "$wft" 'actions/upload-artifact@')" 2
+t "workflow: both uploads are the evidence directory" eq "$(grep -cE '^          path: evidence/$' <<<"$wft")" 2
+t "workflow: no upload names a build output" lacksre "$wft" 'path:.*(build/|\.apk|\.aab|\.ipa|Runner\.app)'
+t "workflow: the evidence retention stays 14 days" eq "$(grep -cE '^          retention-days: 14$' <<<"$wft")" 2
+t "workflow: no job writes pubspec.yaml" lacksre "$wft" '(sed -i|>>?|tee)[^|]*pubspec'
+t "workflow: no workflow passes a version override" lacksre "$(cat "$root"/.github/workflows/*.yml | grep -v '^[[:space:]]*#')" '(--build-name|--build-number)'
+t "workflow: the signing gate is not part of compile validation" lacks "$wft" 'build_manifest.py gate'
+t "workflow: no tag, release or publication step" lacksre "$wft" 'gh release|git tag|create-release|upload-release|google-play|app-store|testflight|fastlane'
 
 echo
 echo "$pass passed, $failed failed"
