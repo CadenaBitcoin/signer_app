@@ -25,12 +25,15 @@ ios/Runner.xcodeproj/xcshareddata/xcschemes/{staging,production}.xcscheme
 tool/verify_build_config.sh    test matrix, AOT checks, analyzer guard, resolve helper
 tool/verify_version.sh         version and flavor wiring (source only)
 tool/verify_artifact.sh        reads a BUILT artifact and checks it
+tool/build_manifest.py         JSON build manifest (source, run, version, toolchain, digest, signing) and its checks
+config/release/published_versions.json   versions already published (a release must exceed them)
 tool/build_config_probe.dart   helper compiled by verify_build_config.sh (not part of the app)
 .github/workflows/build-variants.yml   compiles and verifies the five variants (all, or one)
 tool/plan_build_variants.sh            which variants a run requires (trigger -> selection)
 tool/commit_parents.sh                 merge-commit detection that also works in a shallow checkout
 tool/check_verdict.sh                  the pass/fail decisions of the aggregate verdict
 tool/test_release_triggers.sh          tests of the three above, without a build
+tool/test_release_versioning.sh        tests of the version rules and the build manifest, without a build
 ```
 
 | Key | Staging | Production |
@@ -271,7 +274,7 @@ Limits, stated plainly:
 |---|---|---|
 | `android-ci-validation.yml` | debug APK, `staging` flavor | the labelled staging debug APK (14 days) |
 | `ios-ci-validation.yml` | unsigned `Runner.app`, `staging` flavor | the labelled staging app, zipped (14 days) |
-| `build-variants.yml` | the five variants (above), all or one | **text evidence only** |
+| `build-variants.yml` | the five variants (above), all or one | **text evidence and a JSON build manifest only** ([RELEASE_VERSIONING.md](RELEASE_VERSIONING.md)) |
 
 The two validation workflows are unchanged in meaning; they build the `staging` flavor
 and now also read the identity back from what they built.
@@ -334,7 +337,7 @@ What a run does:
    variant's identity, version, signing and SHA-256.
 
 **No application binary is uploaded** (and no production binary is retained anywhere): the
-uploaded evidence files contain only metadata and hashes. The workflow shows that the
+uploaded evidence files (text and the JSON manifest) contain only metadata and hashes. The workflow shows that the
 repository compiles and what each artifact claims; it is not a build you can install.
 
 ## What this does not do
