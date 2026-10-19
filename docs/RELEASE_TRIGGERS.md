@@ -105,8 +105,11 @@ The group names `staging` / `production` are not manual choices; they exist only
     all fail the run;
   - every job that was **not selected** must be `skipped`; one that ran anyway fails the
     run, so "intentionally unselected" and "missing" stay distinct;
-  - each required variant must have a non-empty evidence file, and **no** evidence may exist
-    for any other variant (the "exactly N builds" proof);
+  - each required variant must have a non-empty evidence file **and manifest**, and **no**
+    evidence may exist for any other variant (the "exactly N builds" proof);
+  - every manifest must be valid for the checked-out commit and agree with its text evidence,
+    and the manifests of the run must agree with each other (one commit, one run, one
+    version, unique build identifiers; `tool/build_manifest.py verify-dir`);
   - then the cross-artifact checks: APK/AAB consistency (production), and staging and
     production are different applications on each platform.
 
@@ -116,7 +119,9 @@ selector options, job graph, `always()`, the branch-creation guards, permissions
 only `bash`, `git`, `awk`, `sed` and `grep`, which every GitHub-hosted runner has, so no
 package is installed and no YAML parser is involved: the workflow is read as text, and the
 test fails when a pinned line is edited, which asks for a deliberate review. It needs no
-Flutter and can be run locally.
+Flutter and can be run locally. The job then runs `tool/test_release_versioning.sh` (the
+version rules, the build manifests and the published-version gate; it also needs `python3`,
+present on every runner).
 
 ## Concurrency
 
@@ -128,8 +133,10 @@ run. Runs of the existing Android and iOS validation workflows are independent.
 
 ## Evidence and what a green run means
 
-Text evidence only (identity, version, signing status, SHA-256, run metadata), one file per
-variant, uploaded per run. **No application binary is uploaded.** A green `verdict` means:
+Text evidence (identity, version, signing status, SHA-256, run metadata) and a JSON build
+manifest (`tool/build_manifest.py`, see [RELEASE_VERSIONING.md](RELEASE_VERSIONING.md)), one
+of each per variant, uploaded per run. **No application binary is uploaded.** A green
+`verdict` means:
 the selected variants compiled, were read back as the right application, and nothing else
 ran. It does **not** mean the build is installable as an official app, signed, tested on a
 device, tagged or approved for release.
