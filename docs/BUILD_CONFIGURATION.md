@@ -324,8 +324,10 @@ What a run does:
 4. *Android jobs:* variants 1, 3 and 4, each followed by `verify_artifact.sh` with its
    self-test. The pinned `bundletool` 1.18.3 (SHA-256 `a099cfa1543f55593bc2ed16a70a7c67fe54b1747bb7301f37fdfd6d91028e29`)
    reads the AAB.
-5. *iOS jobs (`macos-15`, Xcode 16.4, the pinned toolchain checks of the iOS validation
-   workflow):* a build without `--flavor` must fail; variants 2 and 5; `verify_artifact.sh`;
+5. *iOS jobs (`macos-15`, Xcode 26.3 and an iOS 26 SDK, the pinned toolchain checks of the iOS
+   validation workflow, [IOS_CI.md](IOS_CI.md)):* a build without `--flavor` must fail; variants 2
+   and 5; `verify_artifact.sh ios … --min-sdk 26` (which also reads the SDK and the minimum OS
+   from the built app);
    the mismatched flavor/configuration pairing must fail; any tracked file other than
    `ios/Podfile.lock` changed by the build is an error, and `Podfile.lock` drift is
    **reported, not hidden**.

@@ -481,7 +481,7 @@ without a record, or from a commit that was not approved, is not official.
 | Tags, GitHub Releases | None |
 | Separate staging application ID / bundle ID / App Store Connect record | **None**; both CI validation builds use `com.app.cadenabitcoin` |
 | Build-time configuration | Unfinished (Issue #57 B1, local branch only); committed constants are production |
-| iOS toolchain | Xcode 16.4 (CI). App Store Connect uploads have required Xcode 26 and the iOS 26 SDK since 2026-04-28 ([Apple](https://developer.apple.com/news/upcoming-requirements/)); Flutter 3.35.3 with Xcode 26 is untested here |
+| iOS toolchain | Xcode 26.3 on `macos-15` with an iOS 26 SDK, pinned by Issue #70 (verification status: [IOS_CI.md](IOS_CI.md)). App Store Connect uploads have required Xcode 26 and the iOS 26 SDK since 2026-04-28 ([Apple](https://developer.apple.com/news/upcoming-requirements/)) |
 | `tool/verify_version.sh` | Exists (this issue), read-only |
 
 ## 11. Open decisions

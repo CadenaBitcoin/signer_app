@@ -75,8 +75,8 @@ request:
 | T3 | New signed workflows as **new files**: staging on push to `staging`, production on push to `production`, using the protected environments | Validation workflows keep running beside them. No dependency between the two sets unless later decided. |
 | T4 | Decide whether validation stays as a fast unsigned check (for example as a required status check) or retires | Never removed without approval |
 
-Other consequences to schedule: the iOS validation workflow stays on Xcode 16.4
-until step 3 proves the new toolchain, then moves in a separate approved change;
+Other consequences to schedule: the iOS workflows moved to Xcode 26.3 on `macos-15` with
+Issue #70 (step 3; hosted proof is recorded in `docs/IOS_CI.md`);
 validation artifacts keep their "NOT APPROVED FOR PUBLIC DISTRIBUTION" labels and
 are never renamed into release artifacts; `CLAUDE.md` section 4 and the PR
 template need the explicit-configuration commands in steps 4 and 6.
