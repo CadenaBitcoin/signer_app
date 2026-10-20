@@ -4,8 +4,8 @@
 #
 #   tool/verify_artifact.sh apk ENV FILE.apk [--signing debug|unsigned] [--debug-build] [--evidence OUT]
 #   tool/verify_artifact.sh aab ENV FILE.aab [--signing debug|unsigned] [--evidence OUT]
-#   tool/verify_artifact.sh ios ENV Runner.app                          [--evidence OUT]
-#   tool/verify_artifact.sh selftest apk|aab|ios ENV FILE [--signing ...] [--debug-build]
+#   tool/verify_artifact.sh ios ENV Runner.app             [--min-sdk N] [--evidence OUT]
+#   tool/verify_artifact.sh selftest apk|aab|ios ENV FILE [--signing ...] [--debug-build] [--min-sdk N]
 #   tool/verify_artifact.sh consistent EVIDENCE_A EVIDENCE_B     # e.g. production APK vs AAB
 #   tool/verify_artifact.sh matrix                               # print the expected identities
 #
@@ -19,6 +19,13 @@
 #     other environment's (tool/verify_build_config.sh check-binary). Supporting evidence
 #     only: it does not prove runtime behavior or network isolation. Debug builds are
 #     rejected because they embed both URLs.
+# iOS additionally reads the toolchain that built the app FROM the app: the SDK recorded in
+# Info.plist (DTSDKName, DTXcode) and in the executable's Mach-O build version, the declared
+# MinimumOSVersion against the executable's minimum OS, and the minimum OS of every embedded
+# framework. --min-sdk N fails the check unless the app was built with an iOS SDK >= N
+# (Apple requires 26 for App Store Connect uploads); without it the SDK is only recorded.
+# A framework that needs a newer OS than the app declares is reported as a WARNING and in the
+# evidence (deployment_target_conflicts), not as a failure: it is a recorded inconsistency.
 # --debug-build (apk only) is for the CI validation APK: it expects a debuggable build and
 # records that the environment check was skipped (a debug build embeds both URLs).
 # `selftest` additionally proves the checks can fail: the same artifact claimed for the
@@ -252,6 +259,115 @@ with open(sys.argv[1], "rb") as f:
 ' "$1" "$2"
 }
 
+# Dotted version -> comparable integer (X[.Y[.Z]], digits only).
+ver_num() {
+  local a="" b="" c=""
+  case "$1" in ''|*[!0-9.]*) echo 0; return 0 ;; esac
+  IFS=. read -r a b c <<<"$1"
+  echo $(( ${a:-0} * 1000000 + ${b:-0} * 1000 + ${c:-0} ))
+}
+ver_major() { echo "${1%%.*}"; }
+MACHO_INFO=tool/macho_info.py
+APPLE_MIN_DEPLOYMENT=13.0   # App Store Connect: iOS apps must target iOS 13 or later (from 2026-09-09)
+MIN_SDK=""
+warn() { echo "  WARN  $1"; }
+
+# Everything the built app says about the toolchain and the OS versions it needs.
+# Sets the evidence; counts failures through pass/fail.
+verify_ios_toolchain() { # APP_DIR PLIST EXECUTABLE_NAME
+  local app=$1 plist=$2 exe=$3
+  local plat sdkname sdkver xcode xcodebuild sdkbuild declared sdk_from_name
+  local lines line kv arch plat_m minos_m sdk_m exe_min="" exe_sdk="" exe_platform="" exe_arch=""
+  plat=$(plist_get "$plist" DTPlatformName); sdkname=$(plist_get "$plist" DTSDKName)
+  sdkver=$(plist_get "$plist" DTPlatformVersion); xcode=$(plist_get "$plist" DTXcode)
+  xcodebuild=$(plist_get "$plist" DTXcodeBuild); sdkbuild=$(plist_get "$plist" DTSDKBuild)
+  declared=$(plist_get "$plist" MinimumOSVersion)
+  ev built_platform "$plat"; ev built_sdk_name "$sdkname"; ev built_platform_version "$sdkver"
+  ev built_xcode "$xcode"; ev built_xcode_build "$xcodebuild"; ev built_sdk_build "$sdkbuild"
+  ev minimum_os_version "$declared"
+
+  [ "$plat" = "iphoneos" ] && pass "Info.plist DTPlatformName is iphoneos (a device build)" \
+    || fail "Info.plist DTPlatformName is '$plat', expected iphoneos"
+  sdk_from_name=""
+  case "$sdkname" in
+    iphoneos[0-9]*) sdk_from_name=${sdkname#iphoneos} ;;
+  esac
+  case "$sdk_from_name" in ''|*[!0-9.]*) sdk_from_name="" ;; esac
+  if [ -z "$sdk_from_name" ]; then
+    fail "Info.plist DTSDKName '$sdkname' does not name an iPhoneOS SDK version"
+  elif [ -n "$MIN_SDK" ]; then
+    if [ "$(ver_major "$sdk_from_name")" -ge "$MIN_SDK" ]; then pass "Info.plist records the iOS $sdk_from_name SDK (SDK $MIN_SDK or later required)"
+    else fail "Info.plist records the iOS $sdk_from_name SDK; SDK $MIN_SDK or later is required"; fi
+  else
+    pass "Info.plist records the iOS $sdk_from_name SDK (no minimum required here)"
+  fi
+
+  if [ ! -f "$app/$exe" ]; then
+    fail "executable $exe not found in the app"; ev executable_macho "missing"; return 0
+  fi
+  if ! lines=$(python3 -I "$MACHO_INFO" "$app/$exe" 2>&1); then
+    fail "the executable is not a readable Mach-O binary: $lines"; ev executable_macho "unreadable"; return 0
+  fi
+  while IFS= read -r line; do
+    [ -n "$line" ] || continue
+    arch=""; plat_m=""; minos_m=""; sdk_m=""
+    for kv in $line; do
+      case "$kv" in arch=*) arch=${kv#arch=} ;; platform=*) plat_m=${kv#platform=} ;; minos=*) minos_m=${kv#minos=} ;; sdk=*) sdk_m=${kv#sdk=} ;; esac
+    done
+    [ "$plat_m" = "ios" ] && pass "executable slice $arch is built for iOS devices" \
+      || fail "executable slice $arch is built for '$plat_m', not iOS devices"
+    if [ -n "$MIN_SDK" ]; then
+      case "$sdk_m" in
+        ''|n/a) fail "executable slice $arch records no SDK version" ;;
+        *) if [ "$(ver_major "$sdk_m")" -ge "$MIN_SDK" ]; then pass "executable slice $arch was linked against the iOS $sdk_m SDK"
+           else fail "executable slice $arch was linked against the iOS $sdk_m SDK; SDK $MIN_SDK or later is required"; fi ;;
+      esac
+    fi
+    if [ -n "$declared" ] && [ "$(ver_num "$minos_m")" -eq "$(ver_num "$declared")" ] && [ "$declared" != "0" ]; then :; else
+      fail "executable slice $arch needs iOS $minos_m but Info.plist MinimumOSVersion is '$declared'"
+    fi
+    exe_arch=$arch; exe_platform=$plat_m; exe_min=$minos_m; exe_sdk=$sdk_m
+  done <<<"$lines"
+  ev executable_platform "$exe_platform"; ev executable_minos "$exe_min"; ev executable_sdk "$exe_sdk"
+  ev executable_macho_arch "$exe_arch"
+
+  if [ -z "$declared" ]; then
+    fail "Info.plist has no MinimumOSVersion"
+  elif [ "$(ver_num "$declared")" -ge "$(ver_num "$APPLE_MIN_DEPLOYMENT")" ]; then
+    pass "the app declares iOS $declared as its minimum (App Store Connect needs $APPLE_MIN_DEPLOYMENT or later)"
+  else
+    fail "the app declares iOS $declared as its minimum; App Store Connect needs $APPLE_MIN_DEPLOYMENT or later"
+  fi
+
+  # Every embedded framework: record its platform and minimum OS; a device app must not embed a
+  # simulator build, and a framework needing a newer OS than the app declares is a conflict.
+  local fw fwexe fwlines fwline conflicts=0 listed="" fwname fp fm fs
+  for fw in "$app"/Frameworks/*.framework; do
+    [ -d "$fw" ] || continue
+    fwname=$(basename "$fw")
+    fwexe=""
+    [ -f "$fw/Info.plist" ] && fwexe=$(plist_get "$fw/Info.plist" CFBundleExecutable)
+    [ -n "$fwexe" ] && [ -f "$fw/$fwexe" ] || { ev "framework.$fwname" "no executable"; continue; }
+    if ! fwlines=$(python3 -I "$MACHO_INFO" "$fw/$fwexe" 2>/dev/null); then ev "framework.$fwname" "not a Mach-O binary"; continue; fi
+    listed=""
+    while IFS= read -r fwline; do
+      [ -n "$fwline" ] || continue
+      fp=""; fm=""; fs=""
+      for kv in $fwline; do
+        case "$kv" in platform=*) fp=${kv#platform=} ;; minos=*) fm=${kv#minos=} ;; sdk=*) fs=${kv#sdk=} ;; esac
+      done
+      listed="${listed}${listed:+; }$fp minos=$fm sdk=$fs"
+      if [ "$fp" != "ios" ]; then fail "framework $fwname is built for '$fp', not iOS devices"; fi
+      if [ -n "$declared" ] && [ "$(ver_num "$fm")" -gt "$(ver_num "$declared")" ]; then
+        conflicts=$((conflicts + 1))
+        warn "framework $fwname needs iOS $fm but the app declares iOS $declared as its minimum"
+      fi
+    done <<<"$fwlines"
+    ev "framework.$fwname" "$listed"
+  done
+  ev deployment_target_conflicts "$conflicts"
+}
+
 verify_ios() { # ENV APP_DIR
   local env=$1 app=$2 plist id name short build status="unsigned" exe archs="" cs_out out
   load_version
@@ -290,6 +406,7 @@ verify_ios() { # ENV APP_DIR
     ev environment_check failed; ev environment_check_snapshots 0
   fi
   exe=$(plist_get "$plist" CFBundleExecutable)
+  verify_ios_toolchain "$app" "$plist" "$exe"
   if command -v lipo >/dev/null 2>&1 && [ -f "$app/$exe" ]; then archs=$(lipo -info "$app/$exe" 2>&1 | sed 's/.*: //'); fi
 
   ev artifact_kind ios-app; ev artifact_file "$(basename "$app")"
@@ -352,6 +469,7 @@ case "$cmd" in
         --signing) signing=${2:-}; case "$signing" in debug|unsigned) ;; *) die "--signing must be debug or unsigned" ;; esac; shift 2 ;;
         --evidence) evidence_out=${2:-}; [ -n "$evidence_out" ] || die "--evidence needs a path"; shift 2 ;;
         --debug-build) [ "$kind" = "apk" ] || die "--debug-build is only for apk"; DEBUG_BUILD=1; shift ;;
+        --min-sdk) [ "$kind" = "ios" ] || die "--min-sdk is only for ios"; MIN_SDK=${2:-}; case "$MIN_SDK" in ''|*[!0-9]*) die "--min-sdk needs a whole number" ;; esac; shift 2 ;;
         *) die "unknown option '$1'" ;;
       esac
     done
@@ -373,6 +491,7 @@ case "$cmd" in
       case "$1" in
         --signing) signing=${2:-debug}; shift 2 ;;
         --debug-build) [ "$kind" = "apk" ] || die "--debug-build is only for apk"; DEBUG_BUILD=1; shift ;;
+        --min-sdk) [ "$kind" = "ios" ] || die "--min-sdk is only for ios"; MIN_SDK=${2:-}; case "$MIN_SDK" in ''|*[!0-9]*) die "--min-sdk needs a whole number" ;; esac; shift 2 ;;
         *) die "unknown option '$1'" ;;
       esac
     done
@@ -381,6 +500,11 @@ case "$cmd" in
     echo "Self-test of the $kind verifier on $file"
     if quiet_run "$kind" "$env" "$file" "$signing"; then pass "accepts the artifact as $env"; else fail "does not accept the artifact as $env"; show_quiet_failure; fi
     if quiet_run "$kind" "$other" "$file" "$signing"; then fail "ACCEPTED the $env artifact as $other (must be rejected)"; else pass "rejects the $env artifact when claimed as $other"; fi
+    if [ "$kind" = "ios" ] && [ -n "$MIN_SDK" ]; then
+      want_sdk=$MIN_SDK; MIN_SDK=$((MIN_SDK + 1000))
+      if quiet_run "$kind" "$env" "$file" "$signing"; then fail "ACCEPTED an app built with an older SDK than the required minimum (must be rejected)"; else pass "rejects the app when a newer SDK than it was built with is required"; fi
+      MIN_SDK=$want_sdk
+    fi
     if [ "$kind" != "ios" ]; then
       if [ "$signing" = "debug" ]; then wrong=unsigned; else wrong=debug; fi
       if quiet_run "$kind" "$env" "$file" "$wrong"; then fail "ACCEPTED a $signing-signed artifact as $wrong (must be rejected)"; else pass "rejects a $signing-signed artifact claimed as $wrong"; fi

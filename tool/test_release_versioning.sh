@@ -228,11 +228,11 @@ mkev() {
     ios-*) cat >"$d/$v.toolchain" <<EOF
 runner_image=macos15 20260101.1
 runner_arch=arm64
-xcode=16.4 (16F6)
-iphoneos_sdk=18.5
+xcode=26.3 (17C529)
+iphoneos_sdk=26.2
 flutter=3.35.3 (revision a402d9a437)
 dart=3.9.2
-cocoapods=1.16.2
+cocoapods=1.17.0
 EOF
       ;;
     *) cat >"$d/$v.toolchain" <<EOF
@@ -569,10 +569,12 @@ t "workflow: every manifest is verified against the repository and its text evid
 t "workflow: the plan job runs this test before any build" has "$wft" 'run: tool/test_release_versioning.sh'
 t "workflow: the verdict verifies the manifests of the run together" has "$wft" 'tool/build_manifest.py verify-dir evidence --variants "$REQUIRED_VARIANTS" --repo .'
 t "workflow: the verdict still checks the exact evidence set first" has "$wft" 'tool/check_verdict.sh evidence evidence'
-t "workflow: only evidence is uploaded (two uploads)" eq "$(count "$wft" 'actions/upload-artifact@')" 2
-t "workflow: both uploads are the evidence directory" eq "$(grep -cE '^          path: evidence/$' <<<"$wft")" 2
+t "workflow: only text is uploaded (two evidence uploads and one iOS diagnostics upload)" eq "$(count "$wft" 'actions/upload-artifact@')" 3
+t "workflow: two uploads are the evidence directory" eq "$(grep -cE '^          path: evidence/$' <<<"$wft")" 2
+t "workflow: the third upload is the iOS diagnostics directory (text: build log, Podfile.lock diff)" eq "$(grep -cE '^          path: diagnostics/$' <<<"$wft")" 1
+t "workflow: the diagnostics artifact has its own name prefix, outside the verdict's evidence download" has "$wft" 'name: ios-diagnostics_${{ matrix.variant }}_a${{ github.run_attempt }}'
 t "workflow: no upload names a build output" lacksre "$wft" 'path:.*(build/|\.apk|\.aab|\.ipa|Runner\.app)'
-t "workflow: the evidence retention stays 14 days" eq "$(grep -cE '^          retention-days: 14$' <<<"$wft")" 2
+t "workflow: the retention of every upload stays 14 days" eq "$(grep -cE '^          retention-days: 14$' <<<"$wft")" 3
 t "workflow: no job writes pubspec.yaml" lacksre "$wft" '(sed -i|>>?|tee)[^|]*pubspec'
 t "workflow: no workflow passes a version override" lacksre "$(cat "$root"/.github/workflows/*.yml | grep -v '^[[:space:]]*#')" '(--build-name|--build-number)'
 t "workflow: the signing gate is not part of compile validation" lacks "$wft" 'build_manifest.py gate'

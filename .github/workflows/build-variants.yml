@@ -116,6 +116,14 @@ jobs:
       - name: Test the version policy and the build manifests
         run: tool/test_release_versioning.sh
 
+      # The iOS toolchain pins (both iOS workflows must agree), the deployment targets, the
+      # Mach-O reader and the built-app toolchain verification (Issue #70; no Xcode needed).
+      - name: Verify the iOS toolchain pins and deployment targets
+        run: tool/verify_ios_toolchain.sh
+
+      - name: Test the iOS toolchain checks
+        run: tool/test_ios_toolchain.sh
+
       - name: Plan
         id: plan
         env:
@@ -395,7 +403,8 @@ jobs:
     name: ${{ matrix.variant }}
     needs: [plan, static]
     if: ${{ needs.plan.outputs.has_ios == 'true' }}
-    # macos-15 is the arm64 image. Same pinned toolchain as the iOS CI validation build.
+    # macos-15 is the arm64 image. Same pinned toolchain as the iOS CI validation build
+    # (tool/verify_ios_toolchain.sh rejects any difference between the two).
     runs-on: macos-15
     timeout-minutes: 75
     strategy:
@@ -406,8 +415,13 @@ jobs:
       BUILD_ENV: ${{ matrix.env }}
       OTHER_ENV: ${{ matrix.other }}
       BUILD_CONFIG_FILE: config/build/${{ matrix.env }}.json
-      XCODE_APP: /Applications/Xcode_16.4.app
-      EXPECTED_XCODE: "16.4"
+      # Xcode 26.3 (iOS 26.2 SDK), selected explicitly: App Store Connect uploads need Xcode 26
+      # and an iOS 26 SDK or later (Issue #70). The built app must record such an SDK itself.
+      XCODE_APP: /Applications/Xcode_26.3.app
+      EXPECTED_XCODE: "26.3"
+      EXPECTED_MIN_SDK_MAJOR: "26"
+      # The CocoaPods the macos-15 image provides (recorded; Podfile.lock was written by 1.16.2).
+      EXPECTED_COCOAPODS: "1.17.0"
       EXPECTED_FLUTTER: "3.35.3"
       EXPECTED_FLUTTER_REVISION: a402d9a437
       EXPECTED_DART: "3.9.2"
@@ -420,7 +434,7 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Select Xcode 16.4
+      - name: Select Xcode 26.3
         run: |
           sudo xcode-select -s "$XCODE_APP/Contents/Developer"
           xcodebuild -version
@@ -440,6 +454,8 @@ jobs:
       - name: Record and verify toolchain
         run: |
           arch="$(uname -m)"
+          iphoneos_sdk="$(xcrun --sdk iphoneos --show-sdk-version)"
+          pod_version="$(pod --version)"
           flutter_json="$(flutter --version --machine)"
           field() { printf '%s' "$flutter_json" | python3 -I -c "import sys,json; print(json.load(sys.stdin).get('$1',''))"; }
           flutter_version="$(field frameworkVersion)"
@@ -449,10 +465,10 @@ jobs:
             echo "runner_image=${ImageOS:-unknown} ${ImageVersion:-unknown}"
             echo "runner_arch=${arch}"
             echo "xcode=$(xcodebuild -version | sed -n '1s/^Xcode //p') ($(xcodebuild -version | sed -n '2s/^Build version //p'))"
-            echo "iphoneos_sdk=$(xcrun --sdk iphoneos --show-sdk-version)"
+            echo "iphoneos_sdk=${iphoneos_sdk}"
             echo "flutter=${flutter_version} (revision ${flutter_revision:0:10})"
             echo "dart=${dart_version}"
-            echo "cocoapods=$(pod --version)"
+            echo "cocoapods=${pod_version}"
           } > "$RUNNER_TEMP/toolchain.txt"
           cat "$RUNNER_TEMP/toolchain.txt"
           fail=0
@@ -463,6 +479,11 @@ jobs:
             *) echo "::error::Flutter revision is '$flutter_revision', expected $EXPECTED_FLUTTER_REVISION*."; fail=1 ;;
           esac
           if [ "$dart_version" != "$EXPECTED_DART" ]; then echo "::error::Dart is '$dart_version', expected $EXPECTED_DART."; fail=1; fi
+          case "${iphoneos_sdk%%.*}" in
+            ''|*[!0-9]*) echo "::error::Cannot read the iPhoneOS SDK version (got '$iphoneos_sdk')."; fail=1 ;;
+            *) if [ "${iphoneos_sdk%%.*}" -lt "$EXPECTED_MIN_SDK_MAJOR" ]; then echo "::error::Expected an iPhoneOS SDK $EXPECTED_MIN_SDK_MAJOR or later but Xcode $EXPECTED_XCODE provides $iphoneos_sdk."; fail=1; fi ;;
+          esac
+          if [ "$pod_version" != "$EXPECTED_COCOAPODS" ]; then echo "::error::CocoaPods is '$pod_version', expected $EXPECTED_COCOAPODS."; fail=1; fi
           [ "$fail" -eq 0 ] || exit 1
 
       - name: Resolve dependencies
@@ -485,6 +506,9 @@ jobs:
         run: |
           sha="$(shasum -a 256 "$RUST_LIB" | awk '{print $1}')"
           echo "rust_lib_sha256=$sha"
+          build_versions="$(python3 -I tool/macho_info.py "$RUST_LIB" | tr '\n' ';')"
+          echo "rust_lib_build_versions=$build_versions"
+          echo "RUST_LIB_BUILD_VERSIONS=$build_versions" >> "$GITHUB_ENV"
           if [ "$sha" != "$EXPECTED_RUST_LIB_SHA256" ]; then
             echo "::error::$RUST_LIB changed (sha256 $sha, audited $EXPECTED_RUST_LIB_SHA256). Re-review it, then update EXPECTED_RUST_LIB_SHA256."
             exit 1
@@ -505,8 +529,13 @@ jobs:
           echo "::notice title=rejected as required::iOS build without --flavor"
 
       # Flutter runs `pod install` itself. No signing: CODE_SIGNING_ALLOWED=NO.
+      # The output is also kept (text only, in the diagnostics artifact) so that a compiler or
+      # CocoaPods failure under the new toolchain can be read and reported exactly.
       - name: Build (${{ matrix.variant }})
-        run: flutter build ios --release --no-codesign --flavor "$BUILD_ENV" --dart-define-from-file="$BUILD_CONFIG_FILE"
+        run: |
+          set -o pipefail
+          mkdir -p diagnostics
+          flutter build ios --release --no-codesign --flavor "$BUILD_ENV" --dart-define-from-file="$BUILD_CONFIG_FILE" 2>&1 | tee diagnostics/build.log
 
       - name: Locate the built app
         run: |
@@ -524,8 +553,8 @@ jobs:
 
       - name: Verify the built app (bundle ID, name, version, unsigned, environment)
         run: |
-          /bin/bash tool/verify_artifact.sh selftest ios "$BUILD_ENV" "$APP_PATH"
-          /bin/bash tool/verify_artifact.sh ios "$BUILD_ENV" "$APP_PATH" --evidence "$RUNNER_TEMP/artifact-evidence.txt"
+          /bin/bash tool/verify_artifact.sh selftest ios "$BUILD_ENV" "$APP_PATH" --min-sdk "$EXPECTED_MIN_SDK_MAJOR"
+          /bin/bash tool/verify_artifact.sh ios "$BUILD_ENV" "$APP_PATH" --min-sdk "$EXPECTED_MIN_SDK_MAJOR" --evidence "$RUNNER_TEMP/artifact-evidence.txt"
 
       # The build may rewrite ios/Podfile.lock (CocoaPods): that drift must stay VISIBLE and is
       # not hidden or committed here. Any other tracked file changing is an error.
@@ -577,6 +606,7 @@ jobs:
             echo "run=$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID (attempt $GITHUB_RUN_ATTEMPT)"
             echo "podfile_lock_drift=${PODFILE_LOCK_DRIFT:-unknown}"
             echo "rust_lib_sha256=$EXPECTED_RUST_LIB_SHA256"
+            echo "rust_lib_build_versions=${RUST_LIB_BUILD_VERSIONS:-unknown}"
             sed 's/^/toolchain./' "$RUNNER_TEMP/toolchain.txt"
             cat "$RUNNER_TEMP/artifact-evidence.txt"
           } > "evidence/$BUILD_VARIANT.txt"
@@ -600,6 +630,34 @@ jobs:
           name: build-evidence_${{ matrix.variant }}_a${{ github.run_attempt }}
           path: evidence/
           if-no-files-found: error
+          retention-days: 14
+
+      # Diagnostics for the Podfile.lock drift investigation and for build failures (Issue #70):
+      # the build output, the CocoaPods version, the Podfile.lock diff and the regenerated lock.
+      # Text only; runs even when the build failed; changes nothing.
+      - name: Collect diagnostics (text only)
+        if: ${{ always() }}
+        run: |
+          mkdir -p diagnostics
+          {
+            echo "cocoapods=$(pod --version 2>&1 || true)"
+            echo "ruby=$(ruby -v 2>&1 | awk '{print $2}' || true)"
+            echo "podfile_lock_committed_sha256=$(git show HEAD:ios/Podfile.lock 2>/dev/null | shasum -a 256 | awk '{print $1}' || true)"
+            echo "podfile_lock_current_sha256=$(shasum -a 256 ios/Podfile.lock 2>/dev/null | awk '{print $1}' || true)"
+          } > diagnostics/pods.txt
+          cat diagnostics/pods.txt
+          git diff -- ios/Podfile.lock > diagnostics/Podfile.lock.diff 2>/dev/null || true
+          cp ios/Podfile.lock diagnostics/Podfile.lock.generated 2>/dev/null || true
+          ls -l diagnostics
+
+      # A different artifact prefix keeps the diagnostics out of the verdict job's evidence download.
+      - name: Upload diagnostics (text only)
+        if: ${{ always() }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: ios-diagnostics_${{ matrix.variant }}_a${{ github.run_attempt }}
+          path: diagnostics/
+          if-no-files-found: ignore
           retention-days: 14
 
   # ---------------------------------------------------------------------------------------

@@ -38,8 +38,15 @@ env:
   BUILD_FLAVOR: staging
   # Toolchain this workflow requires. The build fails if the runner does not
   # provide exactly these; the actual versions are recorded in the artifact notice.
-  XCODE_APP: /Applications/Xcode_16.4.app
-  EXPECTED_XCODE: "16.4"
+  # Xcode 26.3 (iOS 26.2 SDK) is selected explicitly on the macos-15 image: App Store Connect
+  # uploads need Xcode 26 and an iOS 26 SDK or later (since 2026-04-28, Issue #70). The same
+  # values are pinned in build-variants.yml; tool/verify_ios_toolchain.sh rejects any difference.
+  XCODE_APP: /Applications/Xcode_26.3.app
+  EXPECTED_XCODE: "26.3"
+  # The built app must itself record an iOS SDK of at least this major version.
+  EXPECTED_MIN_SDK_MAJOR: "26"
+  # The CocoaPods the macos-15 image provides (recorded; Podfile.lock was written by 1.16.2).
+  EXPECTED_COCOAPODS: "1.17.0"
   EXPECTED_FLUTTER: "3.35.3"
   EXPECTED_FLUTTER_REVISION: a402d9a437
   EXPECTED_DART: "3.9.2"
@@ -61,7 +68,7 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Select Xcode 16.4
+      - name: Select Xcode 26.3
         run: |
           sudo xcode-select -s "$XCODE_APP/Contents/Developer"
           xcodebuild -version
@@ -83,6 +90,8 @@ jobs:
         run: |
           info="$RUNNER_TEMP/toolchain.txt"
           arch="$(uname -m)"
+          iphoneos_sdk="$(xcrun --sdk iphoneos --show-sdk-version)"
+          pod_version="$(pod --version)"
           flutter_json="$(flutter --version --machine)"
           field() { printf '%s' "$flutter_json" | python3 -I -c "import sys,json; print(json.load(sys.stdin).get('$1',''))"; }
           flutter_version="$(field frameworkVersion)"
@@ -94,10 +103,10 @@ jobs:
             echo "runner_arch=${arch}"
             echo "runner_image=${ImageOS:-unknown} ${ImageVersion:-unknown}"
             echo "xcode=$(xcodebuild -version | sed -n '1s/^Xcode //p') ($(xcodebuild -version | sed -n '2s/^Build version //p'))"
-            echo "iphoneos_sdk=$(xcrun --sdk iphoneos --show-sdk-version)"
+            echo "iphoneos_sdk=${iphoneos_sdk}"
             echo "flutter=${flutter_version} (revision ${flutter_revision:0:10})"
             echo "dart=${dart_version}"
-            echo "cocoapods=$(pod --version)"
+            echo "cocoapods=${pod_version}"
             echo "ruby=$(ruby -v | awk '{print $2}')"
           } > "$info"
           cat "$info"
@@ -110,6 +119,11 @@ jobs:
             *) echo "::error::Flutter revision is '$flutter_revision', expected $EXPECTED_FLUTTER_REVISION*."; fail=1 ;;
           esac
           if [ "$dart_version" != "$EXPECTED_DART" ]; then echo "::error::Dart is '$dart_version', expected $EXPECTED_DART."; fail=1; fi
+          case "${iphoneos_sdk%%.*}" in
+            ''|*[!0-9]*) echo "::error::Cannot read the iPhoneOS SDK version (got '$iphoneos_sdk')."; fail=1 ;;
+            *) if [ "${iphoneos_sdk%%.*}" -lt "$EXPECTED_MIN_SDK_MAJOR" ]; then echo "::error::Expected an iPhoneOS SDK $EXPECTED_MIN_SDK_MAJOR or later but Xcode $EXPECTED_XCODE provides $iphoneos_sdk."; fail=1; fi ;;
+          esac
+          if [ "$pod_version" != "$EXPECTED_COCOAPODS" ]; then echo "::error::CocoaPods is '$pod_version', expected $EXPECTED_COCOAPODS."; fail=1; fi
           [ "$fail" -eq 0 ] || exit 1
 
       - name: Resolve dependencies
@@ -158,11 +172,13 @@ jobs:
           sha="$(shasum -a 256 "$RUST_LIB" | awk '{print $1}')"
           size="$(stat -f%z "$RUST_LIB")"
           archs="$(lipo -info "$RUST_LIB" 2>&1)"
+          build_versions="$(python3 -I tool/macho_info.py "$RUST_LIB" | tr '\n' ';')"
           {
             echo "rust_lib_path=${RUST_LIB}"
             echo "rust_lib_sha256=${sha}"
             echo "rust_lib_bytes=${size}"
             echo "rust_lib_lipo=${archs}"
+            echo "rust_lib_build_versions=${build_versions}"
           } > "$RUNNER_TEMP/rust-lib.txt"
           cat "$RUNNER_TEMP/rust-lib.txt"
           if [ "$sha" != "$EXPECTED_RUST_LIB_SHA256" ]; then
@@ -233,7 +249,7 @@ jobs:
         run: |
           app="$(cat "$RUNNER_TEMP/app-path.txt")"
           expected="$(sed -n 's/^APP_ENV=//p' "$RUNNER_TEMP/resolved-build-config.txt" | head -n1)"
-          /bin/bash tool/verify_artifact.sh ios "$expected" "$app" --evidence "$RUNNER_TEMP/ios-evidence.txt"
+          /bin/bash tool/verify_artifact.sh ios "$expected" "$app" --min-sdk "$EXPECTED_MIN_SDK_MAJOR" --evidence "$RUNNER_TEMP/ios-evidence.txt"
 
       - name: Prepare labelled artifact
         id: prep
@@ -316,6 +332,9 @@ jobs:
             echo
             echo "Built app:"
             sed 's/^/  /' "$RUNNER_TEMP/app-info.txt"
+            echo
+            echo "Toolchain recorded by the built app itself (Info.plist and Mach-O; Issue #70):"
+            grep -E '^(built_|minimum_os_version|executable_(platform|minos|sdk)|deployment_target_conflicts|framework\.)' "$RUNNER_TEMP/ios-evidence.txt" | sed 's/^/  /'
             echo
             echo "App version : ${version} (unchanged from pubspec.yaml)"
             echo "Commit SHA  : ${GITHUB_SHA}"
