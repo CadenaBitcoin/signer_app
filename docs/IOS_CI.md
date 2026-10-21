@@ -145,7 +145,7 @@ an iOS version, no simulator or device ran any code, and no signing, provisionin
 was exercised. In particular, a green run says nothing about which iOS versions the app really
 runs on (see the requirement below), about the behaviour of the Rust library on any iOS version,
 or about the backend, Sumsub or Fingerprint Pro working with this bundle. Those need their own
-tests on devices, as part of the distribution approval (Issue #71 and later).
+tests on devices, which controlled signed testing makes possible (Issue #71 and later).
 
 ### Deployment targets: what each value governs
 
@@ -191,9 +191,13 @@ of most of its objects and is not a target (see below).
 
 #### Release-compatibility requirement (open; recorded by Issue #70, accepted 2026-10-21)
 
-The values below are recorded as a requirement that **must be met before any build is approved for
-distribution** (TestFlight, App Store or any other). Issue #70 does not meet it and changes none of
-the values.
+The values below are recorded as a requirement that **must be met, as verified runtime
+compatibility, before a production release is approved**. It does **not** block the controlled,
+signed testing that is needed to establish that compatibility: the restricted TestFlight delivery
+to authorized testers ([RELEASE_POLICY.md](RELEASE_POLICY.md) section 8.1) stays possible, and is
+the way the tests below are expected to be run. (Producing signed builds is Issue #71 and needs
+its own authorization; this requirement does not substitute for it.) Issue #70 does not meet the
+requirement and changes none of the values.
 
 | Component | Minimum iOS it records |
 |---|---|
@@ -204,8 +208,9 @@ the values.
 1. **The effective minimum supported iOS version must be established** (a product decision that
    names one value and makes the app, the Podfile platform and the frameworks agree with it), **and
    tested on real iOS versions at and near that minimum** (installation, launch, and the paths that use
-   the five frameworks and the Rust library) before a distribution build is approved. Until then the
-   advertised 14.0 is not a verified claim.
+   the five frameworks and the Rust library) **before a production release is approved**. Until then
+   the advertised 14.0 is not a verified claim, and results from controlled signed test builds are the
+   evidence that establishes it.
 2. The eight 18.5 objects need an answer from the owner of the Rust library: whether the code in
    them uses anything that exists only on newer iOS. The loader enforces the minimum of the
    framework (15.5), not of those objects, so the evidence cannot answer it.
@@ -352,8 +357,9 @@ repeat the environment.
 - **Deployment targets** differ by purpose and are an **unresolved discrepancy**: the app
   declares iOS 14.0, five frameworks are built for 15.5 and eight Rust C objects for 18.5 (see
   "Deployment targets"). Measured on every build, intentionally not changed. Establishing and
-  testing the effective minimum iOS version is a **release-compatibility requirement that blocks
-  distribution approval** (see "Release-compatibility requirement").
+  testing the effective minimum iOS version is a **release-compatibility requirement that must be met,
+  as verified runtime compatibility, before a production release is approved**; it does not block
+  controlled signed testing (see "Release-compatibility requirement").
 - **Compile and link validation is not runtime compatibility** (see "What a green run shows").
 - **Xcode 26.3 is pinned** and must remain on the `macos-15` image. Flutter 3.35.3 with
   Xcode 26 has no compatibility statement from Flutter, but it built on the hosted runs

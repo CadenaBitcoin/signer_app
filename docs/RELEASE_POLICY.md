@@ -508,9 +508,12 @@ without a record, or from a commit that was not approved, is not official.
 10. **Independent builds and branding:** whether forks must change name and ID.
 11. **Support policy:** `SECURITY.md` still defers it; it should state that only
     the latest official release is supported.
-12. **Minimum supported iOS version (blocks distribution approval).** The app declares iOS
+12. **Minimum supported iOS version (production release approval requires verified runtime
+    compatibility).** The app declares iOS
     14.0, five embedded frameworks are built for 15.5 and eight secp256k1 objects of the Rust
     library for 18.5 ([IOS_CI.md](IOS_CI.md#release-compatibility-requirement-open-recorded-by-issue-70-accepted-2026-10-21)).
-    The effective minimum must be decided and tested on real iOS versions before any iOS
-    distribution build is approved. The Rust library is not replaced or modified without
-    separate authorization. Green compile and link runs do not satisfy this.
+    The effective minimum must be decided and **tested on real iOS versions before a production
+    release is approved**. The controlled, signed testing that establishes this (the restricted
+    TestFlight delivery of 8.1, to authorized testers) is not blocked by it. The Rust library is not
+    replaced or modified without separate authorization. Green compile and link runs do not satisfy
+    this.
