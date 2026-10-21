@@ -19,7 +19,7 @@
 | iOS uses Automatic signing with a committed `DEVELOPMENT_TEAM` (`D65458CPDP`, an identifier, not a secret); CI builds are `--no-codesign` | `ios/Runner.xcodeproj`, [IOS_CI.md](IOS_CI.md) |
 | Android and iOS both use `com.app.cadenabitcoin`; there is **no staging identity yet** | Gradle, Xcode project |
 | The signing identities of the already released app are undocumented | `GOVERNANCE.md` |
-| The iOS CI toolchain is Xcode 16.4; App Store Connect uploads require Xcode 26 and the iOS 26 SDK since 2026-04-28 | [IOS_CI.md](IOS_CI.md); [Apple](https://developer.apple.com/news/upcoming-requirements/) |
+| The iOS CI toolchain is Xcode 26.3 with an iOS 26 SDK (Issue #70; status in [IOS_CI.md](IOS_CI.md)); App Store Connect uploads require Xcode 26 and the iOS 26 SDK since 2026-04-28 | [IOS_CI.md](IOS_CI.md); [Apple](https://developer.apple.com/news/upcoming-requirements/) |
 | No GitHub environments, releases or tags; no `production` branch | GitHub, checked 2026-10-12 |
 | Validation workflows: `contents: read`, no secrets, SHA-pinned actions | [ANDROID_CI.md](ANDROID_CI.md), [IOS_CI.md](IOS_CI.md) |
 
