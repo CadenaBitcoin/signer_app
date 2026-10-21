@@ -481,7 +481,7 @@ without a record, or from a commit that was not approved, is not official.
 | Tags, GitHub Releases | None |
 | Separate staging application ID / bundle ID / App Store Connect record | **None**; both CI validation builds use `com.app.cadenabitcoin` |
 | Build-time configuration | Unfinished (Issue #57 B1, local branch only); committed constants are production |
-| iOS toolchain | Xcode 26.3 on `macos-15` with an iOS 26 SDK, pinned by Issue #70 (verification status: [IOS_CI.md](IOS_CI.md)). App Store Connect uploads have required Xcode 26 and the iOS 26 SDK since 2026-04-28 ([Apple](https://developer.apple.com/news/upcoming-requirements/)) |
+| iOS toolchain | Xcode 26.3 on `macos-15` with an iOS 26 SDK, pinned by Issue #70 (accepted hosted runs: [IOS_CI.md](IOS_CI.md#verification-status); compile and link only). App Store Connect uploads have required Xcode 26 and the iOS 26 SDK since 2026-04-28 ([Apple](https://developer.apple.com/news/upcoming-requirements/)) |
 | `tool/verify_version.sh` | Exists (this issue), read-only |
 
 ## 11. Open decisions
@@ -508,3 +508,9 @@ without a record, or from a commit that was not approved, is not official.
 10. **Independent builds and branding:** whether forks must change name and ID.
 11. **Support policy:** `SECURITY.md` still defers it; it should state that only
     the latest official release is supported.
+12. **Minimum supported iOS version (blocks distribution approval).** The app declares iOS
+    14.0, five embedded frameworks are built for 15.5 and eight secp256k1 objects of the Rust
+    library for 18.5 ([IOS_CI.md](IOS_CI.md#release-compatibility-requirement-open-recorded-by-issue-70-accepted-2026-10-21)).
+    The effective minimum must be decided and tested on real iOS versions before any iOS
+    distribution build is approved. The Rust library is not replaced or modified without
+    separate authorization. Green compile and link runs do not satisfy this.

@@ -135,6 +135,18 @@ proves the SDK check can fail (a newer required SDK is rejected). `tool/macho_in
 needs no Xcode tools and is tested on synthetic binaries (`tool/test_ios_toolchain.sh`).
 These are facts the binary states about itself: recorded evidence, not authentication.
 
+### What a green run shows, and what it does not
+
+A green run is **compile and link validation**. It shows that, on the pinned toolchain, the
+sources build and link into an unsigned `Runner.app` that records the iOS 26 SDK, the expected
+bundle identity and environment, and an unchanged `ios/Podfile.lock`. It does **not** show
+**runtime compatibility**: nothing launched the app, no loader (`dyld`) checked a framework against
+an iOS version, no simulator or device ran any code, and no signing, provisioning or entitlement
+was exercised. In particular, a green run says nothing about which iOS versions the app really
+runs on (see the requirement below), about the behaviour of the Rust library on any iOS version,
+or about the backend, Sumsub or Fingerprint Pro working with this bundle. Those need their own
+tests on devices, as part of the distribution approval (Issue #71 and later).
+
 ### Deployment targets: what each value governs
 
 Four values existed and none is wrong by itself; they govern different things.
@@ -176,6 +188,34 @@ owner of the library. Resolving the first needs a product decision: raise the pr
 15.5, or lower the Podfile platform (then the five inherit it, and each would have to build
 at the new value). Neither is done here. The Rust library's own minimum (10.0) is only a floor
 of most of its objects and is not a target (see below).
+
+#### Release-compatibility requirement (open; recorded by Issue #70, accepted 2026-10-21)
+
+The values below are recorded as a requirement that **must be met before any build is approved for
+distribution** (TestFlight, App Store or any other). Issue #70 does not meet it and changes none of
+the values.
+
+| Component | Minimum iOS it records |
+|---|---|
+| Application (`Runner`, `MinimumOSVersion`) | **14.0** |
+| Five embedded frameworks (`dlc_wallet`, `flutter_local_notifications`, `flutter_secure_storage`, `fluttertoast`, `mobile_scanner`) | **15.5** |
+| Eight secp256k1 C objects inside the Rust library (linked into `dlc_wallet.framework`) | **18.5** |
+
+1. **The effective minimum supported iOS version must be established** (a product decision that
+   names one value and makes the app, the Podfile platform and the frameworks agree with it), **and
+   tested on real iOS versions at and near that minimum** (installation, launch, and the paths that use
+   the five frameworks and the Rust library) before a distribution build is approved. Until then the
+   advertised 14.0 is not a verified claim.
+2. The eight 18.5 objects need an answer from the owner of the Rust library: whether the code in
+   them uses anything that exists only on newer iOS. The loader enforces the minimum of the
+   framework (15.5), not of those objects, so the evidence cannot answer it.
+3. **The existing Rust library must not be replaced or modified without separate
+   authorization.** Rebuilding it to lower the 18.5 is such a change and is not part of #70.
+4. Raising the project target to 15.5, or lowering the Podfile platform, are the two ways to remove the
+   discrepancy between the app and its frameworks. Both change a declared minimum and need the
+   same decision as item 1.
+
+Compile and link success (see "What a green run shows") does not satisfy this requirement.
 
 ### `ios/Podfile.lock` drift
 
@@ -311,7 +351,10 @@ repeat the environment.
   the backend has not been exercised (it cannot be installed anyway).
 - **Deployment targets** differ by purpose and are an **unresolved discrepancy**: the app
   declares iOS 14.0, five frameworks are built for 15.5 and eight Rust C objects for 18.5 (see
-  "Deployment targets"). Measured on every build, intentionally not changed.
+  "Deployment targets"). Measured on every build, intentionally not changed. Establishing and
+  testing the effective minimum iOS version is a **release-compatibility requirement that blocks
+  distribution approval** (see "Release-compatibility requirement").
+- **Compile and link validation is not runtime compatibility** (see "What a green run shows").
 - **Xcode 26.3 is pinned** and must remain on the `macos-15` image. Flutter 3.35.3 with
   Xcode 26 has no compatibility statement from Flutter, but it built on the hosted runs
   listed under "Verification status".
@@ -328,9 +371,32 @@ repeat the environment.
 
 ## Verification status
 
-Hosted runs of commit `cbe1e6b08c5d0394418e334d6a6e83f3b6d60fad` (branch
-`issue/70-ios-release-toolchain`, 2026-10-21, `macos15` image 20260907.0337.1, Xcode 26.3
-(17C529), iPhoneOS SDK 26.2, Flutter 3.35.3, CocoaPods 1.17.0, Ruby 3.3.12):
+### Acceptance runs (Issue #70, accepted 2026-10-21)
+
+Hosted runs of commit `f299fdb4bfaf5fd1521a1038d97dec8fc66d18ee` (branch
+`issue/70-ios-release-toolchain`, `workflow_dispatch`, 2026-10-21; Xcode 26.3, iPhoneOS SDK 26.2,
+Flutter 3.35.3, CocoaPods 1.17.0, Ruby 3.3.12 on `macos-15`). This commit carries the regenerated
+`ios/Podfile.lock` and the strict `tool/check_build_drift.sh`.
+
+| Run | Workflow | Result |
+|---|---|---|
+| [39597753070](https://github.com/CadenaBitcoin/signer_app/actions/runs/39597753070) | `build-variants`, `ios-staging` | success; "Verify the built app" and "No tracked file may be changed by the build (ios/Podfile.lock drift fails)" both passed |
+| [39599011459](https://github.com/CadenaBitcoin/signer_app/actions/runs/39599011459) | `build-variants`, `ios-production` | success; the same two steps passed |
+| [39608182641](https://github.com/CadenaBitcoin/signer_app/actions/runs/39608182641) | `ios-ci-validation` | success; the same two steps passed (unsigned staging `Runner.app`) |
+
+What they establish: the application compiles and links with Xcode 26.3 and the iPhoneOS 26.2
+SDK, the built-app check (which requires an SDK of at least 26) passes for both iOS variants and
+the validation build, and **no tracked file was modified by any of the three builds**, so the
+committed `ios/Podfile.lock` is exactly what the pinned runner produces. Compile and link only; see
+"What a green run shows, and what it does not". The deployment-target values in the tables above
+were measured at the earlier commit below; nothing that sets them (`ios/Podfile`, the Xcode project,
+any podspec or dependency) changed between the two commits, and the minimum-iOS requirement
+remains open.
+
+### Earlier runs (before the lock update and the strict drift check)
+
+Hosted runs of commit `cbe1e6b08c5d0394418e334d6a6e83f3b6d60fad` (same branch and image, `macos15`
+image 20260907.0337.1, Xcode 26.3 (17C529), CocoaPods 1.17.0, Ruby 3.3.12):
 
 | Run | Workflow | Result |
 |---|---|---|
@@ -343,9 +409,5 @@ Facts read from the evidence of the production run and the validation notice: th
 `23C57`, Xcode `2630`/`17C529`; the right environment and identity per variant; 5 deployment-target
 conflicts (listed above); the Rust library's SHA-256 unchanged. Flutter 3.35.3, Sumsub
 (`IdensicMobileSDK` 1.42.0) and `FingerprintPro` 2.14.0 compiled and linked under Xcode 26.3, and the
-unsigned build records the `DT*` keys and `MinimumOSVersion`. Those runs predate the lock update and the
-strict drift check: they reported the lock drift as a warning.
-
-**Still to be shown on a hosted run:** that the regenerated `ios/Podfile.lock` and the strict
-`tool/check_build_drift.sh` pass on the runner for both iOS variants and the validation workflow
-(the next runs of this branch).
+unsigned build records the `DT*` keys and `MinimumOSVersion`. Those runs reported the lock drift as a
+warning, which led to the lock update and the strict check accepted above.
