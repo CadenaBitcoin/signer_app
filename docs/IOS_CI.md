@@ -42,7 +42,7 @@ material. All actions are pinned by commit SHA.
 | iPhoneOS SDK | 26.x (Xcode 26.3 provides 26.2); at least **26** is required |
 | Flutter | 3.35.3 stable (arm64 SDK, revision `a402d9a437`), Dart 3.9.2 |
 | CocoaPods | 1.17.0 (the version of the `macos-15` image; asserted, not installed) |
-| Ruby | whatever the runner image provides (recorded, not pinned) |
+| Ruby | 3.3.12 on the image (recorded, not pinned; its `json` gem 2.7.2 decides the plugin checksums in `Podfile.lock`, see "`ios/Podfile.lock` drift") |
 
 The workflow **fails** unless the runner is arm64, Xcode is 26.3, the iPhoneOS SDK is
 26 or later, CocoaPods is 1.17.0, and Flutter and Dart are the versions above. The
@@ -92,6 +92,8 @@ tested by `tool/test_ios_toolchain.sh`) fails if the two workflows differ.
    so no certificate or profile is needed. The `staging` flavor is the Xcode scheme
    `staging` with the configurations `Debug|Profile|Release-staging`: bundle ID
    `com.app.cadenabitcoin.staging`, display name "Cadena Signer STAGING".
+   Right after it, `tool/check_build_drift.sh` **fails the job if the build changed any tracked
+   file**, in particular if CocoaPods rewrote `ios/Podfile.lock` (see "`ios/Podfile.lock` drift").
 9. Locate `Runner.app`, check its executable is arm64, and read its bundle
    identifier and version.
 10. Check the compiled Dart snapshot (`Frameworks/App.framework/App`): it must contain
@@ -142,40 +144,102 @@ Apple's iOS 13 floor.
 | Value | File | Governs |
 |---|---|---|
 | **14.0** | `Runner.xcodeproj` (`IPHONEOS_DEPLOYMENT_TARGET`, identical in all 6 configurations, no override on the Runner target) | the **Runner app**: its executable's minimum OS and `MinimumOSVersion` |
-| **15.5** | `ios/Podfile` (`platform :ios, '15.5'`) | the **Pods project**: every pod compiled into a framework |
+| **15.5** | `ios/Podfile` (`platform :ios, '15.5'`) | the **Pods project**; a pod whose podspec declares a minimum below iOS 13 inherits it (Flutter's `podhelper.rb`: `flutter_additional_ios_build_settings`), pods that declare 13.0 or higher keep their own |
 | 13.0 | `ios/Flutter/AppFrameworkInfo.plist` | `MinimumOSVersion` in the Info.plist of `App.framework` (the compiled Dart code) |
 | 12.0 | `dlc_wallet.podspec` (`s.platform`) | the lowest iOS the plugin declares it supports; a floor, not a target |
 
-Effective result: the app declares iOS **14.0** (`MinimumOSVersion`), but the pods are
-built for **15.5**, so an installed copy needs iOS 15.5 to load those frameworks. This has
-**not been changed** (a deployment target is a product decision, not a toolchain one); it
-is measured on every build (`deployment_target_conflicts`, a WARN line) so that the
-difference is visible and cannot grow unnoticed. Resolve it, if wanted, in a separate
-decision by raising the project target to the Podfile's value or by lowering the Podfile
-platform. The Rust library's own minimum (10.0) is only a floor of its objects and is
-not a target (next section).
+Effective result: the app declares iOS **14.0** (`MinimumOSVersion`), but five of its own
+frameworks need more. **This is an unresolved discrepancy and has not been changed** (a
+deployment target is a product decision, not a toolchain one; nothing edits the declared
+minimum automatically). It is measured on every build (`deployment_target_conflicts`, a WARN
+line) so that it is visible and cannot grow unnoticed.
+
+Measured on the hosted builds at commit `cbe1e6b` (runs 39586225426 production and 39587627313
+staging validation; `framework.*` in the evidence):
+
+| Binary | Minimum OS it records | Why |
+|---|---|---|
+| `Runner` (the app) | **14.0** | Xcode project |
+| `dlc_wallet`, `flutter_local_notifications`, `flutter_secure_storage`, `fluttertoast`, `mobile_scanner` | **15.5** (the 5 conflicts) | their podspecs declare a minimum below iOS 13 (12.0, 11.0, 9.0, none, 12.0), so they inherit the Podfile platform |
+| `workmanager_apple` | 14.0 | its podspec |
+| `App`, `Flutter`, `flutter_idensic_mobile_sdk_plugin`, `path_provider_foundation`, `shared_preferences_foundation`, `FingerprintPro`, `IdensicMobileSDK_Fisherman` | 13.0 | their own podspecs or binaries |
+| `IdensicMobileSDK` | 12.0 | prebuilt binary |
+| the **eight secp256k1 C objects** inside the Rust library (linked into `dlc_wallet.framework`) | **18.5** (SDK 18.5) | built with the build machine's default target; the other 450 objects say 10.0 |
+
+What this means, stated as the facts the evidence supports and no more: the app advertises iOS
+14.0, but a copy installed on iOS 14.0 to 15.4 is expected to be refused by the loader (dyld
+checks each image's minimum OS) because five embedded frameworks are built for 15.5. That has not been
+tried on a device. The eight Rust objects are linked into a framework
+that records 15.5, so the loader does not enforce their own 18.5; whether those C objects
+use anything that exists only on newer iOS is **not known** and is a question for the
+owner of the library. Resolving the first needs a product decision: raise the project target to
+15.5, or lower the Podfile platform (then the five inherit it, and each would have to build
+at the new value). Neither is done here. The Rust library's own minimum (10.0) is only a floor
+of most of its objects and is not a target (see below).
 
 ### `ios/Podfile.lock` drift
 
-The hosted iOS builds inspected (runs 39264546620 and 39298431155) report `ios/Podfile.lock drift`
-(CocoaPods rewrites the file). The build does not hide it and does not commit it. Findings so far:
+**Resolved (Issue #70); drift now fails the build.** The hosted iOS builds reported
+`ios/Podfile.lock drift` (CocoaPods rewrote the file). The production run 39586225426 uploaded
+the exact diff and the regenerated lock; the analysis below was done from them and from an
+independent local recomputation.
 
-- The committed lock's contents were last generated by CocoaPods **1.16.2** (commit `6385bc2`,
-  2026-09-21), before the
-  reproducible dependency baseline (`pubspec.lock`, Issue #40, 2026-10-05), so its
-  `SPEC CHECKSUMS` describe plugin versions that may differ from today's locked versions.
-  Later commits changed only the `PODFILE CHECKSUM` line (#65).
-- The runner image provides CocoaPods **1.17.0**, which may rewrite the `COCOAPODS:` line.
-  Whether the rewrite also changes checksums or versions is **not yet known**: job logs need
-  authentication, and the lock cannot be regenerated on Linux.
-- Every `build-variants` iOS job now uploads, also when the build fails, the artifact
-  `ios-diagnostics_<variant>_a<attempt>` (text only, 14 days, a different prefix from the
-  `build-evidence_*` artifacts so that the verdict never sees it): `build.log` (the output of
-  `flutter build ios`, for reading an exact compiler or CocoaPods failure), `pods.txt` (CocoaPods
-  and Ruby versions, the lock's checksum before and after), `Podfile.lock.diff` and
-  `Podfile.lock.generated`. That is the evidence for the disposition, which needs a reviewed
-  decision: commit the regenerated lock (the exact change is reviewed first), or pin the
-  CocoaPods version used to produce it. Until then the drift stays a warning.
+**What changed** (9 `SPEC CHECKSUMS` lines and the `COCOAPODS:` line; nothing else):
+
+| Pod | Committed (CocoaPods 1.16.2) | Generated on the runner (1.17.0) |
+|---|---|---|
+| `dlc_wallet` | `3de40703…` | `a27b2e65…` |
+| `flutter_idensic_mobile_sdk_plugin` | `6b7b8274…` | `9a56e094…` |
+| `flutter_local_notifications` | `a5a732f0…` | `ff50f840…` |
+| `flutter_secure_storage` | `1ed9476f…` | `d33dac7a…` |
+| `fluttertoast` | `2c67e14d…` | `21eecd69…` |
+| `mobile_scanner` | `91579364…` | `77265f3d…` |
+| `path_provider_foundation` | `bb55f6db…` | `0b743cbb…` |
+| `shared_preferences_foundation` | `7036424c…` | `5086985c…` |
+| `workmanager_apple` | `904529ae…` | `4cb452c5…` |
+| `COCOAPODS:` | `1.16.2` | `1.17.0` |
+
+`PODS` (every pod version, including `FingerprintPro` 2.14.0 and `IdensicMobileSDK` 1.42.0),
+`DEPENDENCIES`, `SPEC REPOS`, `EXTERNAL SOURCES`, the checksums of the external pods
+(`FingerprintPro`, `IdensicMobileSDK`), `Flutter` and `PODFILE CHECKSUM` are byte-identical. No
+dependency version, external checksum or resolution changed.
+
+**Why** (reproduced, not assumed): for a plugin pod loaded from a path, CocoaPods stores the
+podspec as pretty-printed JSON and records the SHA-1 of that JSON. That checksum therefore
+depends on the podspec **and on the Ruby `json` gem of the machine that writes the lock**.
+
+- The plugin podspecs at the versions pinned in `pubspec.lock`, evaluated with Ruby 3.3.12 and
+  `cocoapods-core` 1.17.0 (the runner's), give exactly the nine generated checksums
+  (the Idensic plugin with the Podfile's `IDENSIC_WITH_FISHERMAN=true`).
+- With `json` 2.8.2 or later (tested: 2.8.2, 2.9.1 as bundled with Ruby 3.4, and 2.10.2; the tested
+  2.3.0, 2.6.3 and 2.7.2 give the runner's values), the same podspecs give the
+  **committed** checksums for eight of the nine pods (`dlc_wallet`, whose podspec has not changed since
+  2025-11, included). The difference is one formatting detail: json 2.7 and earlier print an empty
+  list as `[` newline newline `]`, the later ones as `[]` (the `Flutter` dependency list of each pod).
+  `cocoapods-core` 1.16.2 and 1.17.0 give identical results; the CocoaPods version did not matter.
+- The ninth, `workmanager_apple`, differs in substance: the committed value is the podspec of
+  `workmanager_apple` 0.9.1 to 0.9.1+2, while `pubspec.lock` (Issue #40, #42) pins 0.9.4. The lock was
+  written before the reproducible baseline and had not been refreshed.
+
+So the committed lock is consistent with a machine that had a newer Ruby (`json` 2.8 or later) and an
+older `workmanager_apple`; the regenerated one is what the pinned sources produce on the pinned runner image
+(Ruby 3.3.12, CocoaPods 1.17.0). The lock was replaced by the runner's file unchanged.
+
+**Consequences:**
+
+- `ios/Podfile.lock` must be taken **from the pinned runner image** (the `Podfile.lock.generated`
+  file of the `ios-diagnostics_*` artifact), not generated on a developer Mac: a Mac with a
+  newer Ruby writes different plugin checksums and every hosted build would then fail the drift check.
+- Both iOS workflows now run `tool/check_build_drift.sh` after the build. **Any** tracked file changed
+  by the build fails the job; `ios/Podfile.lock` drift prints the diff and an error naming the cause.
+  `tool/verify_ios_toolchain.sh` fails if either workflow lacks the check, runs it before the
+  build, allows a step to fail silently, or still reports the drift as a warning, and if the
+  committed lock names a CocoaPods version other than the pinned one. `PODFILE CHECKSUM` is
+  checked by `tool/verify_version.sh`. A runner image with a different Ruby or CocoaPods now fails
+  visibly instead of passing with a warning.
+- Every `build-variants` iOS job still uploads, also when the build fails, the text-only artifact
+  `ios-diagnostics_<variant>_a<attempt>` (14 days; `build.log`, `pods.txt`, `Podfile.lock.diff`,
+  `Podfile.lock.generated`), so the next required lock change can be read and reviewed the same way.
 
 ### External downloads (during `pod install`)
 
@@ -203,7 +267,9 @@ secp256k1 C sources (`secp256k1.o`, `precomputed_ecmult.o`, `precomputed_ecmult_
 target (iOS 18.5) instead of the minimum of the Rust objects. The linker accepts older
 objects; objects built for a newer OS than the link target may raise a linker warning and
 are a question for the library's owner, not something this issue changes. Every iOS build
-records these values (`rust_lib_build_versions`).
+records these values (`rust_lib_build_versions`); the hosted builds reproduced them exactly
+(the x86_64 slice has the same 8 objects, recorded as `ios-simulator`). The linker did not fail.
+The library is linked into `dlc_wallet.framework`, which records minimum iOS 15.5.
 
 To make any change visible, the workflow pins the library's SHA-256
 (`EXPECTED_RUST_LIB_SHA256`) and fails if it differs before or after the build. If
@@ -243,18 +309,12 @@ repeat the environment.
   credentials and a separate, reviewed design.
 - **Staging configuration, compile-time validated only.** Use of this bundle against
   the backend has not been exercised (it cannot be installed anyway).
-- **Build-configuration steps not yet confirmed on a hosted macOS run.** The
-  configuration verification under `/bin/bash` 3.2 and the check of
-  `App.framework/App` were validated on Linux only; they have to pass on a real
-  `macos-15` run before the change is accepted.
-- **First hosted run.** The workflow was validated locally with emulated macOS
-  commands only (no Mac was available). Its first real run may need adjustment.
-- **Deployment targets** differ by purpose (project 14.0, `Podfile` 15.5,
-  `AppFrameworkInfo.plist` 13.0, podspec 12.0; see the table above). They are measured on every
-  build and intentionally not changed.
+- **Deployment targets** differ by purpose and are an **unresolved discrepancy**: the app
+  declares iOS 14.0, five frameworks are built for 15.5 and eight Rust C objects for 18.5 (see
+  "Deployment targets"). Measured on every build, intentionally not changed.
 - **Xcode 26.3 is pinned** and must remain on the `macos-15` image. Flutter 3.35.3 with
-  Xcode 26 has no compatibility statement from Flutter; the status of the hosted builds
-  is in "Verification status" below.
+  Xcode 26 has no compatibility statement from Flutter, but it built on the hosted runs
+  listed under "Verification status".
 - **The version is not modified.** iOS requires a numeric
   `CFBundleShortVersionString`, so a prerelease suffix such as `-rc.1` is never
   embedded; staging candidates are named by a release identifier instead
@@ -268,8 +328,24 @@ repeat the environment.
 
 ## Verification status
 
-Local (Linux) verification of the Issue #70 changes: the static checks and the tests above.
-**Hosted builds under Xcode 26.3 are the open evidence:** run `build-variants` by hand for
-`ios-staging` and `ios-production` and the iOS validation workflow, on the branch, and record
-the run IDs here or in the issue. A failure that comes from Flutter 3.35.3 or a pod is
-reported with its exact error, not worked around.
+Hosted runs of commit `cbe1e6b08c5d0394418e334d6a6e83f3b6d60fad` (branch
+`issue/70-ios-release-toolchain`, 2026-10-21, `macos15` image 20260907.0337.1, Xcode 26.3
+(17C529), iPhoneOS SDK 26.2, Flutter 3.35.3, CocoaPods 1.17.0, Ruby 3.3.12):
+
+| Run | Workflow | Result |
+|---|---|---|
+| 39583491602 | `build-variants`, `ios-staging` | success (plan, static checks, iOS job and verdict) |
+| 39586225426 | `build-variants`, `ios-production` | success (same jobs) |
+| 39587627313 | `ios-ci-validation` | success; unsigned staging `Runner.app` (SHA-256 `3b250a2b…` of the zip, matching `SHA256SUMS.txt`) |
+
+Facts read from the evidence of the production run and the validation notice: the app records
+`iphoneos26.2` (Info.plist and the Mach-O), platform `ios`, `MinimumOSVersion` 14.0, SDK build
+`23C57`, Xcode `2630`/`17C529`; the right environment and identity per variant; 5 deployment-target
+conflicts (listed above); the Rust library's SHA-256 unchanged. Flutter 3.35.3, Sumsub
+(`IdensicMobileSDK` 1.42.0) and `FingerprintPro` 2.14.0 compiled and linked under Xcode 26.3, and the
+unsigned build records the `DT*` keys and `MinimumOSVersion`. Those runs predate the lock update and the
+strict drift check: they reported the lock drift as a warning.
+
+**Still to be shown on a hosted run:** that the regenerated `ios/Podfile.lock` and the strict
+`tool/check_build_drift.sh` pass on the runner for both iOS variants and the validation workflow
+(the next runs of this branch).
