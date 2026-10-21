@@ -53,10 +53,13 @@ Every statement below carries one of three labels:
 | Individual keys "aren't able to use Provisioning endpoints, access Sales and Finance, or notaryTool". | [Creating API keys](https://developer.apple.com/documentation/appstoreconnectapi/creating-api-keys-for-app-store-connect-api) |
 | "Each user can only have one active API key at a time." A key's name and access cannot be edited after it is generated. Generating a team key needs the Account Holder or Admin role. Generating an individual key needs the "Generate Individual API Keys" permission, which an Admin can remove. | [App Store Connect Help](https://developer.apple.com/help/app-store-connect/get-started/app-store-connect-api) |
 | The private key can be downloaded **once**; Apple keeps no copy. A revoked key cannot be reinstated. | both pages |
-| The role-permission matrix has rows "Upload builds", "Submit apps", "Manage internal TestFlight groups and add builds" and "Manage app access". | [Roles](https://developer.apple.com/support/roles/) |
+| The role-permission matrix has rows "Upload builds", "Submit apps", "Manage internal TestFlight groups and add builds" and "Manage app access". Certificate and profile tasks are marked as needing access to Certificates, Identifiers & Profiles, "granted as a separate permission in Users and Access". | [Roles](https://developer.apple.com/support/roles/) |
+| "Users with the Developer role can create and revoke development certificates, submit certificate signing requests, download provisioning profiles, upload binaries to App Store Connect, manage internal TestFlight users, and more. Their access can be limited to certain apps." | [Developer role](https://developer.apple.com/help/glossary/developer) |
+| "If you're enrolled as an individual and add users in App Store Connect, users receive access only to App Store Connect and are not considered part of your team in the Apple Developer Program." | [Developer role](https://developer.apple.com/help/glossary/developer) |
 
 The role matrix's per-role marks could not be extracted from the page text, so **which role may
-upload and which may submit for review is not verified** here (section 4, item 3).
+upload, which may submit for review, and which needs Certificates, Identifiers & Profiles
+access is not verified** here (section 4, item 3).
 
 ## 2. Approved architecture
 
@@ -81,6 +84,9 @@ production contexts and the five-artifact target are in [RELEASE_POLICY.md](RELE
 8. Signed IPAs are never stored as GitHub artifacts, Releases or log content.
 
 ## 3. Planned pipeline (proposed; not built; shape subject to a spike)
+
+Everything in this section, and every "will" or imperative in sections 5 to 8, describes the
+intended design. None of it exists yet.
 
 ```text
 push to staging (reviewed PR merge)
@@ -116,7 +122,7 @@ push to staging (reviewed PR merge)
 |---|---|---|
 | 1 | Apple account identity, ownership, administrators, renewal | Apple account owner (questionnaire part A) |
 | 2 | Whether an iOS app is live, its exact bundle ID, version and highest build number; whether `com.app.cadenabitcoin` is that ID | Apple account owner. **No production signing work starts until this is known.** |
-| 3 | The role matrix: which role can upload a build, read processing status, and submit for review; whether a restricted service user can be created | Apple account owner (the live Roles page and Users and Access) |
+| 3 | The role matrix: which role can upload a build, read processing status, and submit for review; whether a restricted service user can be created without Certificates, Identifiers & Profiles access, and who would hold its Apple ID sign-in | Apple account owner (the live Roles page and Users and Access) |
 | 4 | App ID registration and App Store Connect record for `com.app.cadenabitcoin.staging` (not assumed registered) | Apple account owner |
 | 5 | Existing distribution certificates, profiles and their custodians; shared or per-context certificates | Apple account owner, signing custodians |
 | 6 | Capabilities and entitlements the app really needs (`remote-notification`, background tasks) | Apple account owner, maintainers |
@@ -146,9 +152,33 @@ show **Submit apps**; and that the organization accepts a dedicated service user
 possible, the fallback is the lowest-role team key, with the loss of app isolation recorded
 and compensated by reviewer approval on the staging environment.
 
-The distribution certificate and provisioning profiles are created by the Apple account
-administrator, not by the pipeline. The `.p8` is shown once; it is handed to the
-custodians through a secure channel, never through chat, email, issues or the repository.
+### Certificates, Identifiers & Profiles (CIP) access
+
+- **The preferred credential cannot reach provisioning.** Individual keys "aren't able to use
+  Provisioning endpoints" (section 1). The pipeline therefore can never create or download a
+  certificate, a profile or an App ID with it, and it must not be designed to. This is a
+  least-privilege advantage, and it has a cost: the distribution certificate, the provisioning
+  profiles and the App IDs are created by the Apple account administrator **in the developer
+  portal** (a role with CIP access) and handed to the custodians as environment secrets.
+  Profiles and certificates expire, so renewal is a **manual administrator task**, scheduled
+  in the custody register; the planned `tool/verify_ipa.sh` checks expiry so that a lapse fails
+  visibly before an upload.
+- **The service user must not receive CIP access.** The Developer role can, with that access,
+  create and revoke development certificates and download profiles (section 1). The service
+  user exists only to hold an upload-capable individual key limited to the staging app, so it
+  gets no CIP access, no user-management permission and no access to other apps.
+- **The service user is an Apple ID.** Someone must sign in once, with its second factor, to
+  generate the key. Who holds that Apple ID's credentials and second factor, and how they are
+  recovered, is a custody question for the account owner (questionnaire B4); the credentials are
+  never shared with the pipeline or the repository.
+- **Individual enrollment caveat.** If the team is an Individual enrollment, users added in
+  App Store Connect are not part of the Developer Program team (section 1). Whether such a user
+  can hold the upload role and generate an individual key is unconfirmed, and portal access is
+  then limited to the Account Holder. If so, this model may be unavailable and the fallback of
+  this section applies. Questionnaire A1 question 1 decides it.
+
+The `.p8` is shown once; it is handed to the custodians through a secure channel, never through
+chat, email, issues or the repository.
 
 ## 6. Independent approval of production signing and delivery
 
@@ -170,7 +200,9 @@ individual are one approver, however many accounts exist.** Therefore:
 ## 7. Public-repository security model
 
 The repository is public. Anyone can read workflow logs, download artifacts, fork, and open
-pull requests.
+pull requests. The rules below are **requirements for the future signing workflows**. Today's
+unsigned validation workflows already use `contents: read`, SHA-pinned actions and no secrets;
+no signing workflow, environment or secret exists.
 
 | Threat | Rule |
 |---|---|

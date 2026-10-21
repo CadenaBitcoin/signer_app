@@ -57,10 +57,11 @@ Twelve questions. The answers decide what can be built and in what order.
     are the backups kept? Is a separate certificate for staging and production acceptable?
 
 ### A5. Available permissions
-11. Can you create a **dedicated service user** restricted to the staging app only, and can
-    that user generate an individual API key (the "Generate Individual API Keys" permission)?
-    In the live Roles matrix (developer.apple.com/support/roles), which roles show **Upload
-    builds**, and which show **Submit apps**?
+11. Can you create a **dedicated service user** restricted to the staging app only, **without**
+    access to Certificates, Identifiers & Profiles, and can that user generate an individual
+    API key (the "Generate Individual API Keys" permission)? In the live Roles matrix
+    (developer.apple.com/support/roles), which roles show **Upload builds**, and which show
+    **Submit apps**?
 
 ### A6. Compliance
 12. What is the organization's answer to Apple's export-compliance question for an app that
@@ -76,6 +77,10 @@ Same rules. Ask only what Part A leaves open.
 - Who can create and revoke certificates, profiles, App IDs and App Store Connect users?
 - Is "Access to all apps" disabled for the roles that will be used by the pipeline?
 - Is there an Apple Business Manager, DUNS or other constraint that limits adding users?
+- For an Individual enrollment: can an invited App Store Connect user upload builds and
+  generate an individual API key at all?
+- Who creates the distribution certificate and the provisioning profiles in the developer
+  portal, and who renews them before they expire?
 
 ### B2. App Store Connect records
 - Staging record: name, SKU, primary language, category, privacy policy URL, support URL.
@@ -92,6 +97,8 @@ Same rules. Ask only what Part A leaves open.
 ### B4. API credential handling
 - Which person will generate each API key, and through which secure channel will it reach the
   holders of the GitHub environment secrets? (A role and a channel, never the key.)
+- Who holds the service user's Apple ID sign-in and second factor (a role, never the
+  credentials), and how are they recovered if that person is unavailable?
 - Is a key generated for the staging service user kept separate from any production key?
 - How will keys be revoked and replaced, and who is told?
 
