@@ -362,7 +362,9 @@ These need a maintainer decision (policy section 11); this change does not take 
 3. **Where the build number is raised for each promotion** (decision 4; proposal: in the
    promotion pull request, checked by the pipeline).
 4. **Whether Android and iOS build numbers may differ** in practice (permitted, not built).
-5. **The iOS published build number**, so an iOS floor can be recorded.
+5. **The iOS published build number**, so an iOS floor can be recorded. Waiting for the
+   Apple account answers (Issue #71, [APPLE_ACCOUNT_QUESTIONNAIRE.md](APPLE_ACCOUNT_QUESTIONNAIRE.md)
+   questions 5 to 7); also whether the live iOS bundle ID is the one this repository builds.
 6. **Retention of an internal evaluation APK**, as described above, and where.
 7. **The Android application ID** of the next release (#72), which decides whether the
    published listing can be updated.
