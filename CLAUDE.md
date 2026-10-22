@@ -212,8 +212,10 @@ authorization:
   The files contain no secrets and are meant to be committed. See
   `docs/BUILD_CONFIGURATION.md`.
 - **Two flavors, `staging` and `production`, select only the application identity**:
-  Android `com.app.cadenabitcoin.staging` / `com.app.cadenabitcoin`, iOS the same bundle
-  IDs, launcher names "Cadena Signer STAGING" / "Cadena Bitcoin". Staging and production
+  Android `com.cadenabitcoin.mobile.signer.staging` / `com.cadenabitcoin.mobile.signer` (the
+  production ID is the package published on Google Play; the Kotlin namespace stays
+  `com.app.cadenabitcoin`), iOS the separate bundle IDs `com.app.cadenabitcoin.staging` /
+  `com.app.cadenabitcoin`, launcher names "Cadena Signer STAGING" / "Cadena Bitcoin". Staging and production
   install side by side. The build fails unless the flavor equals `APP_ENV` of the
   configuration file (`BuildConfig`, `FLUTTER_APP_FLAVOR`); do not add a default flavor
   (`default-flavor`) or a second environment selector. `tool/verify_version.sh` checks the

@@ -205,7 +205,7 @@ assumed.
 
 | | Production (exists) | Staging (proposed, not registered) |
 |---|---|---|
-| Android `applicationId` | `com.app.cadenabitcoin` | `com.app.cadenabitcoin.staging` |
+| Android `applicationId` | `com.cadenabitcoin.mobile.signer` (the package published on Google Play, Issue #72) | `com.cadenabitcoin.mobile.signer.staging` |
 | iOS bundle ID | `com.app.cadenabitcoin` | `com.app.cadenabitcoin.staging` |
 | App Store Connect | Production app record | **Own, separate** app record |
 | Provisioning (iOS) | Production App Store profile | **Own** profile for the staging bundle ID |
@@ -221,7 +221,7 @@ separation trade-off ([RELEASE_SIGNING_ARCHITECTURE.md](RELEASE_SIGNING_ARCHITEC
 
 | Place | Today | Consequence |
 |---|---|---|
-| Android `applicationId` and `namespace` | Both `com.app.cadenabitcoin` (`build.gradle.kts`) | Only `applicationId` must vary; `namespace`/`MainActivity` package can stay, so no source rename is needed |
+| Android `applicationId` and `namespace` | `applicationId` `com.cadenabitcoin.mobile.signer` (flavor suffix `.staging`); `namespace` `com.app.cadenabitcoin` (`build.gradle.kts`, Issue #72) | Only `applicationId` varies; `namespace`/`MainActivity` package stay, so no source rename is needed |
 | Android label | Fixed `"Cadena Bitcoin"` in the manifest | Needs a per-variant label |
 | iOS bundle ID | `PRODUCT_BUNDLE_IDENTIFIER` in the 3 app-target configurations (Debug, Release, Profile) | Needs per-environment values |
 | iOS name | Fixed `CFBundleDisplayName` `"Cadena Bitcoin"` | Needs a per-environment value |
@@ -492,7 +492,7 @@ without a record, or from a commit that was not approved, is not official.
 | Android CI validation (debug-signed APK), iOS CI validation (unsigned `Runner.app`) | Working; unchanged; **not** among the five artifacts |
 | Signing credentials, protected release environments, release workflows | **None** |
 | Tags, GitHub Releases | None |
-| Separate staging application ID / bundle ID / App Store Connect record | **None**; both CI validation builds use `com.app.cadenabitcoin` |
+| Separate staging application ID / bundle ID / App Store Connect record | Android: the `staging` flavor builds `com.cadenabitcoin.mobile.signer.staging` (not registered in Google Play); iOS: the `staging` flavor builds `com.app.cadenabitcoin.staging` (not registered with Apple). No App Store Connect record |
 | Build-time configuration | Unfinished (Issue #57 B1, local branch only); committed constants are production |
 | iOS toolchain | Xcode 26.3 on `macos-15` with an iOS 26 SDK, pinned by Issue #70 (accepted hosted runs: [IOS_CI.md](IOS_CI.md#verification-status); compile and link only). App Store Connect uploads have required Xcode 26 and the iOS 26 SDK since 2026-04-28 ([Apple](https://developer.apple.com/news/upcoming-requirements/)) |
 | iOS signing, provisioning, App Store Connect integration, TestFlight delivery | **Not implemented** (Issue #71). Readiness record, questionnaire and operating-procedure skeleton: [IOS_SIGNING.md](IOS_SIGNING.md), [APPLE_ACCOUNT_QUESTIONNAIRE.md](APPLE_ACCOUNT_QUESTIONNAIRE.md) |

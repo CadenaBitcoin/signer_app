@@ -231,8 +231,8 @@ The governance migration has been performed:
 `production` was created at the adopted initial baseline `7b63c97` after the
 released source lineage was examined (Issue #68). The baseline is the
 best-supported historical commit, not an exact reconstruction of the published
-application; the Android application ID of the repository differs from the
-published one (Issue #72).
+application. The Android application ID of the repository was brought in line with
+the published Google Play package in Issue #72; the signing lineage is still open.
 
 ## Pending follow-ups
 
