@@ -212,8 +212,10 @@ authorization:
   The files contain no secrets and are meant to be committed. See
   `docs/BUILD_CONFIGURATION.md`.
 - **Two flavors, `staging` and `production`, select only the application identity**:
-  Android `com.app.cadenabitcoin.staging` / `com.app.cadenabitcoin`, iOS the same bundle
-  IDs, launcher names "Cadena Signer STAGING" / "Cadena Bitcoin". Staging and production
+  Android `com.cadenabitcoin.mobile.signer.staging` / `com.cadenabitcoin.mobile.signer` (the
+  production ID is the package published on Google Play; the Kotlin namespace stays
+  `com.app.cadenabitcoin`), iOS the separate bundle IDs `com.app.cadenabitcoin.staging` /
+  `com.app.cadenabitcoin`, launcher names "Cadena Signer STAGING" / "Cadena Bitcoin". Staging and production
   install side by side. The build fails unless the flavor equals `APP_ENV` of the
   configuration file (`BuildConfig`, `FLUTTER_APP_FLAVOR`); do not add a default flavor
   (`default-flavor`) or a second environment selector. `tool/verify_version.sh` checks the
@@ -227,9 +229,15 @@ authorization:
   `config/release/published_versions.json` records the version codes already published:
   never reuse one (`docs/RELEASE_VERSIONING.md`). The application version changes only by a
   reviewed edit of `pubspec.yaml`; no workflow may write or override it.
-- The release build currently uses the **debug signing config**
-  (`android/app/build.gradle.kts`). An official release-signing procedure is **not
-  yet established**.
+- Android release signing is **explicit** (Issue #72, `docs/ANDROID_RELEASE.md`): without
+  `CADENA_SIGNING` the release build type is debug-signed (the credential-free CI validation;
+  never distributable); `CADENA_SIGNING=release` signs with a keystore supplied from outside
+  the repository and fails, with no fallback to the debug key, when anything is missing or the
+  certificate is not the expected one, and signs the production flavor only (any release task of
+  another flavor fails the build). Never set `CADENA_SIGNING`, never create or read a
+  keystore, and never put a signing credential in the repository, a log or a chat. The Google
+  Play app-signing key is held by Google and stays unchanged; the upload key is Cadena-controlled
+  and held by the CFO. `tool/release_android.sh` is the local procedure, run by the key holder.
 - Native binary provenance and the release process for the committed `.so`/`.a`
   files are **not documented** (separate technical debt).
 - `.gitignore` lists `/android/app`, although files under it are tracked; a new

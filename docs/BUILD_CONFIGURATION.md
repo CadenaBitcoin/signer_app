@@ -34,6 +34,9 @@ tool/commit_parents.sh                 merge-commit detection that also works in
 tool/check_verdict.sh                  the pass/fail decisions of the aggregate verdict
 tool/test_release_triggers.sh          tests of the three above, without a build
 tool/test_release_versioning.sh        tests of the version rules and the build manifest, without a build
+tool/test_android_release.sh           tests of the Android release signing and verification, without a build (Issue #72)
+tool/test_android_gradle_signing.sh    the release-signing rules in real Gradle dry runs, disposable key (Issue #72)
+.github/workflows/android-release-tests.yml   runs those tests on pull requests (test-only, no secret, no build)
 ```
 
 | Key | Staging | Production |
@@ -53,7 +56,7 @@ the environment from anywhere else.
 
 | | `production` | `staging` |
 |---|---|---|
-| Android application ID | `com.app.cadenabitcoin` (unchanged) | `com.app.cadenabitcoin.staging` |
+| Android application ID | `com.cadenabitcoin.mobile.signer` (the package published on Google Play, Issue #72) | `com.cadenabitcoin.mobile.signer.staging` |
 | iOS bundle ID | `com.app.cadenabitcoin` (unchanged) | `com.app.cadenabitcoin.staging` |
 | Display name (both platforms) | Cadena Bitcoin (unchanged) | Cadena Signer STAGING |
 | Configuration file | `config/build/production.json` | `config/build/staging.json` |
@@ -64,6 +67,31 @@ proposal of [RELEASE_POLICY.md](RELEASE_POLICY.md) section 5. They are **not reg
 anywhere** (Apple, Google): nothing in this repository needs them to be until something
 is signed. The flavor changes nothing else: not the version, the Android namespace, the
 `MainActivity` package, the signing configuration, the native library or any wallet code.
+
+**The Android and iOS identifiers are different, on purpose.** The Android production
+application ID is the package of the app that is live on Google Play
+(`config/release/published_versions.json`); it was settled in Issue #72 (earlier the
+repository built `com.app.cadenabitcoin`, a package that is registered on Google Play by
+another, abandoned account and therefore could not be published). The iOS bundle IDs are
+separate identifiers and are not changed by that decision. The Kotlin **namespace** of the
+app module stays `com.app.cadenabitcoin`: it names the source package (`R`, `MainActivity`),
+not the identity of the app on devices or in Google Play. `tool/verify_artifact.sh matrix`
+prints the identity matrix per platform; it is the single copy that the manifest tool, the
+IPA verifier and the tests read.
+
+**What depends on the Android application ID** (audit of Issue #72, 2026-10-22):
+
+| Place | Finding |
+|---|---|
+| Firebase / `google-services.json` | None in the repository; no Firebase dependency. |
+| Component authorities | None are written in the manifests. The manifest merger derives the authorities of library content providers from `${applicationId}`, so they follow the ID (a fixed authority under the old ID was what blocked the first Google Play upload). |
+| Deep links, app links, `assetlinks.json` | None (the only intent filter is the launcher). |
+| Backend | The app sends only the bearer token and request bodies; no package name or application ID is sent (`DataService`). Whether the backend checks the package name on its side cannot be seen from this repository. |
+| Third-party SDKs | Sumsub (`flutter_idensic_mobile_sdk_plugin`, with its Fisherman/Fingerprint component): the access token comes from the backend (`/auth/kyc-start-app`) and no key bound to an application ID is in the repository. Whether the Sumsub or Fingerprint dashboards restrict an application ID cannot be seen from here: **check it for the staging ID `com.cadenabitcoin.mobile.signer.staging`** (the production ID is already in use by the published app). |
+| Notifications, background work | Local notifications and WorkManager task names are literals, not derived from the ID. |
+| Stored data | The new production ID is the one of the app on Google Play, so installed copies of the published app are unaffected. The former ID `com.app.cadenabitcoin` belongs to another, abandoned Google Play account (Issue #12). |
+| iOS | Not affected (separate bundle IDs and files). |
+
 
 **Android.** `flavorDimensions "environment"` with `production` and `staging`;
 `staging` adds `applicationIdSuffix ".staging"`, and each flavor supplies the launcher

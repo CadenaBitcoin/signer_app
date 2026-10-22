@@ -121,7 +121,19 @@ package is installed and no YAML parser is involved: the workflow is read as tex
 test fails when a pinned line is edited, which asks for a deliberate review. It needs no
 Flutter and can be run locally. The job then runs `tool/test_release_versioning.sh` (the
 version rules, the build manifests and the published-version gate; it also needs `python3`,
-present on every runner).
+present on every runner) and `tool/test_android_release.sh` (the Android release signing and
+verification, credential-free and without artifacts, Issue #72; `docs/ANDROID_RELEASE.md`).
+
+## Tests on pull requests (not a build, not a promotion)
+
+`build-variants.yml` never starts from a pull request (above). A separate, test-only workflow,
+`.github/workflows/android-release-tests.yml` (Issue #72), does: on every pull request to `development`,
+`staging` or `production` it runs the credential-free Android release tests (the verifier and ledgers,
+the identity matrix and version wiring, and the release-signing rules in real Gradle dry runs;
+`docs/ANDROID_RELEASE.md` section 7). It builds no application, produces no artifact, has read-only
+permissions and no secret, and uses `pull_request`, never `pull_request_target`. It is therefore not a
+release trigger and does not touch the policy above; `tool/test_android_release.sh` pins its shape and
+that `build-variants.yml` still has no `pull_request` trigger.
 
 ## Concurrency
 

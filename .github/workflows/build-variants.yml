@@ -124,6 +124,14 @@ jobs:
       - name: Test the iOS toolchain checks
         run: tool/test_ios_toolchain.sh
 
+      # The Android release signing and verification (Issue #72), credential-free: the static
+      # checks of android/app/build.gradle.kts and the ledgers, the verifier's ELF and fingerprint
+      # code, the release driver's refusals and the credential-free state of the workflows. No
+      # artifact and no key is involved (the tests with real artifacts and disposable keys run
+      # locally, docs/ANDROID_RELEASE.md section 7). Nothing here signs or publishes anything.
+      - name: Test the Android release signing and verification (credential-free)
+        run: tool/test_android_release.sh
+
       - name: Plan
         id: plan
         env:

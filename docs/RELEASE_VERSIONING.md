@@ -76,14 +76,15 @@ APKs, and anything on iOS. No iOS floor is enforced.
   The signed release pipeline (#72) must run the gate before building and must not bypass
   it. Compile validation does **not** run it: validation builds may equal the published
   number and carry another ID because they are not releases.
-- **Today the repository is at `1.0.3+1000034`** with the ID `com.app.cadenabitcoin`. The
-  gate therefore fails for production on both rules, on purpose. Raising the build number
-  to at least `1000035` (a reviewed commit) clears rule 1 only; the gate keeps failing on
-  rule 2 until the ID question of #72 is settled by a reviewed change.
-- The floor applies to the Google Play application. The repository builds
-  `com.app.cadenabitcoin`, which is **not** that application; whichever ID #72 settles on,
-  an update of the published app needs a versionCode above 1000034 *and* the published
-  package ID and signing lineage. The floor is the conservative rule for either case.
+- **Today the repository is at `1.0.3+1000034`** with the Android ID
+  `com.cadenabitcoin.mobile.signer`, the published package (settled in #72; the repository
+  used to build `com.app.cadenabitcoin`, which could not be that application). Rule 2 is
+  therefore satisfied and the gate fails for production on rule 1 only, on purpose: the
+  build number is not above the published one. Raising it to at least `1000035` (a
+  reviewed commit) clears that.
+- The floor applies to the Google Play application. An update of it needs a versionCode
+  above 1000034 *and* the published package ID *and* the published signing lineage. The ID
+  is now right; the signing lineage is still open (#66, #72).
 - The ledger is edited only by a reviewed commit after a maintainer confirms the number in
   the store console. It records history; it authorizes nothing.
 
@@ -125,7 +126,7 @@ verifier rejects a mismatch between the kind of artifact and the kind of digest.
 |---|---|---|
 | `unsigned` | no signature (iOS `--no-codesign`) | iOS |
 | `debug` | the temporary Android debug key; **not distributable**; the certificate is recorded | Android |
-| `release` | signed with an official release key; needs a recorded certificate fingerprint and a release identifier | **nothing produces it yet** (#72) |
+| `release` | signed with an official release key; needs a recorded certificate fingerprint and a release identifier | **no CI build produces it**; the local Android procedure (#72, `docs/ANDROID_RELEASE.md`) writes its own release report, not a CI manifest |
 
 `debug` and `unsigned` artifacts can only be classified `compile-validation` or
 `internal-evaluation`, never as a release candidate or a release, and are never
@@ -133,11 +134,14 @@ verifier rejects a mismatch between the kind of artifact and the kind of digest.
 artifact that is not unsigned.
 
 **Known issues** are recomputed from the ledger and must be present; a manifest that drops
-one fails. Today the Android production manifests carry both:
+one fails. Today the Android production manifests carry one:
 
-- `application-id-differs-from-published-app`: the build is `com.app.cadenabitcoin`, the
-  published app is `com.cadenabitcoin.mobile.signer` (outstanding release blocker, #72);
 - `version-code-not-above-published-floor`: the build number is not above 1000034.
+
+The second known issue, `application-id-differs-from-published-app`, is raised when the
+Android production ID differs from the package in the ledger. It was open until #72 set the
+production ID to the published package and is kept as a protection: a later change of the
+ID, or a ledger entry for another package, raises it again.
 
 ### What `verify` rejects
 
@@ -173,12 +177,12 @@ A manifest that claims a release (classification `release-candidate` or `release
 
 With `--repo` both values are recomputed from the repository's ledger, so they cannot be
 edited away in the manifest; the `verdict` job always verifies with `--repo`. The Android
-application ID is the second protection: a build of `com.app.cadenabitcoin` can neither
-borrow the published listing's version history nor be described as that application. The
-issue is cleared only by a **reviewed** change: the ID of the build becomes the published
-one (the #72 decision), or the ledger deliberately records the new listing. Neither is
-changed here. Ordinary compile-validation builds are not releases, so they keep passing at
-the current version (`1.0.3+1000034`); they are simply labelled with the open issues.
+application ID is the second protection: a build with another ID can neither borrow the
+published listing's version history nor be described as that application. The issue is
+cleared only by a **reviewed** change: the ID of the build is the published one (done for
+Android in #72), or the ledger deliberately records the new listing. Ordinary
+compile-validation builds are not releases, so they keep passing at the current version
+(`1.0.3+1000034`); they are simply labelled with the open issues.
 
 ### Following a binary back to its source
 
@@ -309,15 +313,17 @@ Properties of such a file that the label and the manifest must keep explicit:
 - debug-signed: the key is created on the runner, so every run is expected to have a
   different signer (compare the recorded `signer_cert_sha256` of two runs); one evaluation
   APK cannot update another and must be uninstalled first;
-- application ID `com.app.cadenabitcoin`: a different application from the published
-  `com.cadenabitcoin.mobile.signer`; it installs beside it and cannot update it;
+- application ID `com.cadenabitcoin.mobile.signer`: **the same package as the published
+  Google Play app** (since #72) but signed with a different, temporary key. On a device that
+  has the Play app it cannot be installed over it (the signatures differ), and a device
+  that has this file cannot receive the Play update until the file is uninstalled;
 - build number equal to the published 1000034, so it is not a candidate for any store;
 - production configuration: it talks to the production backend and mainnet. Only disposable
   accounts, never a wallet holding value.
 
 This is **not** an official, update-compatible Google Play artifact. That needs, beyond the
 above: the signing-key governance (#66), the release signing pipeline in protected
-environments (#72), a decision on the application ID (the published one or a new listing),
+environments (#72), the signing lineage of the published app (the application ID is settled),
 a build number above 1000034 (the gate), a release identifier and tag, the release record
 of policy section 9, and the tester sign-off of policy 2.2.
 
@@ -343,7 +349,8 @@ after a separate authorization of the exercise (and after the corrective tests a
    build, the configuration is `config/build/staging.json`, the commit is the branch tip, and
    the verdict is green.
 4. `tool/build_manifest.py gate --channel production` on the branch reports rule 1 as passed
-   (1000035 > 1000034) and **still fails** on rule 2 (the application ID, #72), exit status 1.
+   (1000035 > 1000034) and rule 2 as passed (the Android application ID is the published
+   package, #72), exit status 0. (Before #72 it still failed on rule 2.)
 5. The branch is deleted afterwards. `staging` and `production` are not touched; no tag,
    release, signing or retained binary is involved.
 
@@ -366,8 +373,9 @@ These need a maintainer decision (policy section 11); this change does not take 
    Apple account answers (Issue #71, [APPLE_ACCOUNT_QUESTIONNAIRE.md](APPLE_ACCOUNT_QUESTIONNAIRE.md)
    questions 5 to 7); also whether the live iOS bundle ID is the one this repository builds.
 6. **Retention of an internal evaluation APK**, as described above, and where.
-7. **The Android application ID** of the next release (#72), which decides whether the
-   published listing can be updated.
+7. **The Android signing lineage** of the next release (#66, #72). The application ID is the
+   published package; whether the published listing can be updated also depends on the
+   signing identity.
 8. **Authenticated provenance** (signed attestations of the manifest/binary), which needs a
    permission change and its own authorization.
 

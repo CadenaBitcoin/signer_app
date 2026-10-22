@@ -9,7 +9,7 @@
 > `--dart-define-from-file`. The branch name does not select the environment, and
 > a build without a complete configuration fails (see
 > [BUILD_CONFIGURATION.md](BUILD_CONFIGURATION.md)). It is the **`staging` flavor**:
-> the separate application `com.app.cadenabitcoin.staging` ("Cadena Signer STAGING"),
+> the separate application `com.cadenabitcoin.mobile.signer.staging` ("Cadena Signer STAGING"),
 > which installs next to production. It is still only a CI validation build.
 >
 > The five-variant compile validation (staging/production APK, production AAB, both iOS
@@ -56,6 +56,10 @@ There is deliberately **no `flutter test` step**: the repository has no `test/`
 directory. Add it when tests exist.
 
 The same commands run locally (JDK 17) as the bootstrap in `CLAUDE.md` section 4.
+
+These builds are **debug-signed validation builds** (no `CADENA_SIGNING`, no secret). The
+production-signed APK and AAB are made by the local release procedure of
+[ANDROID_RELEASE.md](ANDROID_RELEASE.md), which no workflow runs.
 Every build needs the configuration flag and the matching `--flavor`; see
 [BUILD_CONFIGURATION.md](BUILD_CONFIGURATION.md).
 
@@ -91,8 +95,9 @@ file that selected them. The run summary and a workflow annotation repeat them.
 - **Debug-signed with an ephemeral key.** Each run's key differs, so these APKs
   cannot update one another or any locally built APK. There is no signing
   policy yet.
-- **Separate application ID** `com.app.cadenabitcoin.staging` (the `staging` flavor), so
-  it installs next to the production app. The ID is a proposal of
+- **Separate application ID** `com.cadenabitcoin.mobile.signer.staging` (the `staging` flavor:
+  the production ID, the package published on Google Play, plus `.staging`), so it installs
+  next to the production app. The staging ID is a proposal of
   [RELEASE_POLICY.md](RELEASE_POLICY.md) section 5 and is not registered anywhere.
 - **Prebuilt Rust binaries:** the committed `.so` files are used as they are. The
   Rust library is not rebuilt, and its provenance is not verified here.

@@ -159,8 +159,12 @@ Y="$(printf '%064d' 0 | tr 0 b)"
 # on the version the live repository has today, nor on entries that a later release adds to the live
 # ledger. What does read the live repository is marked "live" and asserts only what holds at any version.
 FLOOR=1000034                           # the pinned Google Play build number
-PUBLISHED_ID=com.cadenabitcoin.mobile.signer # the pinned published package (not the production application ID)
-PROD_ID=com.app.cadenabitcoin           # the production application ID of the repository (#72)
+PUBLISHED_ID=com.cadenabitcoin.mobile.signer # the pinned published package: the Android production application ID (#72)
+PROD_ID=$PUBLISHED_ID                   # the production Android application ID of the repository
+STAGING_ANDROID_ID=com.cadenabitcoin.mobile.signer.staging
+OTHER_ID=com.example.other.package      # a package the ledger may publish that is NOT the repository's (rule 2 of the gate)
+IOS_PROD_ID=com.app.cadenabitcoin       # iOS bundle IDs are separate identifiers and are not the Android ones
+IOS_STAGING_ID=com.app.cadenabitcoin.staging
 ledger_json() { # PACKAGE FLOOR
   printf '{"schema":"cadena-published-versions/1","entries":[{"platform":"android","channel":"google-play","package":"%s","version_name":"1.0.3","version_code":%s,"status":"fully-rolled-out","recorded":"2026-10-19","source":"test fixture"}]}\n' "$1" "$2"
 }
@@ -182,7 +186,12 @@ RUN=39237471969
 # mkev VARIANT DIR [COMMIT]: synthetic evidence in the format of tool/verify_artifact.sh + the workflow
 mkev() {
   local v="$1" d="$2" commit="${3:-$COMMIT}" env kind id name file
-  case "$v" in *staging*) env=staging; id=com.app.cadenabitcoin.staging; name="Cadena Signer STAGING" ;; *) env=production; id=com.app.cadenabitcoin; name="Cadena Bitcoin" ;; esac
+  case "$v" in
+    ios-staging) env=staging; id=$IOS_STAGING_ID; name="Cadena Signer STAGING" ;;
+    ios-*) env=production; id=$IOS_PROD_ID; name="Cadena Bitcoin" ;;
+    *staging*) env=staging; id=$STAGING_ANDROID_ID; name="Cadena Signer STAGING" ;;
+    *) env=production; id=$PROD_ID; name="Cadena Bitcoin" ;;
+  esac
   mkdir -p "$d"
   {
     echo "variant=$v"
@@ -309,7 +318,7 @@ macc "no release identifier is allowed for a compile-validation build" 'm["sourc
 mrej "a malformed release identifier" "release_id" 'm["source"]["release_id"]="1.0.3"'
 mrej "a release identifier for another product version" "does not match the product version" 'm["source"]["release_id"]="v1.0.4"'
 mrej "a candidate identifier on a production build" "must not carry -rc.N" 'm["source"]["release_id"]="v1.0.3-rc.1"'
-mrej "a final identifier on a staging build" "must be vX.Y.Z-rc.N" 'm["environment"]="staging"; m["variant"]="android-staging-apk"; m["application"]["id"]="com.app.cadenabitcoin.staging"; m["application"]["display_name"]="Cadena Signer STAGING"; m["configuration"]["file"]="config/build/staging.json"; m["configuration"]["build_command"]=m["configuration"]["build_command"].replace("production","staging"); m["source"]["ref"]="staging"; m["source"]["release_id"]="v1.0.3"'
+mrej "a final identifier on a staging build" "must be vX.Y.Z-rc.N" 'm["environment"]="staging"; m["variant"]="android-staging-apk"; m["application"]["id"]="com.cadenabitcoin.mobile.signer.staging"; m["application"]["display_name"]="Cadena Signer STAGING"; m["configuration"]["file"]="config/build/staging.json"; m["configuration"]["build_command"]=m["configuration"]["build_command"].replace("production","staging"); m["source"]["ref"]="staging"; m["source"]["release_id"]="v1.0.3"'
 # CI build identity
 mrej "a non-numeric run id" "ci.run_id" 'm["ci"]["run_id"]="abc"'
 mrej "run attempt 0" "run_attempt" 'm["ci"]["run_attempt"]=0'
@@ -324,7 +333,9 @@ mrej "a versionCode above Google Play's limit" "limit" 'm["version"]["pubspec"]=
 mkfix "$tmp/w" 1000099 "$PUBLISHED_ID"
 rejected "manifest: the repository's pubspec changed since the manifest was written" "the repository says" BM verify "$M" --repo "$tmp/w"
 # identity and configuration
-mrej "the staging application ID on a production build" "application.id" 'm["application"]["id"]="com.app.cadenabitcoin.staging"'
+mrej "the staging application ID on a production build" "application.id" 'm["application"]["id"]="com.cadenabitcoin.mobile.signer.staging"'
+mrej "the previous repository ID on an Android production build" "application.id" 'm["application"]["id"]="com.app.cadenabitcoin"'
+mrej "the previous repository staging ID on an Android production build" "application.id" 'm["application"]["id"]="com.app.cadenabitcoin.staging"'
 mrej "another display name" "display_name" 'm["application"]["display_name"]="Cadena Signer"'
 mrej "the staging configuration on a production build" "configuration.file" 'm["configuration"]["file"]="config/build/staging.json"'
 mrej "a configuration digest that is not a SHA-256" "configuration.sha256" 'm["configuration"]["sha256"]="abc"'
@@ -439,12 +450,12 @@ gate_repo 1000099 "$PROD_ID"; expect_rc "gate: a future version far above the fl
 gate_repo 1000035 "$PROD_ID" 1000036; rejected "gate: a higher published number (ledger edited) blocks again" "not above the published" GATE
 gate_repo 1000034 "$PROD_ID"; accepted "gate: staging is a separate application, no floor applies" BM gate --channel staging --repo "$tmp/g"
 # rule 2 alone: the build number is far above the floor, the identity is not the published one (#72)
-gate_repo 1000035 "$PUBLISHED_ID"; rejected "gate: build 1000035 with the production application ID unpublished is blocked" "is not the published package $PUBLISHED_ID" GATE
-gate_repo 1000099 "$PUBLISHED_ID"; rejected "gate: build 1000099 is blocked by the application ID too, whatever the number" "is not the published package $PUBLISHED_ID" GATE
-gate_repo 2000000000 "$PUBLISHED_ID"; rejected "gate: even a huge build number does not hide the application-ID mismatch" "is not the published package" GATE
-gate_repo 1000099 "$PUBLISHED_ID"; expect_rc "gate: the build-number rule still reports its own pass beside the ID failure" 1 "build 1000099 is above the published floor" GATE
+gate_repo 1000035 "$OTHER_ID"; rejected "gate: build 1000035 with a production application ID that is not the published package is blocked" "is not the published package $OTHER_ID" GATE
+gate_repo 1000099 "$OTHER_ID"; rejected "gate: build 1000099 is blocked by the application ID too, whatever the number" "is not the published package $OTHER_ID" GATE
+gate_repo 2000000000 "$OTHER_ID"; rejected "gate: even a huge build number does not hide the application-ID mismatch" "is not the published package" GATE
+gate_repo 1000099 "$OTHER_ID"; expect_rc "gate: the build-number rule still reports its own pass beside the ID failure" 1 "build 1000099 is above the published floor" GATE
 # both rules fail together: both are reported
-gate_repo 1000034 "$PUBLISHED_ID"; rejected "gate: both rules fail and both are reported" "FAILED (2)" GATE
+gate_repo 1000034 "$OTHER_ID"; rejected "gate: both rules fail and both are reported" "FAILED (2)" GATE
 # no record, unreadable record
 gate_repo 1 "$PUBLISHED_ID"; printf '{"schema":"cadena-published-versions/1","entries":[]}' >"$tmp/g/config/release/published_versions.json"
 accepted "gate: with no published record there is no floor and no identity to match" GATE
@@ -455,7 +466,7 @@ expect_rc "gate: an unreadable ledger is an error, not a pass" 2 "unexpected sch
 ledger_floor="$(python3 -I -c 'import json,sys; print(max(e["version_code"] for e in json.load(open(sys.argv[1]))["entries"] if e["platform"]=="android"))' "$root/config/release/published_versions.json")"
 ledger_pkgs="$(python3 -I -c 'import json,sys; print(" ".join(sorted({e["package"] for e in json.load(open(sys.argv[1]))["entries"] if e["platform"]=="android"})))' "$root/config/release/published_versions.json")"
 pub_build="$(sed -n 's/^version: *[0-9.]*+//p' "$root/pubspec.yaml")"
-live_id="$(cd "$root" && bash tool/verify_artifact.sh matrix | sed -n "s/^production[[:space:]]\{1,\}\([^[:space:]]\{1,\}\).*/\1/p")"
+live_id="$(cd "$root" && bash tool/verify_artifact.sh matrix | sed -n "s/^android[[:space:]]\{1,\}production[[:space:]]\{1,\}\([^[:space:]]\{1,\}\).*/\1/p")"
 live_out="$(BM gate --channel production 2>&1)"; live_rc=$?
 if [ "$pub_build" -gt "$ledger_floor" ]; then want_frag="build $pub_build is above the published floor"; else want_frag="build $pub_build is not above the published build number"; fi
 t "live gate: the build-number verdict agrees with the pubspec ($pub_build) and the ledger ($ledger_floor)" has "$live_out" "$want_frag"
@@ -465,6 +476,15 @@ else
   t "live gate: the production application ID ($live_id) differs from the published package ($ledger_pkgs) and the gate says so" has "$live_out" "is not the published package"
   t "live gate: an unresolved application-ID mismatch fails the gate whatever the version (exit 1)" eq "$live_rc" 1
 fi
+# the identity matrix of the repository (#72): Android is the published Google Play package, iOS keeps its own bundle IDs
+live_matrix="$(cd "$root" && bash tool/verify_artifact.sh matrix)"
+matrix_id() { sed -n "s/^$1[[:space:]]\{1,\}$2[[:space:]]\{1,\}\([^[:space:]]\{1,\}\).*/\1/p" <<<"$live_matrix"; }
+t "identity: Android production is the published Google Play package ($PUBLISHED_ID)" eq "$(matrix_id android production)" "$PUBLISHED_ID"
+t "identity: Android staging is the production package plus .staging" eq "$(matrix_id android staging)" "$PUBLISHED_ID.staging"
+t "identity: iOS production keeps its bundle ID ($IOS_PROD_ID)" eq "$(matrix_id ios production)" "$IOS_PROD_ID"
+t "identity: iOS staging keeps its bundle ID ($IOS_STAGING_ID)" eq "$(matrix_id ios staging)" "$IOS_STAGING_ID"
+t "identity: the Android and iOS production identifiers are different" test "$(matrix_id android production)" != "$(matrix_id ios production)"
+t "identity: the Android application ID in the ledger and in Gradle agree" has "$(grep -E '^[[:space:]]*applicationId[[:space:]]*=' "$root/android/app/build.gradle.kts")" "\"$ledger_pkgs\""
 if [ "$pub_build" -ge "$ledger_floor" ]; then ok "ledger: the pubspec build is not below the published floor"; else bad "ledger: the pubspec build is below the published floor" "$pub_build < $ledger_floor"; fi
 
 # a release cannot be claimed while the published-version protections are open
@@ -486,7 +506,7 @@ t "future: its gate is above the floor and no known issue is open" eq "$(python3
 # the complete gate regardless of the version number: a REAL manifest (written by the tool, not edited) of a build
 # far above the floor, whose application ID is not the published one (#72), cannot claim a release
 for hb in 1000035 1000099 2000000000; do
-  mkfix "$tmp/hi" "$hb" "$PUBLISHED_ID"
+  mkfix "$tmp/hi" "$hb" "$OTHER_ID"
   rm -rf "$tmp/him"
   FIX="$tmp/hi" TOOLPY="$tmp/hi/tool/build_manifest.py" mkman android-production-apk "$tmp/him" "$COMMIT" push production
   HM="$tmp/him/android-production-apk.manifest.json"
@@ -498,7 +518,7 @@ for hb in 1000035 1000099 2000000000; do
   rejected "id-mismatch $hb: the known issue cannot be dropped to pass" "cannot be dropped" python3 -I "$tmp/hi/tool/build_manifest.py" verify "$tmp/hidrop.json" --repo "$tmp/hi"
   mut "$HM" "$tmp/hidrop2.json" "$RELCLAIM; m['signing']['signer_cert_sha256']='$Y'; m['known_issues']=[]"
   rejected "id-mismatch $hb: a release claim with the issue dropped is refused" "cannot be dropped" python3 -I "$tmp/hi/tool/build_manifest.py" verify "$tmp/hidrop2.json" --repo "$tmp/hi"
-  mkfix "$tmp/g" "$hb" "$PUBLISHED_ID"
+  mkfix "$tmp/g" "$hb" "$OTHER_ID"
   rejected "id-mismatch $hb: the production gate fails" "is not the published package" GATE
 done
 

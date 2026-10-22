@@ -44,9 +44,14 @@ cd "$(dirname "$0")/.."
 # The artifact path is given relative to the caller; the checks below change directory.
 abspath() { case "$1" in /*) echo "$1" ;; *) echo "$CALLER_PWD/$1" ;; esac; }
 
-STAGING_ID=com.app.cadenabitcoin.staging
+# The identity matrix. The Android application ID is the package published on Google Play
+# (config/release/published_versions.json, Issue #72); the iOS bundle ID is a separate identifier
+# (ios/Flutter/Flavor-<flavor>.xcconfig) that is not the Android one. The display names are shared.
+ANDROID_STAGING_ID=com.cadenabitcoin.mobile.signer.staging
+ANDROID_PRODUCTION_ID=com.cadenabitcoin.mobile.signer
+IOS_STAGING_ID=com.app.cadenabitcoin.staging
+IOS_PRODUCTION_ID=com.app.cadenabitcoin
 STAGING_NAME="Cadena Signer STAGING"
-PRODUCTION_ID=com.app.cadenabitcoin
 PRODUCTION_NAME="Cadena Bitcoin"
 
 failures=0
@@ -64,7 +69,15 @@ EVIDENCE=""
 ev() { EVIDENCE="${EVIDENCE}$1=$2
 "; }
 
-expected_id() { case "$1" in staging) echo "$STAGING_ID" ;; production) echo "$PRODUCTION_ID" ;; *) die "ENV must be staging or production" ;; esac; }
+expected_id() { # ENV PLATFORM(android|ios)
+  case "$2:$1" in
+    android:staging) echo "$ANDROID_STAGING_ID" ;;
+    android:production) echo "$ANDROID_PRODUCTION_ID" ;;
+    ios:staging) echo "$IOS_STAGING_ID" ;;
+    ios:production) echo "$IOS_PRODUCTION_ID" ;;
+    *) die "ENV must be staging or production (platform ${2:-none})" ;;
+  esac
+}
 expected_name() { case "$1" in staging) echo "$STAGING_NAME" ;; production) echo "$PRODUCTION_NAME" ;; *) die "ENV must be staging or production" ;; esac; }
 
 # ---- the expected version, from pubspec.yaml only ----------------------------------
@@ -154,7 +167,7 @@ verify_apk() { # ENV FILE SIGNING
   name=$(sed -n "s/^package:.* versionName='\([^']*\)'.*/\1/p" <<<"$badging" | sed -n '1p')
   label=$(sed -n "s/^application-label:'\(.*\)'$/\1/p" <<<"$badging" | sed -n '1p')
 
-  [ "$id" = "$(expected_id "$env")" ] && pass "application ID is $id" || fail "application ID is '$id', expected $(expected_id "$env")"
+  [ "$id" = "$(expected_id "$env" android)" ] && pass "application ID is $id" || fail "application ID is '$id', expected $(expected_id "$env" android)"
   [ "$label" = "$(expected_name "$env")" ] && pass "display name is '$label'" || fail "display name is '$label', expected '$(expected_name "$env")'"
   [ "$name" = "$EXPECT_NAME" ] && pass "versionName $name matches pubspec.yaml" || fail "versionName '$name' != pubspec $EXPECT_NAME"
   [ "$code" = "$EXPECT_BUILD" ] && pass "versionCode $code matches pubspec.yaml" || fail "versionCode '$code' != pubspec $EXPECT_BUILD"
@@ -220,7 +233,7 @@ print("debuggable=" + (app.get(A + "debuggable", "") if app is not None else "")
   id=$(sed -n 's/^package=//p' <<<"$parsed"); code=$(sed -n 's/^versionCode=//p' <<<"$parsed")
   name=$(sed -n 's/^versionName=//p' <<<"$parsed"); label=$(sed -n 's/^label=//p' <<<"$parsed")
 
-  [ "$id" = "$(expected_id "$env")" ] && pass "application ID is $id" || fail "application ID is '$id', expected $(expected_id "$env")"
+  [ "$id" = "$(expected_id "$env" android)" ] && pass "application ID is $id" || fail "application ID is '$id', expected $(expected_id "$env" android)"
   [ "$label" = "$(expected_name "$env")" ] && pass "display name is '$label'" || fail "display name is '$label', expected '$(expected_name "$env")'"
   [ "$name" = "$EXPECT_NAME" ] && pass "versionName $name matches pubspec.yaml" || fail "versionName '$name' != pubspec $EXPECT_NAME"
   [ "$code" = "$EXPECT_BUILD" ] && pass "versionCode $code matches pubspec.yaml" || fail "versionCode '$code' != pubspec $EXPECT_BUILD"
@@ -376,7 +389,7 @@ verify_ios() { # ENV APP_DIR
   id=$(plist_get "$plist" CFBundleIdentifier); name=$(plist_get "$plist" CFBundleDisplayName)
   short=$(plist_get "$plist" CFBundleShortVersionString); build=$(plist_get "$plist" CFBundleVersion)
 
-  [ "$id" = "$(expected_id "$env")" ] && pass "bundle identifier is $id" || fail "bundle identifier is '$id', expected $(expected_id "$env")"
+  [ "$id" = "$(expected_id "$env" ios)" ] && pass "bundle identifier is $id" || fail "bundle identifier is '$id', expected $(expected_id "$env" ios)"
   [ "$name" = "$(expected_name "$env")" ] && pass "display name is '$name'" || fail "display name is '$name', expected '$(expected_name "$env")'"
   [ "$short" = "$EXPECT_NAME" ] && pass "CFBundleShortVersionString $short matches pubspec.yaml" || fail "CFBundleShortVersionString '$short' != pubspec $EXPECT_NAME"
   [ "$build" = "$EXPECT_BUILD" ] && pass "CFBundleVersion $build matches pubspec.yaml" || fail "CFBundleVersion '$build' != pubspec $EXPECT_BUILD"
@@ -473,7 +486,7 @@ case "$cmd" in
         *) die "unknown option '$1'" ;;
       esac
     done
-    expected_id "$env" >/dev/null
+    expected_id "$env" android >/dev/null
     [ -e "$file" ] || die "$file not found"
     echo "Verifying $kind for the $env environment: $file"
     run_kind "$kind" "$env" "$file" "$signing"
@@ -522,8 +535,10 @@ case "$cmd" in
     echo "RESULT: OK"
     ;;
   matrix)
-    echo "staging     $STAGING_ID  '$STAGING_NAME'"
-    echo "production  $PRODUCTION_ID  '$PRODUCTION_NAME'"
+    echo "android  staging     $ANDROID_STAGING_ID  '$STAGING_NAME'"
+    echo "android  production  $ANDROID_PRODUCTION_ID  '$PRODUCTION_NAME'"
+    echo "ios      staging     $IOS_STAGING_ID  '$STAGING_NAME'"
+    echo "ios      production  $IOS_PRODUCTION_ID  '$PRODUCTION_NAME'"
     load_version
     echo "version     $EXPECT_NAME (build $EXPECT_BUILD), from pubspec.yaml"
     ;;

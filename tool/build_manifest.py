@@ -157,9 +157,12 @@ def identity_differs(entries, platform, app_id):
     return bool(packages) and app_id not in packages
 
 
-def identities(root):
-    """Expected application ID and display name per environment: the single copy lives in
-    tool/verify_artifact.sh; it is asked, not duplicated."""
+def identities(root, platform):
+    """Expected application ID (Android) or bundle ID (iOS) and display name per environment of
+    one platform: the single copy lives in tool/verify_artifact.sh; it is asked, not duplicated.
+    The two platforms have different identifiers (Issue #72)."""
+    if platform not in ("android", "ios"):
+        die("identities: unknown platform '%s'" % platform)
     script = os.path.join(root, "tool", "verify_artifact.sh")
     try:
         out = subprocess.run(["bash", script, "matrix"], capture_output=True, text=True,
@@ -168,9 +171,9 @@ def identities(root):
         die("cannot read the identity matrix from %s: %s" % (script, e))
     result = {}
     for line in out.splitlines():
-        m = re.match(r"^(staging|production)\s+(\S+)\s+'(.*)'$", line)
-        if m:
-            result[m.group(1)] = (m.group(2), m.group(3))
+        m = re.match(r"^(android|ios)\s+(staging|production)\s+(\S+)\s+'(.*)'$", line)
+        if m and m.group(1) == platform:
+            result[m.group(2)] = (m.group(3), m.group(4))
     if set(result) != {"staging", "production"}:
         die("the identity matrix of %s is unreadable: %r" % (script, out))
     return result
@@ -468,7 +471,7 @@ def verify_manifest(m, root, evidence=None):
             p.add("versionCode %s exceeds Google Play's limit %s" % (pb, MAX_ANDROID_VERSION_CODE))
 
     # -- application identity and configuration -------------------------------------------------
-    ident = identities(root or DEFAULT_ROOT)
+    ident = identities(root or DEFAULT_ROOT, platform)
     want_id, want_name = ident[environment]
     if app["id"] != want_id:
         p.add("application.id '%s' is not the %s identity %s" % (app["id"], environment, want_id))
@@ -801,7 +804,7 @@ def cmd_gate(args):
         print("PASS  staging: no published record applies (staging is a separate application)")
         return 0
     entries = load_ledger(root)
-    app_id = identities(root)["production"][0]
+    app_id = identities(root, "android")["production"][0]
     bad = 0
     for platform in ("android", "ios"):
         floor = floor_for(entries, platform)
