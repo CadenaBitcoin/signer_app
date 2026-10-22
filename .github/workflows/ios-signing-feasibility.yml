@@ -1,0 +1,161 @@
+# iOS signing FEASIBILITY EXPERIMENT (Issue #71, stage D). It is not a build, a release or a delivery.
+#
+# Question: can Apple's own `codesign` sign the EXISTING unsigned staging application (the artifact of an
+# accepted "iOS CI validation build" run) without recompiling it, and does tool/verify_ipa.py agree with
+# Apple about the result? Nothing is rebuilt: the input is downloaded from the earlier run and checked
+# against a SHA-256 supplied by the person who starts this workflow.
+#
+# What it does, on a GitHub-hosted macos-15 runner with Xcode 26.3:
+#   1. downloads the unsigned staging Runner.app of the chosen run (read-only) and verifies its digest;
+#   2. creates a THROWAWAY self-signed identity in a THROWAWAY keychain (tool/spike_resign_unsigned_ios.sh);
+#   3. signs the app with Apple's codesign (`--timestamp=none`: no timestamp server is contacted), in two
+#      variants (every Mach-O file re-signed / Apple-signed Swift runtime copy left as it is);
+#   4. packages test IPAs, verifies them with `codesign --verify --deep --strict` and with
+#      tool/verify_ipa.py (`structure`, `compare`), and checks that the executables are unchanged apart
+#      from signatures;
+#   5. deletes the identity and the keychain, and checks that they are gone.
+#
+# What it must never do, and this workflow is tested for it (tool/test_verify_ipa.sh):
+#   - use an Apple credential, certificate, provisioning profile or App Store Connect key, or any secret;
+#   - contact Apple services, upload to TestFlight or App Store Connect, or publish anything;
+#   - upload the test IPAs, or anything else, as an Actions artifact (no `upload-artifact` step exists);
+#   - run on push, pull request or schedule: it is started by hand (workflow_dispatch) only.
+#
+# SUCCESS HERE DOES NOT PROVE APPLE DISTRIBUTION COMPATIBILITY. The identity is self-signed and there is
+# no provisioning profile: neither `xcodebuild -exportArchive`, App Store Connect nor a device is
+# involved. A pass shows that the signing mechanics work on this application's real build output.
+# See docs/IOS_SIGNING.md 3.2.
+
+name: iOS signing feasibility experiment (not a release)
+
+on:
+  workflow_dispatch:
+    inputs:
+      source_run_id:
+        description: "Run ID of an accepted 'iOS CI validation build' run whose unsigned staging app is the input"
+        required: true
+        default: "39608182641"
+      source_zip_sha256:
+        description: "SHA-256 of the Runner.app.zip inside that run's artifact (its SHA256SUMS.txt)"
+        required: true
+        default: "3d1ed05ad26ba59040aed083e907e50d3cd4f9820568a76c91ad2bce33b2d0ef"
+
+# Least privilege: read the repository and the artifacts of earlier runs. No write access of any kind.
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: ios-signing-feasibility
+  cancel-in-progress: false
+
+env:
+  # The same toolchain pins as the iOS build workflows (tool/verify_ios_toolchain.sh checks those two).
+  XCODE_APP: /Applications/Xcode_26.3.app
+  EXPECTED_XCODE: "26.3"
+  EXPECTED_MIN_SDK_MAJOR: "26"
+  SOURCE_WORKFLOW_PATH: .github/workflows/ios-ci-validation.yml
+
+jobs:
+  experiment:
+    name: Sign the unsigned staging app with a throwaway identity
+    runs-on: macos-15
+    timeout-minutes: 30
+    steps:
+      - name: Checkout exact commit
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+
+      - name: Select Xcode 26.3
+        run: |
+          sudo xcode-select -s "$XCODE_APP/Contents/Developer"
+          xcodebuild -version
+          actual="$(xcodebuild -version | sed -n '1s/^Xcode //p')"
+          if [ "$actual" != "$EXPECTED_XCODE" ]; then
+            echo "::error::Expected Xcode $EXPECTED_XCODE at $XCODE_APP but xcodebuild reports '$actual'."
+            exit 1
+          fi
+
+      - name: Validate the inputs
+        env:
+          SOURCE_RUN_ID: ${{ inputs.source_run_id }}
+          SOURCE_ZIP_SHA256: ${{ inputs.source_zip_sha256 }}
+        run: |
+          case "$SOURCE_RUN_ID" in ''|*[!0-9]*) echo "::error::source_run_id must be digits only."; exit 1 ;; esac
+          if ! printf '%s' "$SOURCE_ZIP_SHA256" | grep -E '^[0-9a-f]{64}$' >/dev/null; then
+            echo "::error::source_zip_sha256 must be 64 lower-case hex characters."
+            exit 1
+          fi
+          echo "SOURCE_RUN_ID=$SOURCE_RUN_ID" >> "$GITHUB_ENV"
+          echo "SOURCE_ZIP_SHA256=$SOURCE_ZIP_SHA256" >> "$GITHUB_ENV"
+
+      # Read-only. The token can read this repository's runs and artifacts and nothing else.
+      - name: Fetch the unsigned staging app of the source run and verify its digest
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          run_api="repos/$GITHUB_REPOSITORY/actions/runs/$SOURCE_RUN_ID"
+          [ "$(gh api "$run_api" --jq .path)" = "$SOURCE_WORKFLOW_PATH" ] || { echo "::error::Run $SOURCE_RUN_ID is not a run of $SOURCE_WORKFLOW_PATH."; exit 1; }
+          [ "$(gh api "$run_api" --jq .conclusion)" = "success" ] || { echo "::error::Run $SOURCE_RUN_ID did not succeed."; exit 1; }
+          [ "$(gh api "$run_api" --jq .repository.full_name)" = "$GITHUB_REPOSITORY" ] || { echo "::error::Run $SOURCE_RUN_ID belongs to another repository."; exit 1; }
+          echo "source run $SOURCE_RUN_ID: commit $(gh api "$run_api" --jq .head_sha), branch $(gh api "$run_api" --jq .head_branch)"
+          ids="$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$SOURCE_RUN_ID/artifacts" \
+            --jq '[.artifacts[] | select((.expired | not) and (.name | contains("_staging_unsigned_"))) | .id] | join(" ")')"
+          set -- $ids
+          [ "$#" -eq 1 ] || { echo "::error::Expected exactly one live staging unsigned artifact in run $SOURCE_RUN_ID, found $#."; exit 1; }
+          mkdir -p "$RUNNER_TEMP/source" "$RUNNER_TEMP/input"
+          gh api "repos/$GITHUB_REPOSITORY/actions/artifacts/$1/zip" > "$RUNNER_TEMP/source/artifact.zip"
+          unzip -q "$RUNNER_TEMP/source/artifact.zip" -d "$RUNNER_TEMP/source/files"
+          inner="$(ls "$RUNNER_TEMP"/source/files/*_Runner.app.zip)"
+          actual="$(shasum -a 256 "$inner" | awk '{print $1}')"
+          if [ "$actual" != "$SOURCE_ZIP_SHA256" ]; then
+            echo "::error::Runner.app.zip has SHA-256 $actual, expected $SOURCE_ZIP_SHA256. Nothing was signed."
+            exit 1
+          fi
+          grep "$actual" "$RUNNER_TEMP/source/files/SHA256SUMS.txt" >/dev/null || { echo "::error::SHA256SUMS.txt of the artifact does not list $actual."; exit 1; }
+          ditto -x -k "$inner" "$RUNNER_TEMP/input"
+          [ -f "$RUNNER_TEMP/input/Runner.app/Info.plist" ] || { echo "::error::Runner.app not found in the artifact."; exit 1; }
+          echo "input digest verified: $actual"
+
+      - name: Verify the unsigned input with the repository's own verifier
+        run: |
+          bash tool/verify_artifact.sh ios staging "$RUNNER_TEMP/input/Runner.app" --min-sdk "$EXPECTED_MIN_SDK_MAJOR"
+
+      - name: Sign with a throwaway identity and verify (two variants)
+        run: |
+          bash tool/spike_resign_unsigned_ios.sh "$RUNNER_TEMP/input/Runner.app" "$RUNNER_TEMP/experiment-out"
+
+      # Runs even when an earlier step failed. The script's own trap deletes the keychain; this checks it.
+      - name: Confirm that the throwaway identity and keychain are gone
+        if: always()
+        run: |
+          set +e
+          leftovers="$(find "${TMPDIR:-/tmp}" /var/folders -name 'spike.keychain-db' 2>/dev/null | head -5)"
+          identities="$(security find-identity -p codesigning 2>/dev/null | grep -c 'Spike Throwaway Signer')"
+          keychains="$(security list-keychains 2>/dev/null | grep -c 'spike')"
+          echo "leftover spike keychain files: ${leftovers:-none}"
+          echo "throwaway identities visible in the search list: $identities"
+          echo "spike keychains in the search list: $keychains"
+          if [ -n "$leftovers" ] || [ "$identities" != "0" ] || [ "$keychains" != "0" ]; then
+            echo "::error::The throwaway identity or keychain was not removed."
+            exit 1
+          fi
+          rm -rf "$RUNNER_TEMP/experiment-out" "$RUNNER_TEMP/input" "$RUNNER_TEMP/source"
+          echo "test IPAs and the input were deleted from the runner"
+
+      - name: Report
+        if: always()
+        run: |
+          {
+            echo "## iOS signing feasibility experiment (NOT a release)"
+            echo ""
+            echo "**Success here does not prove Apple distribution compatibility.** The identity is self-signed,"
+            echo "there is no profile, and neither Xcode's archive export, the App Store nor a device was"
+            echo "involved. The test IPAs were deleted and nothing was uploaded."
+            echo ""
+            echo "Source run: \`$SOURCE_RUN_ID\`, input SHA-256: \`$SOURCE_ZIP_SHA256\`, Xcode: $(xcodebuild -version | head -1)"
+            echo ""
+            echo "The RESULT lines of the previous step are in the job log."
+          } >> "$GITHUB_STEP_SUMMARY"
