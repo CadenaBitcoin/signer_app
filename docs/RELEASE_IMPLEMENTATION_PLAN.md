@@ -141,7 +141,7 @@ Readiness record: [IOS_SIGNING.md](IOS_SIGNING.md). Stages A and B are documenta
 | A | Questionnaire for the Apple account owner ([APPLE_ACCOUNT_QUESTIONNAIRE.md](APPLE_ACCOUNT_QUESTIONNAIRE.md)); answers kept privately | No |
 | B | Documentation corrections, security model, operating-procedure skeleton | No |
 | C | Prerequisites of policy 8.1: release identifier scheme, in-app staging identifier, Signet validation, export-compliance declaration | No (declaration awaits the answers) |
-| D | Static workflow guards; `tool/verify_ipa.sh` and its fixtures; signing spike with a throwaway self-signed identity; unsigned archive job | No |
+| D | Static workflow guards; IPA verifier and its fixtures (**done**, security-reviewed: [IOS_SIGNING.md](IOS_SIGNING.md) 3.1); signing-job separation (credential-free evidence **done**, hosted `codesign` experiment **prepared, not run**: 3.2 and 3.3); Stage C audit (**done**, read-only: 3.4); unsigned archive job | No |
 | E | Staging environment, certificate, profile, service user and key; signed staging IPA **without upload** | **Yes** |
 | F | Upload to the staging record, processing state, internal TestFlight; assignment to testers by explicit approval | **Yes** |
 | G | Production signing procedure verified without upload; production upload behind **independent** approval | **Yes**, and a second approver |
