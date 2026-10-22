@@ -21,8 +21,11 @@ android {
     }
 
     defaultConfig {
-        // TODO: Specify your own unique Application ID (https://developer.android.com/studio/build/application-id.html).
-        applicationId = "com.app.cadenabitcoin"
+        // The application ID of the app published on Google Play (Issue #72). It is deliberately
+        // different from the Kotlin namespace above: the namespace names the source package
+        // (R class, MainActivity) and stays; only the application ID is the app's identity on
+        // devices and in Google Play. iOS has its own identifiers (ios/Flutter/Flavor-*.xcconfig).
+        applicationId = "com.cadenabitcoin.mobile.signer"
         // You can update the following values to match your application needs.
         // For more information, see: https://flutter.dev/to/review-gradle-config.
         minSdk = flutter.minSdkVersion

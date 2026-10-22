@@ -442,7 +442,7 @@ def write_code_resources(bundle, exe_name):
 
 
 def make_unsigned_app(directory, env, seed="1", version=None):
-    ids = BM.identities(os.path.dirname(HERE))
+    ids = BM.identities(os.path.dirname(HERE), "ios")
     app_id, name = ids[env]
     _raw, vname, vbuild = BM.load_pubspec(os.path.dirname(HERE))
     app = os.path.join(directory, "Runner.app")
@@ -710,7 +710,7 @@ def sign_app(app_in, out_ipa, certdir, team, mutations):
 
 
 def make_manifest(app_dir, out, env):
-    ids = BM.identities(os.path.dirname(HERE))
+    ids = BM.identities(os.path.dirname(HERE), "ios")
     with open(os.path.join(app_dir, "Info.plist"), "rb") as f:
         info = plistlib.load(f)
     m = {"schema": BM.SCHEMA, "environment": env, "platform": "ios", "kind": "ios-app",

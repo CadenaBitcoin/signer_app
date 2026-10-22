@@ -379,7 +379,7 @@ def verify(args):
     repo = os.path.abspath(args.repo)
     now = parse_now(args.now)
     env = args.env
-    ids = BM.identities(repo)
+    ids = BM.identities(repo, "ios")
     want_id, want_name = ids[env]
     _raw, want_version, want_build = BM.load_pubspec(repo)
     team = args.team_id

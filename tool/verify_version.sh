@@ -22,7 +22,9 @@
 # staging versionName (X.Y.Z-rc.N) is introduced, the same pull request must teach this
 # script to expect exactly that wiring; it is not to be loosened ahead of time.
 #   6. Android and iOS declare exactly the two flavors with the identities of
-#      docs/BUILD_CONFIGURATION.md (production keeps com.app.cadenabitcoin).
+#      docs/BUILD_CONFIGURATION.md (Android production is the published Google Play package
+#      com.cadenabitcoin.mobile.signer; the iOS bundle ID com.app.cadenabitcoin is separate;
+#      the Kotlin namespace com.app.cadenabitcoin is a source package and is not an identity).
 #
 # Build numbers: today both platforms take the build number from pubspec.yaml, and check 3
 # flags anything else as unintended. The policy does NOT forbid different Android/iOS build
@@ -155,16 +157,16 @@ if [ -f "$gradle" ]; then
   [ "$(grep -cE '^    flavorDimensions \+= "environment"$' "$gradle")" -eq 1 ] \
     && pass "Android has the single flavor dimension 'environment'" \
     || fail "$gradle: expected exactly one flavorDimensions += \"environment\""
-  [ "$(grep -cE '^        applicationId = "com\.app\.cadenabitcoin"$' "$gradle")" -eq 1 ] \
+  [ "$(grep -cE '^        applicationId = "com\.cadenabitcoin\.mobile\.signer"$' "$gradle")" -eq 1 ] \
     && [ "$(grep -cE '^[[:space:]]*applicationId[[:space:]]*=' "$gradle")" -eq 1 ] \
-    && pass "Android applicationId com.app.cadenabitcoin is set once, in defaultConfig (the production identity)" \
-    || fail "$gradle: applicationId must be set exactly once, to com.app.cadenabitcoin, in defaultConfig"
+    && pass "Android applicationId com.cadenabitcoin.mobile.signer is set once, in defaultConfig (the production identity, the published Google Play package)" \
+    || fail "$gradle: applicationId must be set exactly once, to com.cadenabitcoin.mobile.signer, in defaultConfig"
   [ "$(grep -cE '^    namespace = "com\.app\.cadenabitcoin"$' "$gradle")" -eq 1 ] \
-    && pass "Android namespace com.app.cadenabitcoin unchanged" \
+    && pass "Android namespace com.app.cadenabitcoin unchanged (a source package, not the application ID)" \
     || fail "$gradle: namespace must stay com.app.cadenabitcoin"
   [ "$(grep -cE '^[[:space:]]*applicationIdSuffix[[:space:]]*=' "$gradle")" -eq 1 ] \
     && flavor_block staging | grep -qE '^            applicationIdSuffix = "\.staging"$' \
-    && pass "Android staging application ID = com.app.cadenabitcoin.staging (suffix only in the staging flavor)" \
+    && pass "Android staging application ID = com.cadenabitcoin.mobile.signer.staging (suffix only in the staging flavor)" \
     || fail "$gradle: applicationIdSuffix \".staging\" must appear once, in the staging flavor only"
   flavor_block staging | grep -qE '^            manifestPlaceholders\["appLabel"\] = "Cadena Signer STAGING"$' \
     && flavor_block production | grep -qE '^            manifestPlaceholders\["appLabel"\] = "Cadena Bitcoin"$' \
