@@ -126,7 +126,7 @@ verifier rejects a mismatch between the kind of artifact and the kind of digest.
 |---|---|---|
 | `unsigned` | no signature (iOS `--no-codesign`) | iOS |
 | `debug` | the temporary Android debug key; **not distributable**; the certificate is recorded | Android |
-| `release` | signed with an official release key; needs a recorded certificate fingerprint and a release identifier | **nothing produces it yet** (#72) |
+| `release` | signed with an official release key; needs a recorded certificate fingerprint and a release identifier | **no CI build produces it**; the local Android procedure (#72, `docs/ANDROID_RELEASE.md`) writes its own release report, not a CI manifest |
 
 `debug` and `unsigned` artifacts can only be classified `compile-validation` or
 `internal-evaluation`, never as a release candidate or a release, and are never

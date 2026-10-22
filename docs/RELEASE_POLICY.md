@@ -189,9 +189,11 @@ Rules common to all five:
 - Validation builds stay as they are until a deliberate, approved transition
   ([RELEASE_IMPLEMENTATION_PLAN.md](RELEASE_IMPLEMENTATION_PLAN.md) section 3).
   They are not promoted, renamed or signed into release artifacts.
-- The Android `release` build type currently uses the **debug signing config**
-  (`CLAUDE.md` section 10). A release build made from the repository today is not
-  official and must not be distributed.
+- The Android `release` build type is **debug-signed unless `CADENA_SIGNING=release`** selects a
+  keystore supplied from outside the repository ([ANDROID_RELEASE.md](ANDROID_RELEASE.md), Issue #72).
+  A build made without it (all CI builds) is not official and must not be distributed. An official
+  Android build is one made by the local release procedure with the Cadena upload key and
+  verified by `tool/verify_android_release.py`; no CI pipeline signs yet.
 - A build is official only if the pipeline of its branch produced it, from an
   approved commit, signed in the matching context, with a complete release
   record. Anything else is not official, whatever it is called.

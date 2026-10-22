@@ -56,6 +56,10 @@ There is deliberately **no `flutter test` step**: the repository has no `test/`
 directory. Add it when tests exist.
 
 The same commands run locally (JDK 17) as the bootstrap in `CLAUDE.md` section 4.
+
+These builds are **debug-signed validation builds** (no `CADENA_SIGNING`, no secret). The
+production-signed APK and AAB are made by the local release procedure of
+[ANDROID_RELEASE.md](ANDROID_RELEASE.md), which no workflow runs.
 Every build needs the configuration flag and the matching `--flavor`; see
 [BUILD_CONFIGURATION.md](BUILD_CONFIGURATION.md).
 
