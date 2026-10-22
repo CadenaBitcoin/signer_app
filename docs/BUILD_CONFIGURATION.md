@@ -34,6 +34,7 @@ tool/commit_parents.sh                 merge-commit detection that also works in
 tool/check_verdict.sh                  the pass/fail decisions of the aggregate verdict
 tool/test_release_triggers.sh          tests of the three above, without a build
 tool/test_release_versioning.sh        tests of the version rules and the build manifest, without a build
+tool/test_android_release.sh           tests of the Android release signing and verification, without a build (Issue #72)
 ```
 
 | Key | Staging | Production |

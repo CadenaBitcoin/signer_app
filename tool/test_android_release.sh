@@ -62,6 +62,9 @@ t "gradle: the keystore patterns stay ignored by Git" eq "$(grep -cE '^(key\.pro
 # CI stays credential-free: no workflow selects release signing or names a secret
 wf_hits="$(grep -rlE 'CADENA_SIGNING|CADENA_KEYSTORE|CADENA_KEY_|CADENA_EXPECTED_CERT|secrets\.' "$root/.github/workflows" 2>/dev/null | grep -v 'ios-signing-feasibility' | tr '\n' ' ')"
 t "ci: no workflow enables release signing or reads a secret (${wf_hits:-none})" test -z "$wf_hits"
+t "ci: no workflow runs the local release procedure" eq "$(grep -rlE 'release_android\.sh' "$root/.github/workflows" 2>/dev/null | wc -l | tr -d ' ')" 0
+t "ci: the plan job of build-variants runs this credential-free test" eq "$(grep -cE '^        run: tool/test_android_release\.sh$' "$root/.github/workflows/build-variants.yml")" 1
+t "ci: no workflow publishes to Google Play or uploads a release" eq "$(grep -rliE 'upload-google-play|r0adkll|play-publisher|fastlane supply|androidpublisher' "$root/.github/workflows" 2>/dev/null | wc -l | tr -d ' ')" 0
 
 # ---------------------------------------------------------------------------------------------
 # 2. The ledgers hold public facts only

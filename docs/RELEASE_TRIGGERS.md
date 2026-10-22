@@ -121,7 +121,8 @@ package is installed and no YAML parser is involved: the workflow is read as tex
 test fails when a pinned line is edited, which asks for a deliberate review. It needs no
 Flutter and can be run locally. The job then runs `tool/test_release_versioning.sh` (the
 version rules, the build manifests and the published-version gate; it also needs `python3`,
-present on every runner).
+present on every runner) and `tool/test_android_release.sh` (the Android release signing and
+verification, credential-free and without artifacts, Issue #72; `docs/ANDROID_RELEASE.md`).
 
 ## Concurrency
 
