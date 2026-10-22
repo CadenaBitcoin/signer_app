@@ -150,7 +150,7 @@ if [ -f "$gradle" ]; then
   }
   n_create="$(grep -cE '^        create\("[a-z]+"\) \{$' "$gradle")"
   n_any_create="$(grep -c 'create(' "$gradle")"
-  [ "$n_create" -eq 2 ] && [ "$n_any_create" -eq 2 ] && [ "$(grep -c 'productFlavors' "$gradle")" -eq 1 ] \
+  [ "$n_create" -eq 2 ] && [ "$n_any_create" -eq 2 ] && [ "$(grep -cE '^    productFlavors \{$' "$gradle")" -eq 1 ] \
     && [ -n "$(flavor_block production)" ] && [ -n "$(flavor_block staging)" ] \
     && pass "Android declares exactly the flavors production and staging" \
     || fail "$gradle: expected exactly the flavors production and staging (found $n_create flavor blocks, $n_any_create create() calls)"

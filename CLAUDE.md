@@ -233,7 +233,8 @@ authorization:
   `CADENA_SIGNING` the release build type is debug-signed (the credential-free CI validation;
   never distributable); `CADENA_SIGNING=release` signs with a keystore supplied from outside
   the repository and fails, with no fallback to the debug key, when anything is missing or the
-  certificate is not the expected one. Never set `CADENA_SIGNING`, never create or read a
+  certificate is not the expected one, and signs the production flavor only (any release task of
+  another flavor fails the build). Never set `CADENA_SIGNING`, never create or read a
   keystore, and never put a signing credential in the repository, a log or a chat. The Google
   Play app-signing key is held by Google and stays unchanged; the upload key is Cadena-controlled
   and held by the CFO. `tool/release_android.sh` is the local procedure, run by the key holder.

@@ -175,6 +175,29 @@ android {
     }
 }
 
+// The production signing identity signs the PRODUCTION application only. Once the task graph is known,
+// a "release" build that would run any task of the release variant of another flavor (staging, or a flavor
+// added later) fails before anything is compiled or signed: `flutter build ... --flavor staging`,
+// `./gradlew assembleStagingRelease` and the flavor-less `assembleRelease` (which assembles every flavor)
+// are all refused. The flavor names are read from the declarations above, so a new flavor is covered
+// without an edit here. Validation mode is unaffected: it holds no identity.
+if (cadenaSigningMode == "release") {
+    gradle.taskGraph.whenReady {
+        val foreignReleaseVariants = android.productFlavors.names
+            .filter { it != "production" }
+            .map { it.replaceFirstChar { c -> c.uppercase() } + "Release" }
+        val offending = allTasks
+            .filter { it.project == project }
+            .filter { task -> foreignReleaseVariants.any { task.name.contains(it) } }
+            .map { it.name }
+        if (offending.isNotEmpty()) {
+            throw GradleException("CADENA_SIGNING=release signs the production application only; this build would also run " +
+                offending.take(3).joinToString(", ") + " (a release variant of another flavor) with the production signing identity. " +
+                "Nothing was signed. Build with --flavor production, or unset CADENA_SIGNING for a validation build.")
+        }
+    }
+}
+
 flutter {
     source = "../.."
 }
