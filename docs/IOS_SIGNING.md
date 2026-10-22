@@ -104,17 +104,93 @@ push to staging (reviewed PR merge)
   **Open technical question:** whether an unsigned archive can be exported and re-signed
   cleanly, or the signing job must codesign and package the IPA itself. A spike on a
   hosted runner with a throwaway self-signed identity (no Apple credentials) answers it. If
-  it fails, a single job is the fallback and its extra exposure is documented.
+  it fails, a single job is the fallback and its extra exposure is documented. What is already
+  established without Apple, and what the spike still has to show, is in section 3.2.
 - **New workflow files** (stage T3 of [RELEASE_IMPLEMENTATION_PLAN.md](RELEASE_IMPLEMENTATION_PLAN.md));
   the unsigned validation workflows keep their meaning.
-- **Verification before upload** (`tool/verify_ipa.sh`, to be written): bundle ID, version and
-  build number against the manifest and `pubspec.yaml`, Team ID, signing authority and
-  certificate fingerprint, provisioning-profile type, team, App ID and expiry, entitlements
-  (`get-task-allow` absent), signature integrity. Evidence is text only.
+- **Verification before upload** (`tool/verify_ipa.py`, written and tested on synthetic fixtures,
+  not yet used by any workflow; section 3.1): bundle ID, version and build number against
+  `pubspec.yaml` and the manifest, Team ID, signing authority and certificate fingerprint,
+  provisioning-profile type, team, App ID and expiry, entitlements (`get-task-allow` absent),
+  signature integrity. Evidence is text only.
 - **Build numbers** stay single-sourced from `pubspec.yaml`. Apple rejects a repeated build
   number, and the pipeline treats that as a hard stop, never as something to work around.
 - A static test must fail if any workflow uses `pull_request_target`, or contains a
   review-submission or release call to App Store Connect.
+
+### 3.1 IPA verification tooling (implemented 2026-10-22; not wired into any workflow)
+
+| File | Purpose |
+|---|---|
+| `tool/verify_ipa.py` | `verify ENV IPA --team-id T`: the checks below. `compare UNSIGNED SIGNED`: is the signed bundle the unsigned one plus signatures only. `analyze-unsigned APP`: what re-signing a given unsigned bundle involves. |
+| `tool/ipa_inspect.py` | The reader (Mach-O, code signature, CodeDirectory, entitlements, CodeResources, CMS, provisioning profile). Standard library plus the `openssl` command for CMS signature validity. Read-only; it needs no credential and no Xcode. |
+| `tool/ipa_fixture.py` | **Test tooling only.** Synthetic apps, a throwaway certificate chain whose names say "Synthetic", a fake profile and a signer that writes the structures Apple's `codesign` writes. Nothing it makes is accepted by Apple or a device. |
+| `tool/test_verify_ipa.sh` | 60 checks (61 with a real build): acceptance cases and more than 40 rejections (below). `REAL_UNSIGNED_APP=...` also re-signs a real unsigned build. |
+
+`verify` checks, from the IPA alone: bundle identifier, display name, version and build number for the
+environment and `pubspec.yaml` (staging and production cannot mix); that every executable is signed
+(not ad hoc) by **one** certificate for the expected Team ID; the CodeDirectory page hashes, special
+slots (Info.plist, requirements, CodeResources, entitlements) and the bundle's CodeResources against
+the files (nothing changed or added after signing); the CMS signature and that it binds every
+CodeDirectory; the certificate (distribution certificate, Team ID, issuer, validity, SHA-256
+fingerprint, **pinned** with `--expect-cert-sha256`, required for production); the embedded profile
+(CMS signature valid, app-store type, no device list, exact App ID, team, not expired, contains the
+signing certificate); the entitlements (application identifier, team, `get-task-allow` absent,
+`aps-environment` production, every entitlement granted by the profile); the IPA digest handed over by
+the signing job; and, with the build manifest and the unsigned bundle, that the manifest describes
+that bundle and the IPA contains the same code with signatures only. Archives with unsafe member
+names, links leaving the bundle or more than one app are refused.
+
+| Evidence level | What it covers |
+|---|---|
+| **Verified on real data** (accepted run `39608182641`, its unsigned artifact) | The parser reads the real signatures: the Apple-signed Swift runtime library has two CodeDirectories (SHA-1 and SHA-256), `openssl` verifies its CMS signature, and the Apple "cdhashes" attribute lists both; page hashes, the Info.plist, requirements and CodeResources special slots and the `CodeResources` of Flutter's and `App`'s frameworks all match. |
+| **Verified on synthetic fixtures** | Every check above, including the rejections: tampered executable, resource, Info.plist or CMS; added file; replaced alternate CodeDirectory; ad-hoc or unsigned code; foreign signer; wrong team, certificate, issuer, expiry or pin; missing, expired, ad-hoc, development, wildcard or foreign profile; entitlements not granted, `get-task-allow`, `aps-environment`; wrong bundle, version or environment; unsafe archives; manifest of another environment; recompiled or injected content. Breaking three of the checks on purpose made the matching test fail. |
+| **Needs a real Apple-signed IPA** | The certificate chain to an Apple root and revocation (no Apple trust anchors are used); how Apple's `codesign` lists nested bundles in the app's `CodeResources` (each nested bundle is verified on its own; the outer linkage is not); the keys of a real App Store profile and of the entitlements Xcode adds (a missing grant is a failure here, so the first real IPA may need a documented, reviewed allowance); whether export rewrites any file (`compare` requires byte-identical non-executables and names any file that differs); the `SwiftSupport` folder. |
+| **Needs Apple or a device** | App Store Connect validation and processing; installation and runtime behaviour. |
+
+Every run prints what it cannot verify. A pass is evidence about the files, not an Apple approval.
+
+### 3.2 Signing-job separation: findings (2026-10-22, credential-free)
+
+Question: can the existing unsigned build be signed and packaged in a separate job without recompiling?
+
+**Established**
+- The unsigned artifact of the accepted staging run contains 16 Mach-O files: 13 with no signature
+  (including `Runner`), 2 ad-hoc signed (`Flutter`, `App`) and 1 signed by Apple (the embedded
+  `libswift_Concurrency.dylib`, team `59GAB85EFG`, signing certificate valid until 2026-10-24). All 16
+  must be re-signed with `--force` so that the app carries one identity; the old `_CodeSignature`
+  folders of the sealed frameworks are replaced.
+- Every one of the 16 has room for a signature without relinking. Re-signing the real artifact with the
+  synthetic fixture signer left all 16 executables identical apart from the signature and all 76 other
+  files byte-identical (`verify_ipa.py compare`), and the result passes all 56 checks of `verify` with a
+  synthetic identity and profile. This shows the transformation is structurally possible and that the
+  check for "no recompile, nothing injected" works on real build output.
+- Flutter 3.35.3 can produce an unsigned **archive** without credentials: `flutter build ipa --no-codesign`
+  runs the archive with `CODE_SIGNING_ALLOWED=NO`, skips the export, and still runs Flutter's app-icon and
+  launch-image validation (from the Flutter source of the pinned version, not yet run here).
+
+**Not established (needs macOS and, for the last two, Apple assets)**
+- That Apple's `codesign --force` and `--entitlements` accept every one of these files the way the fixture
+  signer does. `tool/spike_resign_unsigned_ios.sh` tests it with a throwaway identity in a throwaway
+  keychain; it is written but **has not been run** (no macOS here).
+- Which route the signing job takes: **A** manual `codesign` of the existing `Runner.app` (credential-free
+  testable, as above, but the job must build the IPA layout, embed the profile and create `SwiftSupport`
+  itself), or **B** `flutter build ipa --no-codesign` in the build job and `xcodebuild -exportArchive`
+  with a manual-signing `ExportOptions.plist` in the signing job (Xcode lays out the IPA, but whether
+  export accepts an archive that was built unsigned can only be tested with a real distribution
+  certificate and profile). B also changes the build artifact from the validated `flutter build ios` output
+  to an archive, so it needs its own validation run.
+- That App Store Connect accepts either result.
+
+**Obstacles and risks found**
+- `Info.plist` declares `UIBackgroundModes` `remote-notification`: the App ID then needs the Push
+  Notifications capability (`aps-environment`), otherwise App Store Connect warns (questionnaire B3).
+- `ITSAppUsesNonExemptEncryption` is absent: the export-compliance question is asked at upload (questionnaire A6).
+- The app has no `PrivacyInfo.xcprivacy` (Flutter and FingerprintPro frameworks have one).
+- Third-party frameworks (Idensic, FingerprintPro) are unsigned vendor binaries that will be signed by us;
+  a vendor's signature requirement, if any, is not known.
+- The first real IPA will probably need one reviewed adjustment of the verifier (see "Needs a real
+  Apple-signed IPA" above); that is the purpose of verifying before uploading.
 
 ## 4. Unresolved decisions and prerequisites
 
@@ -161,7 +237,7 @@ and compensated by reviewer approval on the staging environment.
   profiles and the App IDs are created by the Apple account administrator **in the developer
   portal** (a role with CIP access) and handed to the custodians as environment secrets.
   Profiles and certificates expire, so renewal is a **manual administrator task**, scheduled
-  in the custody register; the planned `tool/verify_ipa.sh` checks expiry so that a lapse fails
+  in the custody register; `tool/verify_ipa.py` checks expiry so that a lapse fails
   visibly before an upload.
 - **The service user must not receive CIP access.** The Developer role can, with that access,
   create and revoke development certificates and download profiles (section 1). The service
@@ -243,8 +319,8 @@ no signing workflow, environment or secret exists.
 |---|---|
 | This documentation and the questionnaire | Stages A and B. |
 | Static workflow guards (no `pull_request_target`, no review-submission calls, explicit permissions, pinned actions) | Linux-testable. |
-| `tool/verify_ipa.sh` parsing logic on captured `codesign`/`security` fixtures | Linux-testable; separate approval. |
-| Signing spike with a throwaway self-signed identity; unsigned archive job; privacy-manifest check of the pods | Hosted macOS run; proves plumbing, not Apple acceptance; separate approval. |
+| `tool/verify_ipa.py` and its fixtures | **Done** (section 3.1), not yet wired into a workflow. |
+| Signing spike with a throwaway self-signed identity; unsigned archive job; privacy-manifest check of the pods | Linux part **done** (section 3.2). The macOS part is prepared (`tool/spike_resign_unsigned_ios.sh`, not run); it proves plumbing, not Apple acceptance; a hosted run needs separate approval. |
 | Release identifier scheme, in-app staging display, Signet validation | Separate issues, partly sensitive code. |
 | Everything that needs a real certificate, profile, API key or App Store Connect record | Blocked on section 4 items 1 to 5. |
 
