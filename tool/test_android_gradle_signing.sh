@@ -7,7 +7,8 @@
 #   tool/test_android_gradle_signing.sh
 #
 # Needs JDK 17 (JAVA_HOME or java on PATH), the Android SDK (ANDROID_HOME or android/local.properties)
-# and a resolved Flutter project (flutter pub get, which writes android/local.properties). Without them
+# and a resolved Flutter project (flutter pub get, which writes android/local.properties; the Gradle wrapper
+# is created through flutter if it is missing). Without them
 # the script exits 2 and says why: it never reports success for tests it could not run.
 #
 # What it pins:
@@ -25,11 +26,18 @@ cd "$root"
 
 command -v keytool >/dev/null || { echo "test_android_gradle_signing: keytool (JDK 17) not found" >&2; exit 2; }
 java -version 2>&1 | head -n1 | grep -q '"17\.' || { echo "test_android_gradle_signing: JDK 17 is required (got: $(java -version 2>&1 | head -n1))" >&2; exit 2; }
-[ -x android/gradlew ] || { echo "test_android_gradle_signing: android/gradlew not found" >&2; exit 2; }
 [ -f android/local.properties ] || { echo "test_android_gradle_signing: android/local.properties is missing; run 'flutter pub get' first" >&2; exit 2; }
 
 tmp="$(mktemp -d "${TMPDIR:-/tmp}/cadena-gradle-signing-test.XXXXXX")"
 trap 'rm -rf "$tmp"' EXIT
+# The Gradle wrapper script is not tracked (android/.gitignore); the Flutter tool creates it at the first
+# build. A build without a build configuration is rejected before anything is compiled and is enough for that.
+if [ ! -x android/gradlew ]; then
+  command -v flutter >/dev/null || { echo "test_android_gradle_signing: android/gradlew is missing and flutter is not on PATH to create it" >&2; exit 2; }
+  echo "bootstrap: letting the Flutter tool create the Gradle wrapper (a build that is rejected before it compiles anything)"
+  env -u CADENA_SIGNING flutter build apk --release --flavor staging >"$tmp/bootstrap.log" 2>&1 || true
+  [ -x android/gradlew ] || { echo "test_android_gradle_signing: the Flutter tool did not create android/gradlew" >&2; tail -n 8 "$tmp/bootstrap.log" >&2; exit 2; }
+fi
 pass=0
 failed=0
 ok() { pass=$((pass + 1)); echo "ok   $1"; }
