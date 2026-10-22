@@ -28,6 +28,10 @@ one person may eventually hold several.
 No individual release maintainers or signing custodians are named yet; they
 must be designated explicitly and are not implied by any other role.
 
+Several accounts controlled by one individual are one person for approval purposes.
+Production signing and production delivery require approval by a genuinely independent
+person ([docs/RELEASE_POLICY.md](docs/RELEASE_POLICY.md) principle 9); none is designated yet.
+
 No contribution, review approval or AI assistance transfers merge, promotion,
 release, signing, secret or administrative authority.
 

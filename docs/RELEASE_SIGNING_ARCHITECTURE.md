@@ -8,7 +8,9 @@
 > signed artifacts, the separate staging and production applications) and uses
 > the roles of [GOVERNANCE.md](../GOVERNANCE.md). *Decided* = fixed by the project
 > owners; *Proposed* = not decided; **DECISION** = needs an explicit answer
-> ([section 10](#10-decisions-needed)).
+> ([section 10](#10-decisions-needed)). The iOS-specific readiness record (verified facts,
+> approved architecture, unresolved decisions, the Apple authentication analysis and the
+> public-repository security model) is [IOS_SIGNING.md](IOS_SIGNING.md) (Issue #71).
 
 ## 1. Starting point (verified in the repository)
 
@@ -17,10 +19,10 @@
 | Android `release` signs with the **debug** config | `android/app/build.gradle.kts` |
 | No `key.properties`, keystore, certificate or profile is committed (required) | `CLAUDE.md` section 5 |
 | iOS uses Automatic signing with a committed `DEVELOPMENT_TEAM` (`D65458CPDP`, an identifier, not a secret); CI builds are `--no-codesign` | `ios/Runner.xcodeproj`, [IOS_CI.md](IOS_CI.md) |
-| Android and iOS both use `com.app.cadenabitcoin`; there is **no staging identity yet** | Gradle, Xcode project |
+| Production uses `com.app.cadenabitcoin` on both platforms; the staging flavors (`com.app.cadenabitcoin.staging`) exist in Gradle and the Xcode project, but **neither identifier is known to be registered** with Apple or Google. The published Android package is `com.cadenabitcoin.mobile.signer` (#72); what Apple has registered is unconfirmed | Gradle, Xcode project, `config/release/published_versions.json`, [IOS_SIGNING.md](IOS_SIGNING.md) |
 | The signing identities of the already released app are undocumented | `GOVERNANCE.md` |
 | The iOS CI toolchain is Xcode 26.3 with an iOS 26 SDK (Issue #70; status in [IOS_CI.md](IOS_CI.md)); App Store Connect uploads require Xcode 26 and the iOS 26 SDK since 2026-04-28 | [IOS_CI.md](IOS_CI.md); [Apple](https://developer.apple.com/news/upcoming-requirements/) |
-| No GitHub environments, releases or tags; no `production` branch | GitHub, checked 2026-10-12 |
+| No GitHub environments and no tags. The `production` branch exists (Issue #68). The two `Maintainers` accounts are controlled by one individual, so they are one approver (section 6) | GitHub, checked 2026-10-21 |
 | Validation workflows: `contents: read`, no secrets, SHA-pinned actions | [ANDROID_CI.md](ANDROID_CI.md), [IOS_CI.md](IOS_CI.md) |
 
 **Prerequisite.** If the production app is already published, its Android key and
@@ -67,8 +69,12 @@ contexts: a staging job cannot read production signing material, and the reverse
   provisioning profiles. The distribution certificate **may** be shared at team
   level where appropriate, but sharing it means the staging context holds the
   production signing certificate. **Proposed:** separate distribution certificates
-  per context where Apple's per-team certificate limit allows, and API keys scoped
-  per context with the least role that can upload. **DECISION** (section 10).
+  per context where Apple's per-team certificate limit allows. For authentication,
+  Apple's **team** API keys reach every app of the team ("not isolated to a single app"),
+  whereas an **individual** key has the access of its user, so a service user restricted to
+  one app gives per-context isolation. App-restricted individual keys are the preferred
+  direction, and the model is **not final** until the account capabilities are confirmed
+  ([IOS_SIGNING.md](IOS_SIGNING.md) section 5). **DECISION** (section 10).
 
 ## 3. Android production: one update family across website and Google Play
 
@@ -114,7 +120,10 @@ For every environment:
 - **Deployment branch restriction** to the one branch above, so the credentials
   are unreachable from other branches, pull requests and forks.
 - **Required reviewers** from the release authority, with the person who triggered
-  the run unable to approve it. Mandatory for the production environments.
+  the run unable to approve it. Mandatory for the production environments. **Genuinely
+  independent approval is required for production signing and delivery:** accounts
+  controlled by the same individual are one approver, so at least one other human must be
+  a reviewer of `production-ios` before production signing is authorized (section 6).
   Whether the staging environments need reviewers beyond the protected-branch merge
   is open (**DECISION**).
 - Secrets only at environment level; none at repository or organization level.
@@ -165,6 +174,9 @@ automated pipeline to operate.
   that one person: **Proposed** to evaluate letting the pipeline create the
   certificate itself through the App Store Connect API (private key generated on
   the runner, stored directly into the environment) so that nobody needs a Mac.
+  *Readiness note (Issue #71):* Apple documents that individual API keys cannot use the
+  Provisioning endpoints, so certificate creation through the API would need a team key,
+  which is not app-isolated. That makes this option less attractive; it stays undecided.
 - That role is administration only. If the person holding it becomes unavailable, a
   second Apple account administrator must exist (section 10); the Apple account is
   owned by the Cadena organization, not by an individual.
@@ -192,7 +204,14 @@ Intended flow:
    separately by the release authority, per channel, and recorded.
 
 Nobody can both trigger and approve a production signing run, and no single
-person's account or device is required for a release.
+person's account or device is required for a release. **A person with several accounts
+is one person**: while every eligible reviewer is the same individual, a production
+environment's "prevent self-review" setting does not give independent approval, and
+production signing and delivery stay unauthorized until a second, independent human is
+named and added as a reviewer. Staging may start with one human, with a required reviewer so
+that each run is an explicit act. Assigning a processed iOS build to internal testers needs
+explicit approval at first; automatic distribution may be considered after the pipeline is
+verified.
 
 ## 7. Custody and recovery
 
@@ -265,15 +284,22 @@ approved by whom, and sent to which channel.
 3. Android: option A (recommended) or B.
 4. Apple: shared or per-context distribution certificate; API key scope; whether
    the pipeline may create certificates through the API.
-5. Whether staging environments need approvers; whether the staging TestFlight
-   upload (itself mandatory) is automatic on merge or needs an extra approval.
-   Also the internal, non-public mechanism for the Android staging APK.
+5. Whether staging environments need approvers (Issue #71 proposal: yes at first);
+   whether the staging TestFlight upload (itself mandatory) is automatic on merge or needs
+   an extra approval. **Decided (Issue #71):** assigning a processed build to internal
+   testers needs explicit approval at first. Also the internal, non-public mechanism for the
+   Android staging APK.
 6. Who creates tags and with which identity.
 7. Whether secrets live as GitHub environment secrets, or the keys stay in an
    external key service reached with short-lived OIDC credentials (later
    hardening).
 8. Whether iOS signing uses manually managed secrets or a tool such as fastlane
    `match`, which adds a private repository to protect.
+9. **The second, independent approver** for production signing and delivery (section 6),
+   and who holds each signing role. A prerequisite of any production signing.
+10. **The Apple authentication model** (individual key of an app-restricted service user,
+    preferred, or the lowest-role team key), after the account owner has confirmed the
+    permissions ([IOS_SIGNING.md](IOS_SIGNING.md) section 5).
 
 ## 11. Out of scope here
 

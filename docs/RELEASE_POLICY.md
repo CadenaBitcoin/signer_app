@@ -49,6 +49,12 @@ Branch roles, merge authority and issue handling stay in
    upgrade guarantee; internal testers only; never presented as production.
 8. **Traceability.** A signed artifact is attributable to an approved Git
    revision and carries the release record of [section 9](#9-release-record).
+9. **Independent approval of production.** Production signing and production delivery
+   need approval by a person who did not prepare, merge or trigger the run. Several
+   accounts controlled by one individual count as one person. Until a second
+   independent human is designated, production signing is not authorized
+   ([RELEASE_SIGNING_ARCHITECTURE.md](RELEASE_SIGNING_ARCHITECTURE.md) section 6,
+   [IOS_SIGNING.md](IOS_SIGNING.md) section 6).
 
 ## 2. Release branches and triggers
 
@@ -421,7 +427,14 @@ milestone is not complete without it. Acceptance means at least:
   link, no open beta, never submitted for App Store review);
 - the release record is produced and no one needs to build or sign locally.
 
-*Open (implementation decision):* whether the TestFlight upload itself needs an
+**Decided (Issue #71):** the first delivery target is **internal-only TestFlight** (members of
+the Cadena App Store Connect team; no external group, public link or Beta App Review).
+Assigning a processed build to internal testers needs **explicit approval** at first;
+automatic distribution may be considered after the pipeline is verified. Controlled signed
+testing is also how the minimum-iOS runtime requirement of [IOS_CI.md](IOS_CI.md) is
+established. Details and status: [IOS_SIGNING.md](IOS_SIGNING.md).
+
+*Open (implementation decision):* whether the TestFlight **upload** itself needs an
 additional approval, or runs automatically after the merge. Either way the build
 is delivered through TestFlight only, and tester access stays restricted.
 
@@ -482,6 +495,7 @@ without a record, or from a commit that was not approved, is not official.
 | Separate staging application ID / bundle ID / App Store Connect record | **None**; both CI validation builds use `com.app.cadenabitcoin` |
 | Build-time configuration | Unfinished (Issue #57 B1, local branch only); committed constants are production |
 | iOS toolchain | Xcode 26.3 on `macos-15` with an iOS 26 SDK, pinned by Issue #70 (accepted hosted runs: [IOS_CI.md](IOS_CI.md#verification-status); compile and link only). App Store Connect uploads have required Xcode 26 and the iOS 26 SDK since 2026-04-28 ([Apple](https://developer.apple.com/news/upcoming-requirements/)) |
+| iOS signing, provisioning, App Store Connect integration, TestFlight delivery | **Not implemented** (Issue #71). Readiness record, questionnaire and operating-procedure skeleton: [IOS_SIGNING.md](IOS_SIGNING.md), [APPLE_ACCOUNT_QUESTIONNAIRE.md](APPLE_ACCOUNT_QUESTIONNAIRE.md) |
 | `tool/verify_version.sh` | Exists (this issue), read-only |
 
 ## 11. Open decisions
@@ -517,3 +531,9 @@ without a record, or from a commit that was not approved, is not official.
     TestFlight delivery of 8.1, to authorized testers) is not blocked by it. The Rust library is not
     replaced or modified without separate authorization. Green compile and link runs do not satisfy
     this.
+13. **A second, independent approver** for production signing and delivery (principle 9),
+    and the named release authority and signing custodians. Open until designated.
+14. **Apple account facts** that decide the iOS pipeline: account ownership, the exact live
+    bundle ID and highest build number, App ID registration, existing certificates and
+    profiles, available API permissions, capabilities, export compliance. Collected with
+    [APPLE_ACCOUNT_QUESTIONNAIRE.md](APPLE_ACCOUNT_QUESTIONNAIRE.md).

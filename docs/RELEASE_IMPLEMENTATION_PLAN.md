@@ -132,6 +132,24 @@ Cadena's website; GitHub Organization settings (environments, `production` branc
 ruleset, tag rules); the DLC Plaza backend and the Sumsub/Fingerprint Pro
 configuration for the new staging application ID (to be checked in step 6).
 
-## 6. Not decided here
+## 6. Issue #71 stages (iOS signing and TestFlight)
+
+Readiness record: [IOS_SIGNING.md](IOS_SIGNING.md). Stages A and B are documentation only.
+
+| Stage | Work | Needs Apple credentials? |
+|---|---|---|
+| A | Questionnaire for the Apple account owner ([APPLE_ACCOUNT_QUESTIONNAIRE.md](APPLE_ACCOUNT_QUESTIONNAIRE.md)); answers kept privately | No |
+| B | Documentation corrections, security model, operating-procedure skeleton | No |
+| C | Prerequisites of policy 8.1: release identifier scheme, in-app staging identifier, Signet validation, export-compliance declaration | No (declaration awaits the answers) |
+| D | Static workflow guards; `tool/verify_ipa.sh` and its fixtures; signing spike with a throwaway self-signed identity; unsigned archive job | No |
+| E | Staging environment, certificate, profile, service user and key; signed staging IPA **without upload** | **Yes** |
+| F | Upload to the staging record, processing state, internal TestFlight; assignment to testers by explicit approval | **Yes** |
+| G | Production signing procedure verified without upload; production upload behind **independent** approval | **Yes**, and a second approver |
+| H | Final runbook; the iOS floor recorded in `published_versions.json` | |
+
+Each stage is its own approved change. Steps 8 and 9 of the sequence above are covered by
+stages E and F.
+
+## 7. Not decided here
 
 Any code, build file, workflow, branch, tag, credential, account or store change.
