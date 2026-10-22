@@ -122,10 +122,11 @@ push to staging (reviewed PR merge)
 
 | File | Purpose |
 |---|---|
-| `tool/verify_ipa.py` | `verify ENV IPA --team-id T`: the checks below. `compare UNSIGNED SIGNED`: is the signed bundle the unsigned one plus signatures only. `analyze-unsigned APP`: what re-signing a given unsigned bundle involves. |
+| `tool/verify_ipa.py` | `verify ENV IPA --team-id T`: the checks below. `structure APP_OR_IPA`: the same signature, entitlement and seal checks without judging the identity (used to read what Apple's `codesign` wrote). `compare UNSIGNED SIGNED`: is the signed bundle the unsigned one plus signatures only. `analyze-unsigned APP`: what re-signing a given unsigned bundle involves. |
 | `tool/ipa_inspect.py` | The reader (Mach-O, code signature, CodeDirectory, entitlements, CodeResources, CMS, provisioning profile). Standard library plus the `openssl` command for CMS signature validity. Read-only; it needs no credential and no Xcode. |
 | `tool/ipa_fixture.py` | **Test tooling only.** Synthetic apps, a throwaway certificate chain whose names say "Synthetic", a fake profile and a signer that writes the structures Apple's `codesign` writes. Nothing it makes is accepted by Apple or a device. |
-| `tool/test_verify_ipa.sh` | 60 checks (61 with a real build): acceptance cases and more than 40 rejections (below). `REAL_UNSIGNED_APP=...` also re-signs a real unsigned build. |
+| `tool/test_verify_ipa.sh` | 96 checks (97 with a real build): acceptance cases and about 70 rejections. `REAL_UNSIGNED_APP=...` also re-signs a real unsigned build. |
+| `tool/test_ios_signing_experiment.sh` | 17 static checks of the hosted experiment (section 3.3). |
 
 `verify` checks, from the IPA alone: bundle identifier, display name, version and build number for the
 environment and `pubspec.yaml` (staging and production cannot mix); that every executable is signed
@@ -149,6 +150,39 @@ names, links leaving the bundle or more than one app are refused.
 | **Needs Apple or a device** | App Store Connect validation and processing; installation and runtime behaviour. |
 
 Every run prints what it cannot verify. A pass is evidence about the files, not an Apple approval.
+
+**Genuine versus synthetic identities.** The issuer is compared **by name only** unless the operator
+supplies `--trust-anchors` (the Apple root and intermediate certificates, kept and reviewed by the
+operator; nothing here ships or assumes them), in which case the signing chain and the profile's signer
+chain are verified with `openssl verify` at the time given by `--now`. A certificate whose name says
+"Synthetic" or "Throwaway" is refused unless `--allow-synthetic` is given, and is **never** accepted for
+production. Production also requires `--expect-cert-sha256`, the fingerprint from the custody register: a
+pinned leaf certificate is the strongest statement this tool can make without Apple's trust anchors.
+
+**Security review of the verifier (2026-10-22).** Thirteen ways to a false pass were found, each
+reproduced against the first version (all thirteen passed it) and now rejected, with a regression test:
+a CMS signature naming its signer by key identifier so that the pinned certificate could be listed first
+and reported as the signer; a CodeDirectory hashing only the first pages of the file; data appended
+after the signature; DER entitlements (the form the kernel enforces) differing from the XML ones, or
+changed after signing; an executable not built for arm64; a 32-bit Mach-O skipped as "not code"; a
+nested app extension that would need its own profile; a `..` path in `CodeResources`; a nested cdhash in
+`CodeResources` that is not the nested code's; a nested binary signed again after the app was sealed
+(the stale seal was filtered out as "covered separately"); files hidden in `_CodeSignature/`; a profile
+for another platform. Also closed: a CMS signature read differently by this parser and by `openssl`
+(the signer and the verified content are now the ones `openssl` used), a weak CMS digest, duplicate or
+encrypted archive members, a non-plain `CFBundleExecutable`, and any internal error (it is a failed
+verification, never a pass or a stack trace).
+
+One rule was **removed** because real data contradicted it: non-zero bytes between the end of the
+SuperBlob and the end of its reserved area. Real Apple and Flutter signatures leave stale data there
+(seen in the accepted CI artifact), so refusing it would reject genuine IPAs; bytes after the reserved
+area are still refused.
+
+**Still unverified against a real Apple-signed IPA** (the first one may need a reviewed adjustment):
+the DER-entitlements layout (decoded from public descriptions, tested on the fixtures only), how Apple's
+`codesign` lists nested bundles in `CodeResources` (the hosted experiment, section 3.3, reads this from
+a real `codesign` run), the keys of a real App Store profile, and whether a certificate chain from
+Apple's real roots verifies as expected.
 
 ### 3.2 Signing-job separation: findings (2026-10-22, credential-free)
 
@@ -182,6 +216,50 @@ Question: can the existing unsigned build be signed and packaged in a separate j
   to an archive, so it needs its own validation run.
 - That App Store Connect accepts either result.
 
+**Apple's procedure and the two routes (research of 2026-10-22; sources at the end of this section)**
+
+What could and could not be established. Apple's own documentation pages (TN3125 and the `xcodebuild`
+documentation) are rendered by script and could not be read from here, so the statements below rest on
+the pinned Flutter source, on a DTS engineer's answer, on Apple's archived Q&A 1886 and on developer
+forum reports. **No Apple statement was found** on whether `xcodebuild -exportArchive` signs an archive
+that was built unsigned, or on the order in which embedded code must be signed.
+
+| | Route A: sign the existing `Runner.app`, build the IPA ourselves | Route B: unsigned `.xcarchive`, then Xcode's `-exportArchive` |
+|---|---|---|
+| Credential-free part | Everything: the experiment (section 3.3) exercises Apple's `codesign` on the real artifact | Producing the archive: `flutter build ipa --no-codesign` (pinned Flutter source) |
+| Needs Apple assets to test | Embedding a real profile, entitlements, upload validation | The export itself: `-exportArchive` with `app-store-connect` needs the distribution certificate and profile |
+| Apple-supported path | Not documented by Apple for this use; practised by third-party tools (not verified here) | Yes: export with an `ExportOptions.plist`; a DTS engineer lists the methods (`app-store-connect`, `release-testing`, ...) |
+| Reports found | none beyond the mechanics | Developers report that an "empty-signed" archive can be exported with the signing done at export time, and one then hit ITMS-90078 (missing push entitlement) after upload: entitlements the archive was built without are not invented by the export |
+| What we must supply | The IPA layout, `embedded.mobileprovision`, entitlements, the `SwiftSupport` folder | `ExportOptions.plist` (manual signing, profile per bundle ID), entitlements in the project (there is no entitlements file today) |
+| Effect on the validated build | None: the input is the build of the accepted runs | The build artifact changes from `flutter build ios` output to an archive: it needs its own validation run |
+| Verdict | Technically viable by the credential-free evidence; not yet shown to be accepted by Apple | Viable as the supported route; not yet tested with an unsigned archive; needs Apple assets |
+
+Both routes need the entitlements decided: `Info.plist` declares the `remote-notification` background
+mode and the project has no entitlements file, so a push entitlement (`aps-environment`) is currently
+nowhere (questionnaire B3). Neither route can be chosen on credential-free evidence alone; the choice
+and the first real IPA need the Apple account.
+
+**The Apple-signed Swift runtime library.** `Frameworks/libswift_Concurrency.dylib` is the back-deployment
+copy of Swift Concurrency (the app's minimum iOS is 14.0, below the iOS 15 that ships it). The copy in the
+artifact is signed by Apple (team `59GAB85EFG`, certificate "Software Signing"). Whether to re-sign it is
+**not assumed**; the evidence is:
+- Apple's archived Q&A 1886 documents that on a device an embedded Swift library whose signature does not
+  carry the app's Team ID is refused ("mapped file has no team identifier and is not a platform binary");
+  it concerns a missing team identifier, not a foreign one, so it does not settle the foreign-team case.
+- Xcode's own embed step signs the Swift libraries it copies with the target's identity (reported in forums
+  and visible in the `swift-stdlib-tool --sign` usage text); an export is generally understood to re-sign embedded code too (not verified here).
+- `codesign --verify` does not judge team-identity consistency; the kernel does, at load time.
+So re-signing it with the app's identity matches what Xcode does and is the working hypothesis, but only a
+device run (the controlled internal TestFlight build, or a development build) can show whether leaving it
+alone would also load. The experiment therefore runs **both** variants and reports the team identifiers it
+finds; it does not decide.
+
+Sources: Flutter 3.35.3 `build_ios.dart` (pinned SDK; `--no-codesign` skips the export);
+[Apple Developer Forums, `method` values of `xcodebuild -exportArchive` (DTS engineer)](https://developer.apple.com/forums/thread/773749);
+[Apple Developer Forums, signing an empty-signed archive at export (community; no Apple answer)](https://developer.apple.com/forums/thread/686345);
+[Apple Q&A 1886 (2015), Swift libraries and the Team ID](https://developer.apple.com/library/archive/qa/qa1886/_index.html);
+[Apple Developer Forums, re-signing an IPA and the `SwiftSupport` folder](https://developer.apple.com/forums/thread/94151).
+
 **Obstacles and risks found**
 - `Info.plist` declares `UIBackgroundModes` `remote-notification`: the App ID then needs the Push
   Notifications capability (`aps-environment`), otherwise App Store Connect warns (questionnaire B3).
@@ -191,6 +269,47 @@ Question: can the existing unsigned build be signed and packaged in a separate j
   a vendor's signature requirement, if any, is not known.
 - The first real IPA will probably need one reviewed adjustment of the verifier (see "Needs a real
   Apple-signed IPA" above); that is the purpose of verifying before uploading.
+
+### 3.3 Hosted feasibility experiment (prepared 2026-10-22; NOT RUN)
+
+`.github/workflows/ios-signing-feasibility.yml`, started by hand only (`workflow_dispatch`):
+
+1. selects Xcode 26.3 on `macos-15` (the pins of the iOS build workflows) and downloads the **existing**
+   unsigned staging `Runner.app` from a chosen earlier "iOS CI validation build" run (default: `39608182641`),
+   after checking that the run is of that workflow, succeeded and belongs to this repository, and that the
+   inner `Runner.app.zip` has the SHA-256 given as input (default: the one in that run's `SHA256SUMS.txt`).
+   Nothing is rebuilt;
+2. verifies that input with `tool/verify_artifact.sh ios staging`;
+3. `tool/spike_resign_unsigned_ios.sh`: a throwaway self-signed identity in a throwaway keychain; Apple's
+   `codesign --force ... --timestamp=none` (no timestamp server is contacted) on nested code first, then the
+   app with entitlements; two variants (all Mach-O files re-signed / the Apple-signed Swift runtime copy left
+   alone); test IPAs packaged; Apple's `codesign --verify --deep --strict`; `tool/verify_ipa.py structure`
+   (does our reading of what Apple wrote agree with Apple: CodeDirectory, special slots, CMS, **DER
+   entitlements, `CodeResources` layout**); `tool/verify_ipa.py compare` (the executables are byte-identical
+   to the build apart from the signatures, nothing added);
+4. deletes the keychain and the identity, checks that they are gone, deletes the test IPAs.
+
+It uses no Apple credential, certificate, profile or App Store Connect key, no secret, no environment, contacts
+no Apple service, uploads **nothing** (no Actions artifact at all) and cannot be started by a push or pull
+request; `tool/test_ios_signing_experiment.sh` checks all of this statically. **A pass does not prove Apple distribution
+compatibility**: the identity is self-signed, there is no profile, and neither `xcodebuild -exportArchive`, the
+App Store nor a device is involved. What it can establish: Apple's `codesign` accepts every Mach-O of this
+application, the result verifies, the code is unchanged, and the verifier's reading of real Apple output
+agrees (closing two of the "unverified" items above). Run it only after review of this page (it has not been
+run, and the script it calls has only been exercised on Linux with stand-ins for the macOS commands).
+
+### 3.4 Stage C: audit of the staging prerequisites (2026-10-22; read-only, nothing changed)
+
+| Requirement | Finding | Needed |
+|---|---|---|
+| In-app staging identification | A "Test Environment: you are using Signet environment" banner appears on the Home screen only, and only because the build is Signet (`AppController.USE_TESTNET`). Nothing in the app says "STAGING", names the API host or shows a version, and the wallet creation and seed screens have no indicator. The launcher name "Cadena Signer STAGING" is outside the app. | An indicator on every screen that handles keys (design and approval; sensitive code, `CLAUDE.md` section 6). |
+| Installed application version | Not available in the app. There is no `package_info_plus` dependency and no compile-time version define. "App: x \| API: y" on the Home screen shows the backend's *newest app version*, not the installed one. `RELEASE_IDENTIFIER` and its scheme do not exist (`RELEASE_POLICY.md` open decision 6). | A decision: `package_info_plus` (changes `pubspec.lock`), a define in the committed configuration (changes `BuildConfig`), or a platform channel. |
+| Signet XPUB and address validation | Derivation is network-consistent by construction (Signet version bytes `0x045f1cf6`, path `m/84'/1'/0'`, `tb` addresses; the mainnet equivalents otherwise, all from `USE_TESTNET`). Nothing validates an externally supplied XPUB or address: `isValidBitcoinAddress` is unused and accepts only mainnet forms; the backend XPUB is compared with the local one as a string. Address checks inside the Rust library were not read (out of scope). | A pure Dart validator (prefix and address HRP must match the build) and the first `test/` directory; sensitive code. |
+| Staging/production mixing | Satisfied at build time: `BuildConfig` fails on any inconsistency, the flavor must equal `APP_ENV`, the bundle IDs differ, and `verify_version`, `verify_artifact`, the build workflows and now `verify_ipa.py` check it. Open: the missing in-app indicator and the finding below. | |
+| Background-task identifier | `ios/Runner/Info.plist` permits `com.app.cadenabitcoin.auto_signing_task`, but `AppDelegate.swift` registers `auto_signing_task`, and the same production-style name is permitted inside the staging bundle. iOS requires a registered identifier to be in the permitted list; the effect on a device (a failed registration or a crash) was **not tested**. | A decision and a device test; the controlled internal TestFlight build will exercise it. |
+| Push entitlement | `UIBackgroundModes` includes `remote-notification`, but the project has no entitlements file (`aps-environment`). | The Push Notifications capability decision (questionnaire B3) before either signing route. |
+
+No application code was changed for any of these.
 
 ## 4. Unresolved decisions and prerequisites
 
