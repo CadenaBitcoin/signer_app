@@ -1,0 +1,25 @@
+{
+  "schema": "cadena-android-signing/1",
+  "purpose": "Public facts about the Android signing identities of the Google Play application. Certificate SHA-256 fingerprints only: no key, keystore, password or credential of any kind belongs in this file. It records facts and decisions; it authorizes nothing. tool/verify_android_release.py reads it. Changing it needs a reviewed commit after the maintainer has confirmed the value in Google Play Console.",
+  "play_app_signing": {
+    "sha256": "13:52:D9:EE:63:8B:89:6B:53:2E:C6:F3:79:30:DA:42:5D:84:F3:55:0A:64:66:58:F3:9B:2E:22:22:AC:9F:CB",
+    "custody": "Google (Play App Signing). Must remain unchanged; the private key is not available to Cadena.",
+    "recorded": "2026-10-22",
+    "source": "Google Play Console, confirmed by the repository owner (Issue #72)"
+  },
+  "upload": {
+    "active_sha256": null,
+    "active_note": "Not recorded yet. A new, CadenaBitcoin-controlled upload key replaces the existing one (Issue #72). Record its certificate fingerprint here, in a reviewed commit, once Google has activated it. Until then the release tools take the expected fingerprint only from the operator's explicit option.",
+    "do_not_use": [
+      {
+        "sha256": "23:E0:C7:51:D3:7D:A0:58:AC:60:0F:3B:5E:4B:52:36:19:5F:F1:82:8E:8E:8B:06:18:C8:F1:DC:7C:7F:62:94",
+        "reason": "The upload key that is being replaced by decision (Issue #72). It may still be registered in Google Play until the new key is activated, but no artifact built from this repository is to be signed with it.",
+        "recorded": "2026-10-22"
+      }
+    ]
+  },
+  "not_recorded": [
+    "Any staging signing identity (no Android staging key exists yet)",
+    "The fingerprint of the new upload key (see upload.active_note)"
+  ]
+}
