@@ -124,6 +124,17 @@ version rules, the build manifests and the published-version gate; it also needs
 present on every runner) and `tool/test_android_release.sh` (the Android release signing and
 verification, credential-free and without artifacts, Issue #72; `docs/ANDROID_RELEASE.md`).
 
+## Tests on pull requests (not a build, not a promotion)
+
+`build-variants.yml` never starts from a pull request (above). A separate, test-only workflow,
+`.github/workflows/android-release-tests.yml` (Issue #72), does: on every pull request to `development`,
+`staging` or `production` it runs the credential-free Android release tests (the verifier and ledgers,
+the identity matrix and version wiring, and the release-signing rules in real Gradle dry runs;
+`docs/ANDROID_RELEASE.md` section 7). It builds no application, produces no artifact, has read-only
+permissions and no secret, and uses `pull_request`, never `pull_request_target`. It is therefore not a
+release trigger and does not touch the policy above; `tool/test_android_release.sh` pins its shape and
+that `build-variants.yml` still has no `pull_request` trigger.
+
 ## Concurrency
 
 Every promotion is built; none is superseded. The concurrency group of a push contains

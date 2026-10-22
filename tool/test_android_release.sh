@@ -57,6 +57,12 @@ t "gradle: that reference is in the validation branch of one conditional" has "$
 t "gradle: the release config enables APK Signature Schemes v2 and v3" eq "$(grep -cE 'enableV(2|3)Signing = true' "$G")" 2
 t "gradle: no password or key literal is written in the file" eq "$(grep -ciE '(storePassword|keyPassword)[[:space:]]*=[[:space:]]*"' "$G")" 0
 t "gradle: no credential value is printed" eq "$(grep -cE 'println|logger\.(lifecycle|info|quiet|warn)' "$G")" 0
+t "gradle: a release-mode task graph check exists (the production signing identity signs production only)" has "$gradle_text" "gradle.taskGraph.whenReady"
+t "gradle: the check reads the flavors other than production from the declarations" has "$gradle_text" 'filter { it != "production" }'
+t "gradle: the check refuses a release variant of another flavor and says nothing was signed" has "$gradle_text" "signs the production application only"
+t "gradle: the production-only check is active in release mode only" eq "$(grep -c '^if (cadenaSigningMode == "release") {$' "$G")" 1
+t "gradle: the real-Gradle regression test exists and is executable" test -x "$root/tool/test_android_gradle_signing.sh"
+t "gradle: the debug key is not given to any flavor in release mode (no flavor-level signing config)" eq "$(grep -cE '^[[:space:]]*signingConfig[[:space:]]*=' "$G")" 1
 t "gradle: the keystore patterns stay ignored by Git" eq "$(grep -cE '^(key\.properties|\*\*/\*\.keystore|\*\*/\*\.jks)$' "$root/android/.gitignore")" 3
 
 # CI stays credential-free: no workflow selects release signing or names a secret
@@ -65,6 +71,20 @@ t "ci: no workflow enables release signing or reads a secret (${wf_hits:-none})"
 t "ci: no workflow runs the local release procedure" eq "$(grep -rlE 'release_android\.sh' "$root/.github/workflows" 2>/dev/null | wc -l | tr -d ' ')" 0
 t "ci: the plan job of build-variants runs this credential-free test" eq "$(grep -cE '^        run: tool/test_android_release\.sh$' "$root/.github/workflows/build-variants.yml")" 1
 t "ci: no workflow publishes to Google Play or uploads a release" eq "$(grep -rliE 'upload-google-play|r0adkll|play-publisher|fastlane supply|androidpublisher' "$root/.github/workflows" 2>/dev/null | wc -l | tr -d ' ')" 0
+
+# The workflow that runs these tests on pull requests (Issue #72): tests only, no credential, no artifact.
+PRWF="$root/.github/workflows/android-release-tests.yml"
+prwf_code="$(grep -v '^[[:space:]]*#' "$PRWF" 2>/dev/null)"
+t "ci: the pull-request workflow exists" test -f "$PRWF"
+t "ci: it triggers on pull_request (integration and release branches) and manual runs only" eq "$(sed -n '/^on:/,/^[a-z]/p' <<<"$prwf_code" | grep -E '^  [a-z_]+:' | tr -d ' \n')" "pull_request:workflow_dispatch:"
+t "ci: it targets development, staging and production" has "$prwf_code" "branches: [development, staging, production]"
+t "ci: it never uses pull_request_target" hasnt "$prwf_code" "pull_request_target"
+t "ci: its permissions are exactly contents: read" eq "$(sed -n '/^permissions:/,/^[a-z]/p' <<<"$prwf_code" | grep -v '^[a-z]' | tr -d ' \n')" "contents:read"
+t "ci: it uses no environment, secret, token, artifact upload, OIDC or cache write of signing material" eq "$(grep -cE 'environment:|secrets\.|GITHUB_TOKEN|upload-artifact|download-artifact|id-token|attestations' <<<"$prwf_code")" 0
+t "ci: it does not publish, sign or build an application" eq "$(grep -cE 'flutter build|release_android|bundletool|apksigner|jarsigner|gh release|gh pr|git push' <<<"$prwf_code")" 0
+t "ci: every action is pinned by commit SHA" eq "$(grep -E '^[[:space:]]+uses:' <<<"$prwf_code" | grep -vcE '@[0-9a-f]{40}')" 0
+t "ci: it runs the hermetic release test and the real-Gradle signing test" eq "$(grep -cE '^        run: tool/(test_android_release|test_android_gradle_signing)\.sh$' <<<"$prwf_code")" 2
+t "ci: build-variants still has no pull_request trigger (the release trigger policy)" eq "$(grep -v '^[[:space:]]*#' "$root/.github/workflows/build-variants.yml" | grep -c 'pull_request')" 0
 
 # ---------------------------------------------------------------------------------------------
 # 2. The ledgers hold public facts only

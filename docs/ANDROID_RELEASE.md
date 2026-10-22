@@ -59,10 +59,15 @@ certificate with `CADENA_EXPECTED_CERT_SHA256`; a mismatch fails the build. Neit
 nor a key is ever printed. APK Signature Schemes v2 and v3 are enabled (v3 is what a later key
 rotation needs).
 
-`CADENA_SIGNING=release` is meant for the production flavor only, and `tool/release_android.sh` builds nothing
-else. Gradle itself does not stop a staging release build started by hand with the same variables from
-being signed with that key (there is no staging signing identity yet, section 8); the verifier refuses to
-treat a staging artifact as a release (`release` takes the production APK and AAB). Do not do it.
+**The production signing identity signs the production application only.** In `release` mode, once the
+task graph is known and before anything is compiled or signed, Gradle fails the build if it would run any
+task of the release variant of a flavor other than `production` (`assembleStagingRelease`,
+`bundleStagingRelease`, `packageStagingRelease`, ...). That covers `flutter build apk|appbundle --flavor staging`,
+a direct `./gradlew` invocation and the flavor-less aggregates (`assembleRelease`, `bundleRelease`, `assemble`),
+which assemble every flavor. The flavors to refuse are read from the `productFlavors` declarations, so a flavor
+added later is refused without an edit. Debug variants hold no release identity and are not affected, and
+validation mode (no `CADENA_SIGNING`) builds every flavor as before. A staging build is therefore either a
+debug-signed validation build or not made at all; there is no Android staging signing identity (section 8).
 
 Prefer passing the two passwords through the environment (typed with `read -rs`, not on a
 command line that lands in a shell history). The CI workflows do not set any of this; a
@@ -176,22 +181,39 @@ tests of the ELF and fingerprint code, the driver's refusals; with `REAL_APK` an
 verifier on real artifacts re-signed with disposable keys, positive and negative, and the release
 report; with `ANDROID_RELEASE_E2E=1`: the whole procedure with real builds).
 
-**In CI.** The `plan` job of `build-variants.yml` runs the always-on, credential-free part
-(`Test the Android release signing and verification`), next to the other hermetic tests. That job
-runs on a push to `staging` or `production` and on a manual run, like the rest of the workflow
-(pull requests and `development` start nothing, docs/RELEASE_TRIGGERS.md). The tests that need real
-artifacts and a disposable key (`REAL_APK`/`REAL_AAB`) and the end-to-end procedure
-(`ANDROID_RELEASE_E2E=1`) are **not** run in CI: run them locally before a release or when the
-signing, the verifier or the native libraries change. No workflow signs, holds a key or secret,
-runs `tool/release_android.sh` or uploads to Google Play; the test pins exactly that.
+`tool/test_android_gradle_signing.sh` runs the signing rules in **real Gradle** (`--dry-run`: the project is
+configured and the task graph built, nothing is compiled, signed or written; seconds per case): validation
+mode builds every flavor, `release` mode plans production and refuses every staging release task and the
+flavor-less aggregates, and the fail-closed refusals (typo, no credentials, wrong certificate, wrong
+password) still hold. It creates its own disposable keystore. Run against the Gradle file without the
+production-only rule, nine of its cases fail.
+
+**In CI.**
+- **On pull requests:** `.github/workflows/android-release-tests.yml` runs `test_android_release.sh`
+  (hermetic part), `verify_version.sh`, `test_release_versioning.sh` and `test_android_gradle_signing.sh`
+  on every pull request to `development`, `staging` or `production` (and on a manual run), with no path
+  filter. It builds nothing, signs nothing, uploads nothing and holds no secret; the only key is the
+  disposable one a test creates on the runner. It is a separate workflow because `build-variants.yml`,
+  the release/promotion workflow, deliberately never starts from a pull request
+  (docs/RELEASE_TRIGGERS.md). The tests pin the shape of this workflow (triggers, read-only permissions,
+  no secret, no build, pinned actions).
+- **On promotion:** the `plan` job of `build-variants.yml` also runs the hermetic part, on a push to
+  `staging` or `production` and on a manual run.
+- **Not in CI:** the tests that need real artifacts and a disposable key (`REAL_APK`/`REAL_AAB`) and the
+  end-to-end procedure (`ANDROID_RELEASE_E2E=1`) run locally, before a release or when the signing, the
+  verifier or the native libraries change.
+- No workflow signs, holds a key or secret, runs `tool/release_android.sh` or uploads to Google Play; a
+  test pins exactly that.
 
 ## 8. Known limitations
 
 - No CI job signs, and none runs the tests that use real artifacts or the end-to-end procedure (section 7).
+  Whether the pull-request checks are required for merging is a repository-ruleset decision, not made here.
 - The upload fingerprint is not recorded yet (`upload.active_sha256` is `null`): the tools need
   `--expect-cert-sha256` explicitly until it is.
-- There is no Android staging signing identity; `release` is production-only, and Gradle does not enforce
-  that for a hand-started staging build (section 2).
+- There is no Android staging signing identity. `release` is production-only and Gradle enforces it
+  (section 2); a staging build is debug-signed validation only. A staging identity would be a separate,
+  reviewed design.
 - The pinned native-library hashes are those of the stripped form made by NDK 27.0.12077973; another NDK may
   strip differently and need a reviewed ledger change.
 - The application version is unchanged, so the production gate fails until a reviewed version bump.
