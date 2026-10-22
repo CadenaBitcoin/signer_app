@@ -189,6 +189,7 @@ expect_fail "a file only in the unsigned build is reported missing from the IPA"
 # ---- 9. the reader library, and the offline guarantee -------------------------------------------
 python3 -I - "$inspect" <<'PYEOF' && ok "ipa_inspect reads BER indefinite lengths and rejects truncated input" || bad "ipa_inspect reads BER indefinite lengths and rejects truncated input"
 import importlib.util, sys
+sys.dont_write_bytecode = True
 spec = importlib.util.spec_from_file_location("ipa_inspect", sys.argv[1])
 m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
 n = m.parse_der(bytes([0x30, 0x80, 0x02, 0x01, 0x05, 0x00, 0x00]))
