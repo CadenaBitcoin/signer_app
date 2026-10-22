@@ -190,9 +190,17 @@ def parse_certificate(der):
 OID_SIGNED_DATA = "1.2.840.113549.1.7.2"
 
 
+OID_SHA256_FAMILY = {"2.16.840.1.101.3.4.2.1": "sha256", "2.16.840.1.101.3.4.2.2": "sha384",
+                     "2.16.840.1.101.3.4.2.3": "sha512"}
+
+
 def parse_cms(blob):
-    """CMS SignedData -> {content, certs[], signer} (BER/DER). Signature validity is checked by openssl."""
+    """CMS SignedData -> {content, certs[], signer, digest_oid} (BER/DER). Fail closed: exactly one
+    SignerInfo, identified by issuer and serial number, matching exactly one certificate of the set,
+    and no bytes after the structure. Signature validity is checked separately, by openssl."""
     root = parse_der(blob)
+    if root.end != len(blob):
+        raise Asn1Error("%d unexpected byte(s) after the CMS structure" % (len(blob) - root.end))
     kids = root.children
     if len(kids) < 2 or oid_str(kids[0]) != OID_SIGNED_DATA:
         raise Asn1Error("not a CMS SignedData")
@@ -208,19 +216,17 @@ def parse_cms(blob):
             certs = [parse_certificate(c.raw) for c in p.children if c.tag == 16 and c.cls == 0]
         elif p.cls == 0 and p.tag == 17:  # SET OF SignerInfo
             signer_infos = p
-    signer = None
-    if signer_infos is not None and signer_infos.children:
-        si = signer_infos.children[0].children
-        sid = si[1]
-        if sid.cls == 0 and sid.tag == 16:  # IssuerAndSerialNumber
-            issuer_der, serial = sid.children[0].raw, sid.children[1].value.hex()
-            for c in certs:
-                if c["serial"] == serial and c["issuer_der"] == issuer_der:
-                    signer = c
-                    break
-    if signer is None and certs:
-        signer = certs[0]
-    return {"content": content, "certs": certs, "signer": signer}
+    if signer_infos is None or len(signer_infos.children) != 1:
+        raise Asn1Error("the CMS structure must have exactly one signer")
+    si = signer_infos.children[0].children
+    sid = si[1]
+    if not (sid.cls == 0 and sid.tag == 16):
+        raise Asn1Error("the signer is not identified by issuer and serial number")
+    issuer_der, serial = sid.children[0].raw, sid.children[1].value.hex()
+    matches = [c for c in certs if c["serial"] == serial and c["issuer_der"] == issuer_der]
+    if len(matches) != 1:
+        raise Asn1Error("the signer matches %d certificate(s) of the set (exactly one required)" % len(matches))
+    return {"content": content, "certs": certs, "signer": matches[0], "digest_oid": oid_str(si[2].children[0])}
 
 
 OID_APPLE_CDHASHES = "1.2.840.113635.100.9.1"
@@ -236,13 +242,16 @@ def cms_cdhashes(blob):
     sets = [p for p in sd.children if p.cls == 0 and p.tag == 17]
     if not sets or not sets[-1].children:
         return None
+    found = []
     for k in sets[-1].children[0].children:
         if k.cls == 2 and k.tag == 0:  # [0] IMPLICIT signedAttrs
             for attr in k.children:
                 if oid_str(attr.children[0]) == OID_APPLE_CDHASHES:
                     plist = plistlib.loads(octets(attr.children[1].children[0]))
-                    return [bytes(h) for h in plist.get("cdhashes", [])]
-    return None
+                    found.append([bytes(h) for h in plist.get("cdhashes", [])])
+    if len(found) > 1:
+        raise Asn1Error("the cdhashes attribute appears more than once")
+    return found[0] if found else None
 
 
 # ---- openssl (the one external dependency: CMS signature validity) -----------------------------
@@ -256,17 +265,31 @@ def openssl_path():
     return None
 
 
-def cms_signature_valid(cms_der, detached=None):
-    """(True, '') / (False, reason). Verifies the signature of the signer certificate over the
-    content (embedded, or `detached`); the chain to a trust anchor is deliberately NOT checked."""
+def pem_certs_to_der(text):
+    import base64
+    out = []
+    for m in re.finditer(r"-----BEGIN CERTIFICATE-----(.*?)-----END CERTIFICATE-----", text, re.S):
+        out.append(base64.b64decode("".join(m.group(1).split())))
+    return out
+
+
+def cms_verify(cms_der, detached=None):
+    """Check the CMS signature with openssl. -> {"ok", "why", "signer_sha256", "content"}.
+
+    It verifies the signature of the signer certificate over the content (embedded, or `detached`).
+    The chain to a trust anchor is NOT checked here (see chain_problems). The certificate openssl
+    actually used and the content it actually verified are returned, so that callers never rely on
+    their own, possibly different, reading of the structure."""
+    res = {"ok": False, "why": "", "signer_sha256": None, "content": None}
     exe = openssl_path()
     if not exe:
-        return False, "openssl not found (set OPENSSL=/path/to/openssl)"
+        res["why"] = "openssl not found (set OPENSSL=/path/to/openssl)"
+        return res
     with tempfile.TemporaryDirectory() as td:
-        sig = os.path.join(td, "sig.der")
+        sig, signer_pem, out_file = (os.path.join(td, n) for n in ("sig.der", "signer.pem", "content.out"))
         with open(sig, "wb") as f:
             f.write(cms_der)
-        cmd = [exe, "cms", "-verify", "-inform", "DER", "-in", sig, "-noverify", "-out", os.devnull]
+        cmd = [exe, "cms", "-verify", "-inform", "DER", "-in", sig, "-noverify", "-signer", signer_pem, "-out", out_file]
         if detached is not None:
             content = os.path.join(td, "content.bin")
             with open(content, "wb") as f:
@@ -275,10 +298,64 @@ def cms_signature_valid(cms_der, detached=None):
         try:
             r = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
         except (OSError, subprocess.TimeoutExpired) as e:
-            return False, "openssl could not run: %s" % e
-        if r.returncode == 0:
-            return True, ""
-        return False, (r.stderr.strip().splitlines() or ["openssl cms -verify failed"])[-1]
+            res["why"] = "openssl could not run: %s" % e
+            return res
+        if r.returncode != 0:
+            res["why"] = (r.stderr.strip().splitlines() or ["openssl cms -verify failed"])[-1]
+            return res
+        try:
+            with open(signer_pem, "r") as f:
+                ders = pem_certs_to_der(f.read())
+            if len(ders) != 1:
+                res["why"] = "openssl reported %d signer certificates (exactly one required)" % len(ders)
+                return res
+            res["signer_sha256"] = hashlib.sha256(ders[0]).hexdigest()
+            if detached is None:
+                with open(out_file, "rb") as f:
+                    res["content"] = f.read()
+        except OSError as e:
+            res["why"] = "openssl output unreadable: %s" % e
+            return res
+    res["ok"] = True
+    return res
+
+
+def cms_signature_valid(cms_der, detached=None):
+    """(True, '') / (False, reason); see cms_verify."""
+    r = cms_verify(cms_der, detached)
+    return r["ok"], r["why"]
+
+
+def chain_problems(leaf_der, extra_der, anchors_pem_path, at_epoch):
+    """[] when `leaf_der` chains to a certificate in the trust-anchor file (a signature chain with
+    the extra certificates as intermediates, judged at `at_epoch`); otherwise the reason. The
+    anchor file is supplied by the operator: nothing here knows or ships an Apple root."""
+    exe = openssl_path()
+    if not exe:
+        return ["openssl not found"]
+    with tempfile.TemporaryDirectory() as td:
+        leaf, untrusted = os.path.join(td, "leaf.der"), os.path.join(td, "untrusted.pem")
+        with open(leaf, "wb") as f:
+            f.write(leaf_der)
+        pem = subprocess.run([exe, "x509", "-inform", "DER", "-in", leaf, "-outform", "PEM"], capture_output=True)
+        leaf_pem = os.path.join(td, "leaf.pem")
+        with open(leaf_pem, "wb") as f:
+            f.write(pem.stdout)
+        with open(untrusted, "wb") as f:
+            for i, der_bytes in enumerate(extra_der):
+                p = os.path.join(td, "x%d.der" % i)
+                with open(p, "wb") as g:
+                    g.write(der_bytes)
+                f.write(subprocess.run([exe, "x509", "-inform", "DER", "-in", p, "-outform", "PEM"], capture_output=True).stdout)
+        empty = os.path.join(td, "no-system-roots")
+        os.makedirs(empty)  # an empty -CApath keeps the system's default roots out of the decision
+        cmd = [exe, "verify", "-CAfile", anchors_pem_path, "-CApath", empty, "-attime", str(at_epoch)]
+        if os.path.getsize(untrusted):
+            cmd += ["-untrusted", untrusted]
+        r = subprocess.run(cmd + [leaf_pem], capture_output=True, text=True)
+        if r.returncode == 0 and "OK" in r.stdout:
+            return []
+        return [(r.stdout + r.stderr).strip().replace("\n", "; ")[:300] or "openssl verify failed"]
 
 
 # ---- Mach-O and the code signature --------------------------------------------------------------
@@ -295,7 +372,7 @@ CSMAGIC_DER_ENTITLEMENTS = 0xFADE7172
 CSMAGIC_BLOBWRAPPER = 0xFADE0B01
 CS_ADHOC, CS_LINKER_SIGNED = 0x2, 0x20000
 HASH_TYPES = {1: ("sha1", 20), 2: ("sha256", 32), 3: ("sha256", 20), 4: ("sha384", 48)}
-SLOT_INFO, SLOT_REQUIREMENTS, SLOT_RESOURCES, SLOT_ENTITLEMENTS, SLOT_DER_ENTITLEMENTS = 1, 2, 3, 5, 6
+SLOT_INFO, SLOT_REQUIREMENTS, SLOT_RESOURCES, SLOT_ENTITLEMENTS, SLOT_DER_ENTITLEMENTS = 1, 2, 3, 5, 7
 SLOT_CODEDIRECTORY, SLOT_CMS = 0, 0x10000
 SLOT_ALT_CODEDIRECTORIES = tuple(range(0x1000, 0x1005))
 
@@ -321,7 +398,11 @@ def macho_slices(data):
                 cpu, _sub, off, size, _al = struct.unpack(">iIIII", rec)
             else:
                 cpu, _sub, off, size, _al, _res = struct.unpack(">iIQQII", rec)
+            if off + size > len(data) or size < 32:
+                raise MachOError("fat slice lies outside the file")
             out.append((cpu & 0xFFFFFFFF, off, size))
+        if not out:
+            raise MachOError("fat file without any architecture")
         return out
     if struct.unpack("<I", data[:4])[0] == MH_MAGIC_64:
         cpu = struct.unpack("<I", data[4:8])[0]
@@ -337,7 +418,10 @@ def is_macho(path):
         return False
     if len(head) < 4:
         return False
-    return struct.unpack(">I", head)[0] in (FAT_MAGIC, FAT_MAGIC_64) or struct.unpack("<I", head)[0] == MH_MAGIC_64
+    # Any Mach-O or fat header, 32 or 64 bit, either byte order: code that this tool cannot read must
+    # be reported as unreadable, never skipped as "not code".
+    return head in (b"\xca\xfe\xba\xbe", b"\xca\xfe\xba\xbf", b"\xbe\xba\xfe\xca", b"\xbf\xba\xfe\xca",
+                    b"\xfe\xed\xfa\xce", b"\xfe\xed\xfa\xcf", b"\xce\xfa\xed\xfe", b"\xcf\xfa\xed\xfe")
 
 
 def parse_macho_slice(data, off, size):
@@ -375,6 +459,8 @@ def parse_superblob(blob):
     slots = {}
     entries = [struct.unpack(">II", blob[12 + i * 8:20 + i * 8]) for i in range(count)]
     offsets = sorted(o for _, o in entries) + [length]
+    if len({t for t, _o in entries}) != len(entries):
+        raise MachOError("the code signature lists a blob type twice")
     for t, o in entries:
         if o + 8 > length:
             raise MachOError("blob offset outside the SuperBlob")
@@ -398,6 +484,10 @@ def parse_codedirectory(cd):
         if code_limit == 0 and code_limit64:
             code_limit = code_limit64
     hname, hlen = HASH_TYPES.get(hash_type, (None, hash_size))
+    if length != len(cd):
+        raise MachOError("CodeDirectory length field (%d) differs from its size (%d)" % (length, len(cd)))
+    if hname is None or hash_size != hlen:
+        raise MachOError("CodeDirectory hash type %d with hash size %d is not supported" % (hash_type, hash_size))
 
     def cstr(o):
         if not o or o >= len(cd):
@@ -427,9 +517,14 @@ def slot_hash(cd, slot):
     return None if h == b"\0" * len(h) else h
 
 
-def code_slot_problems(cd, slice_data):
-    """Re-hash every page of the executable up to code_limit and compare with the CodeDirectory."""
+def code_slot_problems(cd, slice_data, signature_offset=None):
+    """Re-hash every page of the executable up to code_limit and compare with the CodeDirectory.
+    The hashed range must be exactly everything before the signature: a shorter range would leave
+    the rest of the file unprotected."""
     out = []
+    if signature_offset is not None and cd["code_limit"] != signature_offset:
+        return ["CodeDirectory covers %d bytes but the signature starts at %d (part of the file is not protected)"
+                % (cd["code_limit"], signature_offset)]
     if not cd["hash_name"] or not cd["page_size"]:
         return ["CodeDirectory hash type %s / page size %s is not supported" % (cd["hash_type"], cd["page_size"])]
     limit = cd["code_limit"]
@@ -450,6 +545,52 @@ def code_slot_problems(cd, slice_data):
         out.append("%d of %d code pages do not match their CodeDirectory hash (the binary was changed after signing)"
                    % (bad, cd["n_code"]))
     return out
+
+
+def _der_entitlement_value(node):
+    if node.cls != 0:
+        raise Asn1Error("unexpected tag class in DER entitlements")
+    if node.tag == 1:
+        return node.value == b"\xff"
+    if node.tag == 2:
+        return int.from_bytes(node.value, "big", signed=True)
+    if node.tag == 12:
+        return node.value.decode("utf-8")
+    if node.tag == 16:
+        return [_der_entitlement_value(c) for c in node.children]
+    if node.tag == 17:
+        return _der_entitlement_dict(node)
+    raise Asn1Error("unsupported value type %d in DER entitlements" % node.tag)
+
+
+def _der_entitlement_dict(node):
+    out = {}
+    for pair in node.children:
+        kv = pair.children
+        if pair.tag != 16 or len(kv) != 2 or kv[0].tag != 12:
+            raise Asn1Error("malformed entry in DER entitlements")
+        key = kv[0].value.decode("utf-8")
+        if key in out:
+            raise Asn1Error("duplicate key %r in DER entitlements" % key)
+        out[key] = _der_entitlement_value(kv[1])
+    return out
+
+
+def parse_der_entitlements(blob):
+    """Decode the DER entitlements blob (magic 0xfade7172): [APPLICATION 16] { INTEGER 1, SET OF
+    SEQUENCE { UTF8String key, value } }. The kernel enforces THESE where present, so they must be
+    reconciled with the XML entitlements. The layout is from public descriptions and has not been
+    checked against a real Apple-signed app (docs/IOS_SIGNING.md); anything else is an error."""
+    magic, length = struct.unpack(">II", blob[:8])
+    if magic != CSMAGIC_DER_ENTITLEMENTS or length != len(blob):
+        raise Asn1Error("DER entitlements blob header is wrong")
+    root = parse_der(blob[8:])
+    if root.end != len(blob) - 8 or root.cls != 1 or root.tag != 16:
+        raise Asn1Error("DER entitlements are not a single [APPLICATION 16] element")
+    ver, body = root.children[0], root.children[1]
+    if ver.tag != 2 or ver.value != b"\x01" or body.tag != 17:
+        raise Asn1Error("unsupported DER entitlements version or layout")
+    return _der_entitlement_dict(body)
 
 
 def read_signature(path):
@@ -489,6 +630,12 @@ def read_signature(path):
             continue
         item["slots"] = slots
         item["signature_offset"] = dataoff
+        # Bytes between the end of the SuperBlob and the end of its reserved area are not checked: real
+        # Apple and Flutter signatures leave stale non-zero data there (seen in the accepted CI artifact).
+        # They are neither executed nor hashed. Bytes AFTER the reserved area would be unprotected code
+        # space, and are refused.
+        if any(item["data"][dataoff + datasize:]):
+            item["problems"].append("non-zero bytes follow the code signature at the end of the file")
         for key in (SLOT_CODEDIRECTORY,) + SLOT_ALT_CODEDIRECTORIES:
             if key in slots:
                 try:
@@ -504,6 +651,13 @@ def read_signature(path):
                 item["entitlements"] = plistlib.loads(blob[8:])
             except Exception as e:  # unreadable plist is a finding, not a crash
                 item["problems"].append("entitlements blob is unreadable: %s" % e)
+        item["der_entitlements_blob"] = slots.get(SLOT_DER_ENTITLEMENTS)
+        item["der_entitlements"] = None
+        if item["der_entitlements_blob"] is not None:
+            try:
+                item["der_entitlements"] = parse_der_entitlements(item["der_entitlements_blob"])
+            except (Asn1Error, IndexError, ValueError, struct.error) as e:
+                item["problems"].append("DER entitlements are unreadable: %s" % e)
         if SLOT_REQUIREMENTS in slots:
             item["requirements_blob"] = slots[SLOT_REQUIREMENTS]
         if SLOT_CMS in slots:
@@ -570,6 +724,8 @@ def same_code(unsigned, signed):
             return False, "the executable content differs (it was recompiled or modified, not only signed)"
         if any(a_slice[common:a_end]) or any(b_slice[common:b_end]):
             return False, "the content before the signature differs in length"
+        if mb["codesig"] and any(b_slice[mb["codesig"][0] + mb["codesig"][1]:]):
+            return False, "data follows the signature"
     return True, ""
 
 
@@ -615,6 +771,12 @@ def code_resources_problems(app_dir, exe_name, nested_prefixes=()):
     problems, checked = [], 0
     files2 = res.get("files2") or {}
     rules2 = res.get("rules2") or {}
+    for rel in sorted(files2):
+        parts = rel.split("/")
+        if not rel or rel.startswith("/") or "\\" in rel or "\0" in rel or ".." in parts:
+            problems.append("CodeResources lists the unsafe path %r" % rel)
+    if problems:
+        return problems, 0
     for rel, entry in sorted(files2.items()):
         if isinstance(entry, dict) and entry.get("symlink") is not None:
             full = os.path.join(app_dir, rel)
@@ -622,7 +784,7 @@ def code_resources_problems(app_dir, exe_name, nested_prefixes=()):
                 problems.append("symlink %s differs from CodeResources" % rel)
             continue
         if isinstance(entry, dict) and "cdhash" in entry:
-            continue  # a nested bundle: checked through its own signature
+            continue  # a nested bundle: its cdhash is compared by the caller (code_resources_cdhashes)
         want = entry.get("hash2") if isinstance(entry, dict) else None
         full = os.path.join(app_dir, rel)
         if not os.path.isfile(full):
@@ -646,7 +808,10 @@ def code_resources_problems(app_dir, exe_name, nested_prefixes=()):
         except re.error:
             continue
     for rel in bundle_files(app_dir):
-        if rel == exe_name or rel.startswith("_CodeSignature/") or rel in files2:
+        if rel == "_CodeSignature/CodeResources" or rel == exe_name or rel in files2:
+            continue
+        if rel.startswith("_CodeSignature/"):
+            problems.append("%s is an unexpected file in _CodeSignature" % rel)
             continue
         if any(rel.startswith(p) for p in nested_prefixes):
             continue
@@ -660,21 +825,33 @@ def code_resources_problems(app_dir, exe_name, nested_prefixes=()):
     return problems, checked
 
 
+def code_resources_cdhashes(app_dir):
+    """[(path, cdhash bytes)] for the nested-bundle entries of CodeResources."""
+    res = read_code_resources(app_dir) or {}
+    return [(k, bytes(v["cdhash"])) for k, v in sorted((res.get("files2") or {}).items())
+            if isinstance(v, dict) and "cdhash" in v]
+
+
 # ---- provisioning profile -------------------------------------------------------------------
 
 
 def read_profile(path):
     """-> {plist, signer, certs, signature_valid, signature_error}. The profile is a CMS SignedData
-    whose content is an XML plist."""
+    whose content is an XML plist. The plist is the content that openssl VERIFIED, and the signer is
+    required to be the certificate openssl used, so a structure read differently by this parser and
+    by openssl cannot make the result look better than it is."""
     with open(path, "rb") as f:
         blob = f.read()
     cms = parse_cms(blob)
-    if cms["content"] is None:
-        raise Asn1Error("the provisioning profile carries no content")
-    plist = plistlib.loads(cms["content"])
-    valid, why = cms_signature_valid(blob)
-    return {"plist": plist, "signer": cms["signer"], "certs": cms["certs"], "signature_valid": valid,
-            "signature_error": why}
+    v = cms_verify(blob)
+    err = v["why"]
+    if v["ok"] and v["signer_sha256"] != cms["signer"]["sha256"]:
+        v["ok"], err = False, "the signer certificate read from the structure is not the one openssl verified"
+    if v["content"] is None:
+        raise Asn1Error(err or "the provisioning profile carries no verified content")
+    plist = plistlib.loads(v["content"])
+    return {"plist": plist, "signer": cms["signer"], "certs": cms["certs"], "signature_valid": v["ok"],
+            "signature_error": err}
 
 
 def profile_type(plist):

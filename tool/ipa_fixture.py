@@ -37,6 +37,8 @@ import ipa_inspect as I  # noqa: E402
 import build_manifest as BM  # noqa: E402
 
 ISSUER_CN = "Synthetic Test Intermediate CA"
+MUT = set()  # mutations of the sign command, read by the signing helpers
+MUT_VICTIM = [None]  # path of the certificate that "spoof-signer" pretends to be
 LEAF_CN_PREFIX = "Synthetic Distribution:"
 
 
@@ -101,6 +103,29 @@ def d_int(value_bytes):
     return der(0x02, value_bytes)
 
 
+def d_value(v):
+    if isinstance(v, bool):
+        return der(0x01, b"\xff" if v else b"\x00")
+    if isinstance(v, int):
+        return der(0x02, v.to_bytes(max(1, (v.bit_length() + 8) // 8), "big", signed=True))
+    if isinstance(v, str):
+        return der(0x0C, v.encode())
+    if isinstance(v, list):
+        return d_seq(*[d_value(x) for x in v])
+    if isinstance(v, dict):
+        return d_dict(v)
+    raise TypeError(type(v))
+
+
+def d_dict(d):
+    return d_set(*[d_seq(der(0x0C, k.encode()), d_value(v)) for k, v in sorted(d.items())])
+
+
+def der_entitlements_blob(ents):
+    body = der(0x70, d_int(b"\x01") + d_dict(ents))
+    return struct.pack(">II", I.CSMAGIC_DER_ENTITLEMENTS, 8 + len(body)) + body
+
+
 OID_SHA256 = "2.16.840.1.101.3.4.2.1"
 OID_RSA = "1.2.840.113549.1.1.1"
 OID_DATA = "1.2.840.113549.1.7.1"
@@ -112,6 +137,15 @@ def alg(oid, null=True):
 
 def rsa_sign(key, data):
     return run([openssl(), "dgst", "-sha256", "-sign", key], input=data)
+
+
+def spki_hash(cert_der):
+    """SHA-1 of the subject public key bit string (a subjectKeyIdentifier by method 1)."""
+    tbs = I.parse_der(cert_der).children[0]
+    kids = tbs.children
+    i = 1 if kids[0].cls == 2 else 0
+    spki = kids[i + 5]
+    return hashlib.sha1(spki.children[1].value[1:]).digest()
 
 
 def cms_for_codedirectory(cd0, cdhashes, leaf_pem, key, chain_pems):
@@ -127,15 +161,20 @@ def cms_for_codedirectory(cd0, cdhashes, leaf_pem, key, chain_pems):
     attrs.sort()
     attr_body = b"".join(attrs)
     signature = rsa_sign(key, d_set(*attrs))
+    sid = d_seq(cert["issuer_der"], d_int(bytes.fromhex(cert["serial"])))
+    if "spoof-signer" in MUT:
+        sid = der(0x80, spki_hash(leaf))  # [0] SubjectKeyIdentifier instead of issuer and serial
     signer_info = d_seq(
         d_int(b"\x01"),
-        d_seq(cert["issuer_der"], d_int(bytes.fromhex(cert["serial"]))),
+        sid,
         alg(OID_SHA256, null=False),
         der(0xA0, attr_body),
         alg(OID_RSA),
         d_octet(signature),
     )
     certs = b"".join([leaf] + [pem_to_der(c) for c in chain_pems])
+    if "spoof-signer" in MUT:  # the certificate of the pinned identity comes first, the real signer after it
+        certs = pem_to_der(MUT_VICTIM[0]) + certs
     signed = d_seq(d_int(b"\x01"), d_set(alg(OID_SHA256, null=False)), d_seq(d_oid(OID_DATA)),
                    der(0xA0, certs), d_set(signer_info))
     return d_seq(d_oid(I.OID_SIGNED_DATA), der(0xA0, signed))
@@ -172,7 +211,7 @@ def make_certs(directory, team="SYNTH12345"):
         run([ssl, "req", "-new", "-key", os.path.join(directory, name + ".key"), "-subj", "/CN=%s/OU=%s/O=Synthetic Test/C=XX" % (cn, ou), "-out", csr])
         ext = os.path.join(directory, name + ".ext")
         with open(ext, "w") as f:
-            f.write("basicConstraints=CA:FALSE\nkeyUsage=digitalSignature\nextendedKeyUsage=codeSigning\n")
+            f.write("basicConstraints=CA:FALSE\nkeyUsage=digitalSignature\nextendedKeyUsage=codeSigning\nsubjectKeyIdentifier=hash\n")
         run([ssl, "x509", "-req", "-in", csr, "-days", "825", "-extfile", ext, "-CA", os.path.join(directory, issuer + ".crt"),
              "-CAkey", os.path.join(directory, issuer + ".key"), "-CAcreateserial", "-out", os.path.join(directory, name + ".crt")])
 
@@ -199,14 +238,14 @@ def pseudo(seed, n):
     return out[:n]
 
 
-def make_macho(seed, filetype=2, text_len=0x3C00, minos=14 << 16):
+def make_macho(seed, filetype=2, text_len=0x3C00, minos=14 << 16, cpu=0x0100000C):
     """A tiny but structurally valid arm64 Mach-O with __TEXT, __LINKEDIT and a build version."""
     sect = (b"__text".ljust(16, b"\0") + b"__TEXT".ljust(16, b"\0") + struct.pack("<QQIIIIIIII", 0x100000400, text_len, 0x400, 2, 0, 0, 0x80000400, 0, 0, 0))
     text = struct.pack("<II16sQQQQiiII", 0x19, 72 + 80, b"__TEXT".ljust(16, b"\0"), 0x100000000, 0x4000, 0, 0x4000, 5, 5, 1, 0) + sect
     link = struct.pack("<II16sQQQQiiII", 0x19, 72, b"__LINKEDIT".ljust(16, b"\0"), 0x100004000, 0x4000, 0x4000, 0x100, 1, 1, 0, 0)
     build = struct.pack("<IIIIII", 0x32, 24, 2, minos, 26 << 16 | 2 << 8, 0)
     cmds = text + link + build
-    header = struct.pack("<IIIIIIII", 0xFEEDFACF, 0x0100000C, 0, filetype, 3, len(cmds), 0x200085, 0)
+    header = struct.pack("<IIIIIIII", 0xFEEDFACF, cpu, 0, filetype, 3, len(cmds), 0x200085, 0)
     body = header + cmds
     body = body.ljust(0x400, b"\0") + pseudo(seed + "t", text_len)
     body = body.ljust(0x4000, b"\0") + pseudo(seed + "l", 0x100)
@@ -251,22 +290,23 @@ def strip_slice(sl, m):
 def codedirectory(ident, team, hash_name, code, text_limit, specials, flags, main):
     htype = {"sha1": 1, "sha256": 2}[hash_name]
     hs = 20 if htype == 1 else 32
-    n_special = 5
+    n_special = 7
+    hashed = code[:4096] if "short-codelimit" in MUT else code
     ident_b = ident.encode() + b"\0"
     team_b = (team.encode() + b"\0") if team else b""
     ident_off = 88
     team_off = ident_off + len(ident_b) if team else 0
     hash_off = ident_off + len(ident_b) + len(team_b) + n_special * hs
     page = 4096
-    n_code = (len(code) + page - 1) // page
+    n_code = (len(hashed) + page - 1) // page
     entries = b""
     for slot in range(n_special, 0, -1):
         h = specials.get(slot)
         entries += (hashlib.new(hash_name, h).digest() if h is not None else b"\0" * hs)
-    codes = b"".join(hashlib.new(hash_name, code[i * page:(i + 1) * page]).digest() for i in range(n_code))
+    codes = b"".join(hashlib.new(hash_name, hashed[i * page:(i + 1) * page]).digest() for i in range(n_code))
     length = hash_off + len(codes)
     head = struct.pack(">IIIIIIIIIBBBB", I.CSMAGIC_CODEDIRECTORY, length, 0x20400, flags, hash_off, ident_off, n_special,
-                       n_code, len(code), hs, htype, 0, 12)
+                       n_code, len(hashed), hs, htype, 0, 12)
     head += struct.pack(">IIIIQQQQ", 0, 0, team_off, 0, 0, 0, text_limit, 1 if main else 0)
     assert len(head) == 88, len(head)
     return head + ident_b + team_b + entries + codes
@@ -296,10 +336,16 @@ def sign_slice(sl, ident, team, specials, ents_xml, dual, adhoc, certs, main):
     sp = dict(specials)
     req = struct.pack(">III", I.CSMAGIC_REQUIREMENTS, 12, 0)
     sp[2] = req
-    ents_blob = None
+    ents_blob = der_blob = None
     if ents_xml is not None:
         ents_blob = struct.pack(">II", I.CSMAGIC_ENTITLEMENTS, 8 + len(ents_xml)) + ents_xml
         sp[5] = ents_blob
+        if "no-der" not in MUT:
+            ents = plistlib.loads(ents_xml)
+            if "der-differs" in MUT:
+                ents = dict(ents, **{"get-task-allow": True})
+            der_blob = der_entitlements_blob(ents)
+            sp[7] = der_blob
     blobs = {}
     algs = ["sha1", "sha256"] if dual else ["sha256"]
     cds = []
@@ -312,6 +358,8 @@ def sign_slice(sl, ident, team, specials, ents_xml, dual, adhoc, certs, main):
     blobs[2] = req
     if ents_blob is not None:
         blobs[5] = ents_blob
+    if der_blob is not None:
+        blobs[7] = der_blob
     if adhoc:
         blobs[0x10000] = struct.pack(">II", I.CSMAGIC_BLOBWRAPPER, 8)
     else:
@@ -328,7 +376,12 @@ def sign_slice(sl, ident, team, specials, ents_xml, dual, adhoc, certs, main):
     superblob = struct.pack(">III", I.CSMAGIC_EMBEDDED_SIGNATURE, pos, len(order)) + index + payload
     if len(superblob) > sig_size:
         die("signature larger than the reserved %d bytes" % sig_size)
-    return code + superblob.ljust(sig_size, b"\0")
+    out = code + superblob.ljust(sig_size, b"\0")
+    if "padding-nonzero" in MUT:
+        out = out[:-8] + b"\x01" + out[-7:]
+    if "trailing-data" in MUT:
+        out += b"\x01"
+    return out
 
 
 def sign_macho_file(path, ident, team, specials, ents_xml, dual, adhoc, certs, main):
@@ -423,9 +476,9 @@ def make_unsigned_app(directory, env, seed="1", version=None):
     return app
 
 
-def make_profile(path, certs, team, bundle_id, kind, expires, ents):
+def make_profile(path, certs, team, bundle_id, kind, expires, ents, platform=("iOS",)):
     data = {"Name": "Synthetic profile", "UUID": "00000000-0000-4000-8000-000000000001", "TeamIdentifier": [team],
-            "TeamName": "Synthetic Test Org", "ApplicationIdentifierPrefix": [team], "Platform": ["iOS"],
+            "TeamName": "Synthetic Test Org", "ApplicationIdentifierPrefix": [team], "Platform": list(platform),
             "CreationDate": expires - datetime.timedelta(days=365), "ExpirationDate": expires, "Version": 1,
             "DeveloperCertificates": [pem_to_der(certs["leaf_for_profile"])], "Entitlements": ents}
     if kind == "ad-hoc":
@@ -435,7 +488,7 @@ def make_profile(path, certs, team, bundle_id, kind, expires, ents):
     with open(tmp, "wb") as f:
         f.write(plist)
     out = run([openssl(), "cms", "-sign", "-nodetach", "-binary", "-outform", "DER", "-signer", certs["profile_signer_crt"],
-               "-inkey", certs["profile_signer_key"], "-in", tmp])
+               "-inkey", certs["profile_signer_key"], "-certfile", certs["intermediate"], "-in", tmp])
     os.remove(tmp)
     with open(path, "wb") as f:
         f.write(out)
@@ -443,6 +496,8 @@ def make_profile(path, certs, team, bundle_id, kind, expires, ents):
 
 def sign_app(app_in, out_ipa, certdir, team, mutations):
     mut = set(mutations)
+    MUT.clear()
+    MUT.update(mut)
     tmp = out_ipa + ".work"
     if os.path.exists(tmp):
         shutil.rmtree(tmp)
@@ -460,10 +515,24 @@ def sign_app(app_in, out_ipa, certdir, team, mutations):
         with open(os.path.join(app, "Info.plist"), "wb") as f:
             plistlib.dump(info, f)
     c = lambda n: os.path.join(certdir, n)
-    leaf_name = "leaf2" if "other-team-cert" in mut else "leaf"
+    MUT_VICTIM[0] = c("leaf.crt")
+    leaf_name = "leaf2" if ("other-team-cert" in mut or "spoof-signer" in mut) else "leaf"
+    if "x86-main" in mut:
+        with open(os.path.join(app, "Runner"), "wb") as f:
+            f.write(make_macho("x86", cpu=0x01000007))
+    if "plugin" in mut:
+        os.makedirs(os.path.join(app, "PlugIns", "Share.appex"))
+        with open(os.path.join(app, "PlugIns", "Share.appex", "Info.plist"), "wb") as f:
+            plistlib.dump({"CFBundleIdentifier": bundle_id + ".share"}, f)
+    if "exe-traversal" in mut:
+        info["CFBundleExecutable"] = "../Runner"
+        with open(os.path.join(app, "Info.plist"), "wb") as f:
+            plistlib.dump(info, f)
     certs = {"leaf": c(leaf_name + ".crt"), "key": c(leaf_name + ".key"), "intermediate": c("intermediate.crt"),
              "profile_signer_crt": c("profile_signer.crt"), "profile_signer_key": c("profile_signer.key"),
              "leaf_for_profile": c("leaf2.crt" if "profile-without-cert" in mut else "leaf.crt")}
+    if "spoof-signer" in mut:
+        certs["leaf_for_profile"] = c("leaf.crt")
     adhoc_main = "adhoc-main" in mut
     dual = "dual" in mut
     # nested bundles and standalone dylibs first
@@ -498,6 +567,7 @@ def sign_app(app_in, out_ipa, certdir, team, mutations):
     pents = {"application-identifier": "%s.%s" % (team, bundle_id), "com.apple.developer.team-identifier": team,
              "get-task-allow": False, "keychain-access-groups": ["%s.*" % team], "beta-reports-active": True,
              "aps-environment": "production"}
+    platform = ["tvOS"] if "profile-platform-tvos" in mut else ["iOS"]
     if "wildcard-profile" in mut:
         pents["application-identifier"] = "%s.*" % team
     if "dev-profile" in mut:
@@ -507,9 +577,35 @@ def sign_app(app_in, out_ipa, certdir, team, mutations):
     kind = "ad-hoc" if "adhoc-profile" in mut else "app-store"
     if "no-profile" not in mut:
         make_profile(os.path.join(app, "embedded.mobileprovision"), certs, "OTHER12345" if "wrong-team-profile" in mut else team,
-                     bundle_id, kind, exp, pents)
+                     bundle_id, kind, exp, pents, platform)
     # the app's seal, then the executable
+    if "unsigned-macho32" in mut:
+        with open(os.path.join(app, "Frameworks", "old32.dylib"), "wb") as f:
+            f.write(b"\xce\xfa\xed\xfe" + b"\0" * 4096)
     write_code_resources(app, "Runner")
+    extra_entries = {}
+    flut_exe = os.path.join(app, "Frameworks", "Flut.framework", "Flut")
+    if "cr-dotdot-key" in mut:
+        with open(os.path.join(app, "PkgInfo"), "rb") as f:
+            extra_entries["Frameworks/../PkgInfo"] = {"hash2": hashlib.sha256(f.read()).digest()}
+    if "cr-cdhash-ok" in mut or "cr-cdhash-bad" in mut:
+        sl = I.read_signature(flut_exe)["slices"][0]
+        good = I.cd_hash(sl["cds"][0][1], sl["cds"][0][1]["hash_name"])
+        extra_entries["Frameworks/Flut.framework/"] = {"cdhash": good if "cr-cdhash-ok" in mut else b"\0" * 20}
+    if extra_entries:
+        crp = os.path.join(app, "_CodeSignature", "CodeResources")
+        with open(crp, "rb") as f:
+            cr = plistlib.load(f)
+        cr["files2"].update(extra_entries)
+        with open(crp, "wb") as f:
+            plistlib.dump(cr, f)
+    if "stale-seal" in mut:  # a nested binary is signed again after the app was sealed
+        fw = os.path.dirname(flut_exe)
+        with open(os.path.join(fw, "Info.plist"), "rb") as f:
+            fi = f.read()
+        with open(os.path.join(fw, "_CodeSignature", "CodeResources"), "rb") as f:
+            fr = f.read()
+        sign_macho_file(flut_exe, "org.example.flut-again", team, {1: fi, 3: fr}, None, dual, False, certs, False)
     ents = {"application-identifier": "%s.%s" % (team, bundle_id), "com.apple.developer.team-identifier": team,
             "get-task-allow": "get-task-allow" in mut, "keychain-access-groups": ["%s.%s" % (team, bundle_id)],
             "beta-reports-active": True, "aps-environment": "production"}
@@ -562,6 +658,41 @@ def sign_app(app_in, out_ipa, certdir, team, mutations):
         data[off + 12] ^= 0x01  # flags field of the alternate CodeDirectory
         with open(p, "wb") as f:
             f.write(bytes(data))
+    if "cs-extra-file" in mut:
+        for d in (app, os.path.join(app, "Frameworks", "Flut.framework")):
+            with open(os.path.join(d, "_CodeSignature", "evil.bin"), "wb") as f:
+                f.write(b"payload")
+    if "garbage-info-plist" in mut:
+        with open(os.path.join(app, "Info.plist"), "wb") as f:
+            f.write(b"\x00garbage, not a plist\xff")
+    if "truncated-profile" in mut:
+        pp = os.path.join(app, "embedded.mobileprovision")
+        with open(pp, "r+b") as f:
+            f.truncate(100)
+    if "tamper-profile" in mut:
+        pp = os.path.join(app, "embedded.mobileprovision")
+        with open(pp, "rb") as f:
+            data = f.read()
+        data = data.replace(b"Synthetic profile", b"Synthetic PROFILE")
+        with open(pp, "wb") as f:
+            f.write(data)
+    if "tamper-der" in mut:
+        p = os.path.join(app, "Runner")
+        with open(p, "rb") as f:
+            data = f.read()
+        off = data.find(b"\xfa\xde\x71\x72")
+        data = bytearray(data)
+        i = data.find(b"production", off)
+        data[i] = ord("P")
+        with open(p, "wb") as f:
+            f.write(bytes(data))
+    if "tamper-late-byte" in mut:
+        p = os.path.join(app, "Runner")
+        with open(p, "r+b") as f:
+            f.seek(0x2000)
+            b = f.read(1)
+            f.seek(0x2000)
+            f.write(bytes([b[0] ^ 0xFF]))
     # the archive
     if os.path.exists(out_ipa):
         os.remove(out_ipa)

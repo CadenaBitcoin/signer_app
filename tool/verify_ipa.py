@@ -2,6 +2,7 @@
 """Independent verification of a signed iOS IPA, before anything is uploaded.
 
   tool/verify_ipa.py verify ENV IPA --team-id TEAM [options]
+  tool/verify_ipa.py structure RUNNER_APP_OR_IPA
   tool/verify_ipa.py compare UNSIGNED_RUNNER_APP SIGNED_RUNNER_APP_OR_IPA
   tool/verify_ipa.py analyze-unsigned RUNNER_APP_DIR
 
@@ -54,6 +55,9 @@ import build_manifest as BM  # noqa: E402
 DEFAULT_ISSUER_CN = "Apple Worldwide Developer Relations Certification Authority"
 LEAF_PREFIXES = ("Apple Distribution:", "iPhone Distribution:")
 MAX_FILES, MAX_BYTES = 50000, 3 * 1024 ** 3
+# Test and throwaway identities say so in their names; they must never be taken for a genuine one.
+SYNTHETIC_MARKERS = ("Synthetic", "Throwaway")
+UNSUPPORTED_NESTED = ("PlugIns", "Watch", "AppClips", "Extensions", "SystemExtensions")
 NOT_VERIFIED = [
     "the certificate chain to an Apple root, and revocation (no Apple trust anchors are used here)",
     "that App Store Connect accepts the build (its own validation, ITMS checks, processing)",
@@ -136,7 +140,16 @@ def extract_ipa(ipa, dest):
             return None, ["archive has %d entries (limit %d)" % (len(infos), MAX_FILES)]
         if sum(i.file_size for i in infos) > MAX_BYTES:
             return None, ["archive expands beyond %d bytes" % MAX_BYTES]
-        bad = zf.testzip()
+        names = [i.filename for i in infos]
+        folded = [n.lower().rstrip("/") for n in names]
+        if len(set(folded)) != len(folded):
+            return None, ["the archive has duplicate member names (ambiguous content)"]
+        if any(i.flag_bits & 0x1 for i in infos):
+            return None, ["the archive has encrypted members"]
+        try:
+            bad = zf.testzip()
+        except (RuntimeError, zipfile.BadZipFile, NotImplementedError) as e:
+            return None, ["the archive cannot be read: %s" % e]
         if bad:
             return None, ["archive member %s is corrupt (CRC)" % bad]
         apps = set()
@@ -211,17 +224,24 @@ def entitlement_allowed(key, value, granted):
 
 def check_code_signature(rep, label, path, bundle_dir, bundle_id, team_id, expect_identifier, is_main):
     """Verify one Mach-O file's signature. Returns {"signer": cert|None, "ents": dict|None, "ok": bool}."""
-    result = {"signer": None, "ents": None, "ok": True, "cdhash": None}
+    result = {"signer": None, "ents": None, "ok": True, "cdhash": None, "cms_certs": None}
     sig = I.read_signature(path)
     if sig["error"]:
         rep.fail("%s: %s" % (label, sig["error"]))
         result["ok"] = False
         return result
     first_signer = None
+    if not sig["slices"]:
+        rep.fail("%s has no architecture slice" % label)
+        result["ok"] = False
+        return result
     for si, s in enumerate(sig["slices"]):
         tag = "%s [arch %s]" % (label, hex(s["cpu"])) if len(sig["slices"]) > 1 else label
         for p in s["problems"]:
             rep.fail("%s: %s" % (tag, p))
+            result["ok"] = False
+        if s["cpu"] != I.CPU_ARM64:
+            rep.fail("%s is not built for arm64 (cpu type 0x%x)" % (tag, s["cpu"]))
             result["ok"] = False
         if not s["signed"]:
             rep.fail("%s is not signed" % tag)
@@ -245,10 +265,10 @@ def check_code_signature(rep, label, path, bundle_dir, bundle_id, team_id, expec
             if expect_identifier is not None and cd["identifier"] != expect_identifier:
                 result["ok"] = False
                 rep.fail("%s CodeDirectory identifier is '%s', expected '%s'" % (tag, cd["identifier"], expect_identifier))
-            if cd["team_id"] != team_id:
+            if team_id is not None and cd["team_id"] != team_id:
                 result["ok"] = False
                 rep.fail("%s CodeDirectory team ID is '%s', expected '%s'" % (tag, cd["team_id"], team_id))
-            probs = I.code_slot_problems(cd, s["data"])
+            probs = I.code_slot_problems(cd, s["data"], s.get("signature_offset"))
             for p in probs:
                 result["ok"] = False
                 rep.fail("%s: %s" % (tag, p))
@@ -276,21 +296,28 @@ def check_code_signature(rep, label, path, bundle_dir, bundle_id, team_id, expec
             slot_check(I.SLOT_RESOURCES, res if res and os.path.isfile(res) else None, "CodeResources")
             slot_check(I.SLOT_REQUIREMENTS, s["requirements_blob"], "the code requirements")
             slot_check(I.SLOT_ENTITLEMENTS, s["entitlements_blob"], "the entitlements")
+            slot_check(I.SLOT_DER_ENTITLEMENTS, s["der_entitlements_blob"], "the DER entitlements")
         if s["cms"] is None:
             result["ok"] = False
             rep.fail("%s has no CMS signature (no signing identity)" % tag)
             continue
-        valid, why = I.cms_signature_valid(s["cms"], detached=s["slots"].get(I.SLOT_CODEDIRECTORY))
-        if not valid:
+        verified = I.cms_verify(s["cms"], detached=s["slots"].get(I.SLOT_CODEDIRECTORY))
+        if not verified["ok"]:
             result["ok"] = False
-            rep.fail("%s CMS signature is not valid: %s" % (tag, why))
+            rep.fail("%s CMS signature is not valid: %s" % (tag, verified["why"]))
         try:
             cms = I.parse_cms(s["cms"])
             bound = I.cms_cdhashes(s["cms"])
-        except (I.Asn1Error, IndexError, ValueError) as e:
+        except (I.Asn1Error, IndexError, ValueError, KeyError) as e:
             result["ok"] = False
             rep.fail("%s CMS signature is unreadable: %s" % (tag, e))
             continue
+        if verified["ok"] and verified["signer_sha256"] != cms["signer"]["sha256"]:
+            result["ok"] = False
+            rep.fail("%s: the signer certificate read from the signature is not the one that verified it" % tag)
+        if cms["digest_oid"] not in I.OID_SHA256_FAMILY:
+            result["ok"] = False
+            rep.fail("%s CMS signature uses a digest weaker than SHA-256 (%s)" % (tag, cms["digest_oid"]))
         if bound is None:
             result["ok"] = False
             rep.fail("%s CMS signature does not bind the cdhashes" % tag)
@@ -300,6 +327,8 @@ def check_code_signature(rep, label, path, bundle_dir, bundle_id, team_id, expec
                     result["ok"] = False
                     rep.fail("%s CodeDirectory 0x%x is not bound by the signature (it was replaced)" % (tag, key))
         signer = cms["signer"]
+        if result["cms_certs"] is None:
+            result["cms_certs"] = cms["certs"]
         if signer is None:
             result["ok"] = False
             rep.fail("%s signature carries no signer certificate" % tag)
@@ -309,8 +338,18 @@ def check_code_signature(rep, label, path, bundle_dir, bundle_id, team_id, expec
         elif signer["sha256"] != first_signer["sha256"]:
             result["ok"] = False
             rep.fail("%s is signed by a different certificate than the other architecture slice" % tag)
-        if s["entitlements"] is not None and result["ents"] is None:
-            result["ents"] = s["entitlements"]
+        if s["entitlements"] is not None:
+            if s["der_entitlements"] is not None and s["der_entitlements"] != s["entitlements"]:
+                result["ok"] = False
+                rep.fail("%s: the DER entitlements (enforced by the kernel) differ from the XML entitlements" % tag)
+            if result["ents"] is None:
+                result["ents"] = s["entitlements"]
+            elif result["ents"] != s["entitlements"]:
+                result["ok"] = False
+                rep.fail("%s: the entitlements differ between architecture slices" % tag)
+        elif s["der_entitlements"] is not None:
+            result["ok"] = False
+            rep.fail("%s has DER entitlements but no XML entitlements" % tag)
         if result["cdhash"] is None and s["cds"]:
             result["cdhash"] = I.cd_hash(s["cds"][0][1], s["cds"][0][1]["hash_name"]).hex()
     result["signer"] = first_signer
@@ -371,10 +410,24 @@ def verify(args):
         if not os.path.isfile(plist_path):
             rep.fail("Info.plist is missing")
             return finish(rep, args)
-        with open(plist_path, "rb") as f:
-            info = plistlib.load(f)
+        try:
+            with open(plist_path, "rb") as f:
+                info = plistlib.load(f)
+            if not isinstance(info, dict):
+                raise ValueError("not a dictionary")
+        except Exception as e:  # any malformed plist is a failure, never a crash and never a pass
+            rep.fail("Info.plist is unreadable: %s" % e)
+            return finish(rep, args)
         bundle_id = info.get("CFBundleIdentifier", "")
         exe_name = info.get("CFBundleExecutable", "")
+        if not isinstance(exe_name, str) or not exe_name or "/" in exe_name or exe_name.startswith("."):
+            rep.fail("CFBundleExecutable %r is not a plain file name" % (exe_name,))
+            return finish(rep, args)
+        nested_apps = [d for d in UNSUPPORTED_NESTED if os.path.exists(os.path.join(app_dir, d))]
+        nested_apps += sorted(r for r in I.bundle_files(app_dir) if r.endswith(".appex/Info.plist") or r.endswith(".app/Info.plist"))
+        if nested_apps:
+            rep.fail("the app contains nested apps or extensions (%s): each needs its own profile and entitlement check, "
+                     "which this tool does not do" % ", ".join(nested_apps[:4]))
         rep.ev("environment", env)
         rep.ev("bundle_id", bundle_id)
         rep.ev("display_name", info.get("CFBundleDisplayName", ""))
@@ -417,7 +470,7 @@ def verify(args):
         else:
             try:
                 prof = I.read_profile(prof_path)
-            except (I.Asn1Error, plistlib.InvalidFileException, ValueError, IndexError) as e:
+            except Exception as e:  # malformed profile: a failure, never a pass
                 rep.fail("embedded.mobileprovision is unreadable: %s" % e)
         profile_ents = {}
         if prof is not None:
@@ -425,6 +478,8 @@ def verify(args):
             profile_ents = pl.get("Entitlements") or {}
             rep.check(prof["signature_valid"], "profile CMS signature is valid",
                       "profile CMS signature is not valid: %s" % prof["signature_error"])
+            rep.check("iOS" in (pl.get("Platform") or []), "profile platform is iOS",
+                      "profile platform is %s, not iOS" % (pl.get("Platform"),))
             ptype = I.profile_type(pl)
             rep.ev("profile_name", pl.get("Name", ""))
             rep.ev("profile_uuid", pl.get("UUID", ""))
@@ -469,8 +524,26 @@ def verify(args):
                       "signing certificate '%s' is not a distribution certificate (%s)" % (leaf_cn, " / ".join(args.leaf_prefix)))
             rep.check(team in signer["subject"].get("OU", []), "signing certificate belongs to Team ID %s" % team,
                       "signing certificate OU %s is not Team ID %s" % (signer["subject"].get("OU"), team))
-            rep.check(issuer_cn == args.issuer_cn, "signing certificate issuer is '%s'" % issuer_cn,
+            rep.check(issuer_cn == args.issuer_cn, "signing certificate issuer NAME is '%s' (a name is not proof: see the pin and the trust anchors)" % issuer_cn,
                       "signing certificate issuer is '%s', expected '%s'" % (issuer_cn, args.issuer_cn))
+            marked = [t for t in SYNTHETIC_MARKERS if any(t in v for d in (signer["subject"], signer["issuer"]) for vals in d.values() for v in vals)]
+            if marked and (not args.allow_synthetic or env == "production"):
+                rep.fail("the signing certificate is a %s identity (%s): not a genuine Apple-issued identity%s"
+                         % (marked[0].lower(), dn_text(signer["subject"]), " (never accepted for production)" if env == "production" else ""))
+            elif marked:
+                rep.warn("accepting a %s identity because --allow-synthetic was given (tests only)" % marked[0].lower())
+            if args.trust_anchors:
+                extra = [c["der"] for c in (main["cms_certs"] or []) if c["sha256"] != signer["sha256"]]
+                probs = I.chain_problems(signer["der"], extra, args.trust_anchors, int(now.replace(tzinfo=datetime.timezone.utc).timestamp()))
+                rep.check(not probs, "the signing certificate chains to the supplied trust anchors",
+                          "the signing certificate does not chain to the supplied trust anchors: %s" % "; ".join(probs))
+                if prof is not None and prof["signer"] is not None:
+                    pextra = [c["der"] for c in prof["certs"] if c["sha256"] != prof["signer"]["sha256"]]
+                    pprobs = I.chain_problems(prof["signer"]["der"], pextra, args.trust_anchors, int(now.replace(tzinfo=datetime.timezone.utc).timestamp()))
+                    rep.check(not pprobs, "the provisioning profile's signer chains to the supplied trust anchors",
+                              "the provisioning profile's signer does not chain to the supplied trust anchors: %s" % "; ".join(pprobs))
+            else:
+                rep.warn("no --trust-anchors: the issuer is checked by name only; a certificate chain to Apple was not verified")
             nb, na = iso_to_dt(signer["not_before"]), iso_to_dt(signer["not_after"])
             rep.check(nb <= now <= na, "signing certificate is valid now (until %s)" % signer["not_after"],
                       "signing certificate is not valid now (%s to %s)" % (signer["not_before"], signer["not_after"]))
@@ -510,45 +583,73 @@ def verify(args):
                 rep.check(not missing, "every entitlement is granted by the provisioning profile",
                           "entitlements not granted by the profile: %s" % ", ".join(missing))
 
-        # ---- nested code ----
-        macho = [r for r in all_macho(app_dir) if r != exe_name]
-        verified_nested = set()
-        nested_bundle_dirs = set()
-        for rel in macho:
-            full = os.path.join(app_dir, rel)
-            bundle = os.path.dirname(full)
-            has_bundle = os.path.isfile(os.path.join(bundle, "Info.plist")) and bundle != app_dir
-            ident = None
-            res = check_code_signature(rep, rel, full, bundle if has_bundle else None, bundle_id, team, ident, False)
-            if res["signer"] is not None and signer is not None and res["signer"]["sha256"] != signer["sha256"]:
-                rep.fail("%s is signed by a different certificate than the main executable" % rel)
-            if has_bundle:
-                nested_bundle_dirs.add(os.path.relpath(bundle, app_dir).replace(os.sep, "/") + "/")
-                if not os.path.isfile(os.path.join(bundle, "_CodeSignature", "CodeResources")):
-                    rep.fail("%s is not sealed (no _CodeSignature/CodeResources)" % os.path.relpath(bundle, app_dir))
-                else:
-                    probs, _n = I.code_resources_problems(bundle, os.path.basename(full))
-                    for p in probs:
-                        rep.fail("%s: %s" % (os.path.relpath(bundle, app_dir), p))
-                    if not probs:
-                        rep.ok("%s: CodeResources match the files" % os.path.relpath(bundle, app_dir))
-            verified_nested.add(rel)
-        rep.ev("nested_code_count", len(macho))
-        rep.info("%d nested Mach-O file(s) checked" % len(macho))
-
-        # ---- the bundle seal ----
-        probs, checked = I.code_resources_problems(app_dir, exe_name, tuple(sorted(nested_bundle_dirs)))
-        probs = [p for p in probs if not any(p.startswith(v + " ") for v in verified_nested)]
-        for p in probs:
-            rep.fail("bundle: %s" % p)
-        if not probs:
-            rep.ok("bundle: CodeResources cover the bundle (%d files hash-checked)" % checked)
-        rep.ev("code_resources_files_checked", checked)
+        check_nested_and_seals(rep, app_dir, exe_name, bundle_id, team, signer, structure_only=False)
 
         # ---- provenance ----
         provenance(rep, args, app_dir, env, bundle_id, info, ipa_sha, tmp)
 
     return finish(rep, args)
+
+
+def check_nested_and_seals(rep, app_dir, exe_name, bundle_id, team, signer, structure_only):
+    """Every nested Mach-O is signed and sealed, the app's CodeResources cover the bundle, and the
+    nested cdhashes it lists are the nested code's. With structure_only the Team ID is not judged
+    and several signers are reported instead of refused (used to read what Apple's codesign wrote)."""
+    macho = [r for r in all_macho(app_dir) if r != exe_name]
+    distinct = set() if signer is None else {signer["sha256"]}
+    verified_nested = set()
+    nested_bundle_dirs = set()
+    for rel in macho:
+        full = os.path.join(app_dir, rel)
+        bundle = os.path.dirname(full)
+        has_bundle = os.path.isfile(os.path.join(bundle, "Info.plist")) and bundle != app_dir
+        ident = None
+        res = check_code_signature(rep, rel, full, bundle if has_bundle else None, bundle_id, team, ident, False)
+        if res["signer"] is not None:
+            distinct.add(res["signer"]["sha256"])
+            if signer is not None and res["signer"]["sha256"] != signer["sha256"] and not structure_only:
+                rep.fail("%s is signed by a different certificate than the main executable" % rel)
+        if has_bundle:
+            nested_bundle_dirs.add(os.path.relpath(bundle, app_dir).replace(os.sep, "/") + "/")
+            if not os.path.isfile(os.path.join(bundle, "_CodeSignature", "CodeResources")):
+                rep.fail("%s is not sealed (no _CodeSignature/CodeResources)" % os.path.relpath(bundle, app_dir))
+            else:
+                probs, _n = I.code_resources_problems(bundle, os.path.basename(full))
+                for p in probs:
+                    rep.fail("%s: %s" % (os.path.relpath(bundle, app_dir), p))
+                if not probs:
+                    rep.ok("%s: CodeResources match the files" % os.path.relpath(bundle, app_dir))
+        verified_nested.add(rel)
+    rep.ev("nested_code_count", len(macho))
+    rep.info("%d nested Mach-O file(s) checked" % len(macho))
+
+    # ---- the bundle seal ----
+    probs, checked = I.code_resources_problems(app_dir, exe_name, tuple(sorted(nested_bundle_dirs)))
+    # A nested Mach-O is signed and verified on its own, so "not covered by the app's CodeResources" is
+    # tolerated for it; "was modified after signing" (a stale seal) is never tolerated.
+    probs = [p for p in probs if not (any(p.startswith(v + " ") for v in verified_nested) and "not covered by CodeResources" in p)]
+    for key, want in I.code_resources_cdhashes(app_dir):
+        bundle = os.path.join(app_dir, key.rstrip("/"))
+        nested_exe = None
+        try:
+            with open(os.path.join(bundle, "Info.plist"), "rb") as f:
+                nested_exe = plistlib.load(f).get("CFBundleExecutable")
+        except Exception:
+            pass
+        got = []
+        if nested_exe and os.path.isfile(os.path.join(bundle, nested_exe)):
+            for sl in I.read_signature(os.path.join(bundle, nested_exe))["slices"]:
+                got += [I.cd_hash(cd, cd["hash_name"]) for _k, cd in sl["cds"]]
+        if want not in got:
+            probs.append("the app's CodeResources lists a cdhash for %s that is not the nested code's cdhash" % key)
+    for p in probs:
+        rep.fail("bundle: %s" % p)
+    if not probs:
+        rep.ok("bundle: CodeResources cover the bundle (%d files hash-checked)" % checked)
+    rep.ev("code_resources_files_checked", checked)
+    if structure_only:
+        rep.info("%d distinct signing certificate(s) across the bundle" % len(distinct))
+        rep.ev("distinct_signers", len(distinct))
 
 
 def provenance(rep, args, app_dir, env, bundle_id, info, ipa_sha, tmp):
@@ -591,7 +692,12 @@ def provenance(rep, args, app_dir, env, bundle_id, info, ipa_sha, tmp):
 
 
 def same_code_check(rep, unsigned, signed):
-    added_ok = lambda r: r == "embedded.mobileprovision" or r.startswith("_CodeSignature/") or "/_CodeSignature/" in r
+    def added_ok(r):
+        # signing adds the profile at the top and one CodeResources seal per bundle; nothing else
+        if r in ("embedded.mobileprovision", "_CodeSignature/CodeResources"):
+            return True
+        tail = "/_CodeSignature/CodeResources"
+        return r.endswith(tail) and os.path.isdir(os.path.join(unsigned, r[:-len(tail)]))
     uf, sf = set(I.bundle_files(unsigned)), set(I.bundle_files(signed))
     missing = sorted(uf - sf)
     extra = sorted(r for r in sf - uf if not added_ok(r))
@@ -644,6 +750,47 @@ def finish(rep, args, unverified=True):
         return 1
     print("verify_ipa: all %d checks passed (%d warning(s))" % (rep.passed, rep.warned))
     return 0
+
+
+# ---- structure ----------------------------------------------------------------------------------
+
+
+def structure(args):
+    """Is the signing STRUCTURE of an app (a Runner.app directory or an .ipa) intact and readable?
+    It runs the same signature, entitlement and seal checks as `verify` but judges no identity: no Team
+    ID, no certificate policy, no profile. It is for reading what Apple's own codesign wrote (a
+    throwaway identity, no Apple account) and comparing the result with Apple's `codesign --verify`."""
+    rep = Report()
+    print("verify_ipa structure: %s" % os.path.basename(args.target.rstrip("/")))
+    with tempfile.TemporaryDirectory(prefix="verify_ipa_") as tmp:
+        target = args.target
+        if os.path.isfile(target):
+            app_dir, extra = extract_ipa(target, tmp)
+            if app_dir is None:
+                for p in extra:
+                    rep.fail("container: %s" % p)
+                return finish(rep, args, unverified=False)
+        elif os.path.isdir(target):
+            app_dir = target
+        else:
+            die("%s is neither an .ipa nor a directory" % target)
+        try:
+            with open(os.path.join(app_dir, "Info.plist"), "rb") as f:
+                info = plistlib.load(f)
+            exe_name, bundle_id = info["CFBundleExecutable"], info["CFBundleIdentifier"]
+        except Exception as e:
+            rep.fail("Info.plist is unreadable: %s" % e)
+            return finish(rep, args, unverified=False)
+        if not isinstance(exe_name, str) or not exe_name or "/" in exe_name:
+            rep.fail("CFBundleExecutable %r is not a plain file name" % (exe_name,))
+            return finish(rep, args, unverified=False)
+        main = check_code_signature(rep, "main executable %s" % exe_name, os.path.join(app_dir, exe_name), app_dir,
+                                    bundle_id, None, bundle_id, True)
+        if main["ents"] is not None:
+            rep.info("entitlements: %s" % ", ".join(sorted(main["ents"])))
+            rep.ev("entitlement_keys", ",".join(sorted(main["ents"])))
+        check_nested_and_seals(rep, app_dir, exe_name, bundle_id, None, main["signer"], structure_only=True)
+    return finish(rep, args, unverified=False)
 
 
 # ---- compare ------------------------------------------------------------------------------------
@@ -755,6 +902,8 @@ def main(argv):
     v.add_argument("--leaf-prefix", action="append", default=None, help="accepted prefixes of the signing certificate CN")
     v.add_argument("--manifest", help="build manifest (JSON) of the UNSIGNED build")
     v.add_argument("--unsigned-app", help="the unsigned Runner.app directory the manifest describes")
+    v.add_argument("--trust-anchors", metavar="PEM", help="trust-anchor certificates (PEM) the signing chain must reach; supplied by the operator")
+    v.add_argument("--allow-synthetic", action="store_true", help="tests only: accept a throwaway/synthetic identity (never for production)")
     v.add_argument("--min-sdk", type=int)
     v.add_argument("--warn-days", type=int, default=30)
     v.add_argument("--now", help="UTC time to judge validity at (default now), e.g. 2026-10-22T12:00:00Z")
@@ -762,6 +911,9 @@ def main(argv):
     v.add_argument("--evidence", help="write text evidence (key=value) here")
     a = sub.add_parser("analyze-unsigned", help="describe what re-signing an unsigned Runner.app involves")
     a.add_argument("app")
+    st = sub.add_parser("structure", help="check the signing structure of an app or IPA without judging the identity")
+    st.add_argument("target", help="a Runner.app directory or an .ipa")
+    st.add_argument("--evidence")
     c = sub.add_parser("compare", help="is SIGNED the UNSIGNED bundle plus signatures only?")
     c.add_argument("unsigned", help="the unsigned Runner.app directory")
     c.add_argument("signed", help="the signed Runner.app directory or the .ipa")
@@ -771,11 +923,35 @@ def main(argv):
             args.leaf_prefix = list(LEAF_PREFIXES)
         if not re.match(r"^[A-Z0-9]{10}$", args.team_id):
             die("--team-id must be a 10-character Apple Team ID")
-        return verify(args)
+        if args.trust_anchors and not os.path.isfile(args.trust_anchors):
+            die("--trust-anchors %s is not a file" % args.trust_anchors)
+        try:
+            return verify(args)
+        except SystemExit:
+            raise
+        except Exception as e:  # fail closed: an unexpected error is a failed verification, never a pass
+            print("  FAIL  internal error while verifying (%s: %s); the IPA is NOT verified" % (type(e).__name__, e))
+            print("")
+            print("verify_ipa: verification aborted, treated as FAILED")
+            return 1
     if args.cmd == "analyze-unsigned":
         return analyze_unsigned(args)
+    if args.cmd == "structure":
+        try:
+            return structure(args)
+        except SystemExit:
+            raise
+        except Exception as e:
+            print("  FAIL  internal error while reading the structure (%s: %s)" % (type(e).__name__, e))
+            return 1
     if args.cmd == "compare":
-        return compare(args)
+        try:
+            return compare(args)
+        except SystemExit:
+            raise
+        except Exception as e:
+            print("  FAIL  internal error while comparing (%s: %s)" % (type(e).__name__, e))
+            return 1
     ap.print_help()
     return 2
 
