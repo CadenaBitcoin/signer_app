@@ -58,10 +58,11 @@ class _QrScannerState extends State<QrScanner> {
                 ],
               ),
               SizedBox(height: 16),
-              Container(
+              Expanded(
+                child: Container(
                 padding: EdgeInsets.symmetric(horizontal: 30.0),
                 decoration: BoxDecoration(color: primaryBackgroundColor.value, borderRadius: BorderRadius.only(topLeft: Radius.circular(20.0), topRight: Radius.circular(20.0))),
-                constraints: BoxConstraints(minHeight: Get.height - 110, minWidth: Get.width, maxWidth: Get.width),
+                width: double.infinity,
                 child: Column(
                   mainAxisAlignment: MainAxisAlignment.center,
                   children: [
@@ -87,6 +88,7 @@ class _QrScannerState extends State<QrScanner> {
                     SizedBox(height: 24),
                   ],
                 ),
+              ),
               ),
             ],
           ),
