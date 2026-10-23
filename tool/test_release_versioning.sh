@@ -87,9 +87,15 @@ fresh() { rm -rf "$tmp/w" && cp -R "$base" "$tmp/w"; } # a pristine copy to muta
 VV() { (cd "$tmp/w" && bash tool/verify_version.sh "$@"); }
 
 fresh
+current_version="$(sed -n 's/^version:[[:space:]]*\([^+]*\)+.*$/\1/p' "$root/pubspec.yaml")"
+[ -n "$current_version" ] || { echo "Cannot determine current version" >&2; exit 2; }
+current_release_id="v${current_version}"
+patch="${current_version##*.}"
+different_release_id="v${current_version%.*}.$((patch + 1))"
+
 accepted "version: the repository as it is passes" VV
-accepted "version: release id v1.0.3 on channel production" VV --channel production --release-id v1.0.3
-accepted "version: release id v1.0.3-rc.2 on channel staging" VV --channel staging --release-id v1.0.3-rc.2
+accepted "version: release id ${current_release_id} on channel production" VV --channel production --release-id "$current_release_id"
+accepted "version: release id ${current_release_id}-rc.2 on channel staging" VV --channel staging --release-id "${current_release_id}-rc.2"
 
 pubspec_case() { # NAME REPLACEMENT-LINE
   fresh
@@ -104,7 +110,7 @@ pubspec_case "a build number with a leading zero is rejected" "version: 1.0.3+01
 pubspec_case "a four-part version is rejected" "version: 1.0.3.1+1000034"
 pubspec_case "a non-numeric build is rejected" "version: 1.0.3+abc"
 fresh
-printf 'version: 1.0.4+1000035\n' >>"$tmp/w/pubspec.yaml"
+printf 'version: %s\n' "$(sed -n 's/^version: *//p' "$root/pubspec.yaml")" >>"$tmp/w/pubspec.yaml"
 rejected "version: two version lines are rejected (ambiguous source)" "exactly one" VV
 
 fresh
@@ -139,14 +145,16 @@ edit "$tmp/w/.github/workflows/build-variants.yml" 'flutter build "$FLUTTER_COMM
 rejected "version: a workflow that passes --build-name is rejected" "overrides the version" VV
 
 fresh
-for id in 1.0.3 v1.0.4 v1.0.3-rc.0 v1.0.3-rc. v01.0.3 v1.0.3-beta.1 V1.0.3 v1.0; do
+# malformed identifiers are derived from the current version so each is rejected for its own
+# defect, never for naming another version; "$different_release_id" is the mismatch case
+for id in "$current_version" "$different_release_id" "${current_release_id}-rc.0" "${current_release_id}-rc." "v0${current_version}" "${current_release_id}-beta.1" "V${current_version}" "v${current_version%.*}"; do
   rejected "version: release id '$id' is rejected" "FAIL" VV --release-id "$id"
 done
-rejected "version: channel staging with a final identifier is rejected" "needs a -rc.N" VV --channel staging --release-id v1.0.3
-rejected "version: channel production with a candidate identifier is rejected" "must not carry" VV --channel production --release-id v1.0.3-rc.1
+rejected "version: channel staging with a final identifier is rejected" "needs a -rc.N" VV --channel staging --release-id "$current_release_id"
+rejected "version: channel production with a candidate identifier is rejected" "must not carry" VV --channel production --release-id "${current_release_id}-rc.1"
 rejected "version: channel staging without an identifier is rejected (missing identity)" "requires --release-id" VV --channel staging
 rejected "version: channel production without an identifier is rejected (missing identity)" "requires --release-id" VV --channel production
-expect_rc "version: an unknown channel is a usage error" 2 "" VV --channel qa --release-id v1.0.3
+expect_rc "version: an unknown channel is a usage error" 2 "" VV --channel qa --release-id "$current_release_id"
 
 # ---------------------------------------------------------------------------------------------
 # 2. build manifests
