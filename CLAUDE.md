@@ -240,5 +240,3 @@ authorization:
   and held by the CFO. `tool/release_android.sh` is the local procedure, run by the key holder.
 - Native binary provenance and the release process for the committed `.so`/`.a`
   files are **not documented** (separate technical debt).
-- `.gitignore` lists `/android/app`, although files under it are tracked; a new
-  file there needs `git add -f`.
