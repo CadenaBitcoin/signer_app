@@ -65,6 +65,20 @@ t "gradle: the real-Gradle regression test exists and is executable" test -x "$r
 t "gradle: the debug key is not given to any flavor in release mode (no flavor-level signing config)" eq "$(grep -cE '^[[:space:]]*signingConfig[[:space:]]*=' "$G")" 1
 t "gradle: the keystore patterns stay ignored by Git" eq "$(grep -cE '^(key\.properties|\*\*/\*\.keystore|\*\*/\*\.jks)$' "$root/android/.gitignore")" 3
 
+# Git ignore rules (Issue #85): new Android sources stay visible, build output and credentials stay out.
+# "Ignored" means ignored by a .gitignore of the repository (not by a local or global exclude).
+ignored_by_repo() { git -C "$root" check-ignore -v -- "$1" 2>/dev/null | grep -qE '^([^:]*/)?\.gitignore:'; }
+visible() { ! git -C "$root" check-ignore -q -- "$1"; }
+for f in android/app/src/main/kotlin/com/example/New.kt android/app/proguard-rules.pro android/app/src/main/res/xml/network_security_config.xml \
+  android/app/new.gradle.kts android/app/src/main/AndroidManifest.xml config/build/new.json .env.example; do
+  t "gitignore: $f is visible to Git" visible "$f"
+done
+for f in build/app/outputs/x android/app/build/x android/app/key.properties android/app/upload.jks android/app/upload.keystore .flutter-plugins-dependencies \
+  .claude/settings.local.json ios/AuthKey_X.p8 cert.p12 key.pem x.mobileprovision .env .env.production android/app/google-services.json ios/Runner/GoogleService-Info.plist; do
+  t "gitignore: $f is ignored by the repository" ignored_by_repo "$f"
+done
+t "gitignore: no tracked file matches an ignore rule" eq "$(git -C "$root" ls-files -ci --exclude-standard | wc -l | tr -d ' ')" 0
+
 # CI stays credential-free: no workflow selects release signing or names a secret
 wf_hits="$(grep -rlE 'CADENA_SIGNING|CADENA_KEYSTORE|CADENA_KEY_|CADENA_EXPECTED_CERT|secrets\.' "$root/.github/workflows" 2>/dev/null | grep -v 'ios-signing-feasibility' | tr '\n' ' ')"
 t "ci: no workflow enables release signing or reads a secret (${wf_hits:-none})" test -z "$wf_hits"
