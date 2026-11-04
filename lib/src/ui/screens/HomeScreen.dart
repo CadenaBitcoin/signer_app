@@ -22,6 +22,7 @@ import 'package:signer/src/ui/theme/colors.dart';
 import 'package:signer/src/ui/widgets/connect_to_cadena_button.dart';
 
 import '../../../models/user_profile_model.dart';
+import '../widgets/security_help_link.dart';
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
@@ -853,7 +854,11 @@ class _HomeScreenState extends State<HomeScreen> {
                   mainAxisAlignment: MainAxisAlignment.spaceBetween,
                   children: [
                     Text("Dashboard", style: AppTextStyles.heading1),
-                    Container(
+                    Row(
+                      children: [
+                        const SecurityHelpLink(label: 'Help'),
+                        const SizedBox(width: 4),
+                        Container(
                       padding: const EdgeInsets.symmetric(
                         horizontal: 12,
                         vertical: 6,
@@ -902,6 +907,8 @@ class _HomeScreenState extends State<HomeScreen> {
                           ),
                         ),
                       ),
+                        ),
+                      ],
                     ),
                   ],
                 ),

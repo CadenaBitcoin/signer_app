@@ -85,7 +85,8 @@ tested by `tool/test_ios_toolchain.sh`) fails if the two workflows differ.
    `APP_ENV=staging`.
 6. `flutter analyze --no-fatal-infos --no-fatal-warnings`: only analyzer errors
    fail the build (baseline 0 errors; existing warnings/info are known technical
-   debt, `CLAUDE.md` section 4). There is no `test/` directory, so no `flutter test`.
+   debt, `CLAUDE.md` section 4). Then `flutter test`. Those tests do not need a
+   flavor or a build configuration.
 7. Record the bundled Rust static library and verify it is unchanged (below).
 8. `flutter build ios --release --no-codesign --flavor staging --dart-define-from-file=config/build/staging.json`.
    Flutter runs `pod install` itself; `--no-codesign` sets `CODE_SIGNING_ALLOWED=NO`,
