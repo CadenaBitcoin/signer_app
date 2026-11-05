@@ -9,6 +9,7 @@ import '../controllers/appController.dart';
 import '../widgets/appTextField.dart';
 import '../widgets/bottomNavbar.dart';
 import '../widgets/primaryButton.dart';
+import '../widgets/security_help_link.dart';
 
 class VerifyPasswordScreen extends StatefulWidget {
   const VerifyPasswordScreen({super.key});
@@ -167,6 +168,7 @@ class _VerifyPasswordScreenState extends State<VerifyPasswordScreen> {
                     isLoading: appController.loginLoader.value,
                     loadingText: "Processing...",
                   ),
+                  const SecurityHelpLink(),
                   SizedBox(height: MediaQuery.of(context).viewPadding.bottom + 16),
                 ],
               ),

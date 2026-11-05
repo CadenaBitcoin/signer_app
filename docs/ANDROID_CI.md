@@ -46,14 +46,13 @@ On a GitHub-hosted `ubuntu-latest` runner, with token permission
 5. `flutter analyze --no-fatal-infos --no-fatal-warnings`: only analyzer
    **errors** fail the build. The accepted baseline is 0 errors; the existing
    warnings/info are known technical debt (`CLAUDE.md` section 4).
-6. `flutter build apk --debug --flavor staging --dart-define-from-file=config/build/staging.json`.
-7. `tool/verify_artifact.sh apk staging ... --signing debug --debug-build`: read the
+6. `flutter test`. The tests under `test/` do not need a flavor or a build
+   configuration.
+7. `flutter build apk --debug --flavor staging --dart-define-from-file=config/build/staging.json`.
+8. `tool/verify_artifact.sh apk staging ... --signing debug --debug-build`: read the
    application ID, display name, version name/code and signer **from the built APK**
    and compare them with the identity matrix and `pubspec.yaml`.
-8. Rename the APK, write a notice file, and upload both as one Actions artifact.
-
-There is deliberately **no `flutter test` step**: the repository has no `test/`
-directory. Add it when tests exist.
+9. Rename the APK, write a notice file, and upload both as one Actions artifact.
 
 The same commands run locally (JDK 17) as the bootstrap in `CLAUDE.md` section 4.
 

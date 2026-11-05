@@ -156,9 +156,13 @@ jobs:
 
       # The accepted analyzer baseline is 0 errors; existing warnings/info are
       # known technical debt (CLAUDE.md section 4). Only errors fail this step.
-      # There is no test/ directory on this branch, so no `flutter test` step.
       - name: Analyze (errors fail; pre-existing warnings/info do not)
         run: flutter analyze --no-fatal-infos --no-fatal-warnings
+
+      # Widget and unit tests in test/. They do not import BuildConfig, so they
+      # need no flavor and no dart-define file.
+      - name: Test
+        run: flutter test
 
       # Documents what is linked. The library is NOT rebuilt or modified. Its origin
       # is unverified: it was committed once (df269f6) and nothing here proves that

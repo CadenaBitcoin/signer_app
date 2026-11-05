@@ -5,6 +5,7 @@ import 'package:signer/src/ui/widgets/primaryButton.dart';
 
 import '../theme/app_Text_Styles.dart';
 import '../theme/colors.dart';
+import '../widgets/security_help_link.dart';
 
 class OnboardingScreen extends StatelessWidget {
   const OnboardingScreen({super.key});
@@ -33,6 +34,8 @@ class OnboardingScreen extends StatelessWidget {
                       Get.to(SignInScreen());
                     },
                   ),
+                  const SizedBox(height: 8),
+                  const SecurityHelpLink(),
                   // const SizedBox(height: 16),
                   //
                   // PrimaryButton(
