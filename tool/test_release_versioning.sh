@@ -456,6 +456,9 @@ gate_repo 1000034 "$PROD_ID"; rejected "gate: the published build number itself 
 gate_repo 1000035 "$PROD_ID"; expect_rc "gate: the next build number is releasable" 0 "build 1000035 is above the published floor 1000034" GATE
 gate_repo 1000099 "$PROD_ID"; expect_rc "gate: a future version far above the floor satisfies the build-number rule" 0 "is above the published floor 1000034" GATE
 gate_repo 1000035 "$PROD_ID" 1000036; rejected "gate: a higher published number (ledger edited) blocks again" "not above the published" GATE
+# the baseline after Android 1.0.4 (1000035) was published (#72): that number is spent, the next one is releasable
+gate_repo 1000035 "$PROD_ID" 1000035; rejected "gate: with 1.0.4 (1000035) published, build 1000035 is not releasable" "not above the published build number 1000035" GATE
+gate_repo 1000036 "$PROD_ID" 1000035; expect_rc "gate: with 1.0.4 (1000035) published, build 1000036 is releasable" 0 "build 1000036 is above the published floor 1000035" GATE
 gate_repo 1000034 "$PROD_ID"; accepted "gate: staging is a separate application, no floor applies" BM gate --channel staging --repo "$tmp/g"
 # rule 2 alone: the build number is far above the floor, the identity is not the published one (#72)
 gate_repo 1000035 "$OTHER_ID"; rejected "gate: build 1000035 with a production application ID that is not the published package is blocked" "is not the published package $OTHER_ID" GATE
@@ -494,6 +497,14 @@ t "identity: iOS staging keeps its bundle ID ($IOS_STAGING_ID)" eq "$(matrix_id 
 t "identity: the Android and iOS production identifiers are different" test "$(matrix_id android production)" != "$(matrix_id ios production)"
 t "identity: the Android application ID in the ledger and in Gradle agree" has "$(grep -E '^[[:space:]]*applicationId[[:space:]]*=' "$root/android/app/build.gradle.kts")" "\"$ledger_pkgs\""
 if [ "$pub_build" -ge "$ledger_floor" ]; then ok "ledger: the pubspec build is not below the published floor"; else bad "ledger: the pubspec build is below the published floor" "$pub_build < $ledger_floor"; fi
+# Android 1.0.4+1000035 is published (confirmed 2026-11-04, #72): the floor never goes back below it, and the history is kept
+t "ledger: Android 1.0.4 (1000035) is recorded as published, so the floor is at least 1000035" test "$ledger_floor" -ge 1000035
+t "ledger: the 1.0.3 (1000034) and 1.0.4 (1000035) Google Play entries both exist for the published package" eq "$(python3 -I -c '
+import json,sys
+e=json.load(open(sys.argv[1]))["entries"]
+have={(x["version_name"],x["version_code"]):x for x in e if x["platform"]=="android" and x["channel"]=="google-play" and x["package"]==sys.argv[2]}
+print(("1.0.3",1000034) in have and ("1.0.4",1000035) in have and have[("1.0.4",1000035)]["status"]=="published")' "$root/config/release/published_versions.json" "$PUBLISHED_ID")" True
+t "ledger: no iOS version is recorded as published" eq "$(python3 -I -c 'import json,sys; print(sum(1 for x in json.load(open(sys.argv[1]))["entries"] if x["platform"]=="ios"))' "$root/config/release/published_versions.json")" 0
 
 # a release cannot be claimed while the published-version protections are open
 RELCLAIM='m["classification"]="release"; m["signing"]["status"]="release"; m["signing"]["signer_dn"]="CN=Cadena Release"; m["source"]["release_id"]="v1.0.3"; m["distribution"]["distributable"]=True'

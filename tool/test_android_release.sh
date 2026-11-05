@@ -116,6 +116,11 @@ t "ledger: the Google Play app-signing certificate is recorded and differs from 
 import json,sys
 d=json.load(open(sys.argv[1])); n=lambda s:s.replace(":","").lower()
 print(n(d["play_app_signing"]["sha256"]) not in [n(x["sha256"]) for x in d["upload"]["do_not_use"]])' "$SIGNING_JSON")" True
+t "ledger: the active upload fingerprint is recorded, a SHA-256, and differs from the Play app-signing and the forbidden certificates (#72)" eq "$(jq_py '
+import json,re,sys
+d=json.load(open(sys.argv[1])); n=lambda s:s.replace(":","").lower()
+a=d["upload"].get("active_sha256")
+print(bool(a) and re.fullmatch(r"[0-9a-f]{64}", n(a)) is not None and n(a)!=n(d["play_app_signing"]["sha256"]) and n(a) not in [n(x["sha256"]) for x in d["upload"]["do_not_use"]])' "$SIGNING_JSON")" True
 t "ledger: no secret-looking content in the ledgers" eq "$(grep -ciE 'BEGIN [A-Z ]*PRIVATE|\.jks|\.p12|storePassword|keyPassword|api[_-]?key' "$SIGNING_JSON" "$NATIVE_JSON" | awk -F: '{s+=$2} END {print s+0}')" 0
 t "ledger: native_libs.json lists, per ABI, files that exist in the plugin's jniLibs" eq "$(jq_py '
 import json,os,sys
@@ -230,6 +235,11 @@ else
     mkdir -p "$1"; cp -R "$root/tool" "$root/config" "$root/pubspec.yaml" "$1/"; mkdir -p "$1/android/gradle/wrapper"
     cp "$root/android/settings.gradle.kts" "$1/android/"; cp "$root/android/gradle/wrapper/gradle-wrapper.properties" "$1/android/gradle/wrapper/"
     rm -rf "$1/tool/__pycache__"
+    # the fixtures sign with disposable keys: the recorded active upload fingerprint of the real ledger
+    # must not apply to them (the cases that need one set it themselves)
+    python3 -I -c '
+import json,sys
+p=sys.argv[1]; d=json.load(open(p)); d["upload"]["active_sha256"]=None; json.dump(d,open(p,"w"),indent=2)' "$1/config/release/android_signing.json"
   }
   mkrepo "$tmp/fx"
   # VX REPO SUBCOMMAND ARGS...: the verifier copy of that repository copy, with that repository as the reference
@@ -327,7 +337,7 @@ EOF
   mkrepo "$tmp/rel"
   python3 -I -c '
 import json,sys
-p=sys.argv[1]; d=json.load(open(p)); d["entries"][0]["version_code"]=1000033; json.dump(d,open(p,"w"),indent=2)' "$tmp/rel/config/release/published_versions.json"
+p=sys.argv[1]; d=json.load(open(p)); [e.__setitem__("version_code",1000033) for e in d["entries"]]; json.dump(d,open(p,"w"),indent=2)' "$tmp/rel/config/release/published_versions.json"
   git -C "$tmp/rel" init -q && git -C "$tmp/rel" add -A >/dev/null 2>&1 && git -C "$tmp/rel" -c user.name=t -c user.email=t@example.invalid -c commit.gpgsign=false commit -q -m fixture
   VR() { local sub="$1"; shift; VX "$tmp/rel" "$sub" "$@"; }
   expect_rc "release: verified artifacts of a clean commit above the floor are release-ready (not published)" 0 "RESULT: OK (release ready, verified, not published)" \
@@ -351,7 +361,7 @@ print(bool(re.fullmatch(r"[0-9a-f]{40}", p["commit"])) and p["tracked_tree_clean
   expect_rc "release: a dirty tracked tree makes the release NOT READY" 1 "tracked working tree is not clean" \
     VR release production --apk "$tmp/up.apk" --aab "$tmp/up.aab" --expect-cert-sha256 "$FP_UP" --identity-label x --out "$tmp/report2"
   git -C "$tmp/rel" checkout -q -- pubspec.yaml
-  # not ready: the real ledger (floor 1000034 = this build) fails the production gate
+  # not ready: the real ledger (its floor is the published build, which is this build or above) fails the production gate
   mkrepo "$tmp/rel2"; git -C "$tmp/rel2" init -q && git -C "$tmp/rel2" add -A >/dev/null 2>&1 && git -C "$tmp/rel2" -c user.name=t -c user.email=t@example.invalid -c commit.gpgsign=false commit -q -m fixture
   expect_rc "release: a build number that is not above the published one makes the release NOT READY" 1 "release gate fails" \
     VX "$tmp/rel2" release production --apk "$tmp/up.apk" --aab "$tmp/up.aab" --expect-cert-sha256 "$FP_UP" --identity-label x --out "$tmp/report3"
@@ -365,7 +375,14 @@ fi
 # ---------------------------------------------------------------------------------------------
 if [ "${ANDROID_RELEASE_E2E:-0}" = 1 ]; then
   e2e="$tmp/e2e"; git clone -q "$root" "$e2e"
-  sed -i.bak 's/^version: .*/version: 1.0.3+1000035/' "$e2e/pubspec.yaml"; rm -f "$e2e/pubspec.yaml.bak"
+  # a build number above the live published floor (whatever the ledger says today), and no recorded active
+  # upload fingerprint: this procedure signs with a disposable key
+  e2e_floor="$(python3 -I -c 'import json,sys; print(max(e["version_code"] for e in json.load(open(sys.argv[1]))["entries"] if e["platform"]=="android"))' "$root/config/release/published_versions.json")"
+  e2e_name="$(sed -n 's/^version: *\([0-9.]*\)+.*/\1/p' "$root/pubspec.yaml")"
+  sed -i.bak "s/^version: .*/version: $e2e_name+$((e2e_floor + 1))/" "$e2e/pubspec.yaml"; rm -f "$e2e/pubspec.yaml.bak"
+  python3 -I -c '
+import json,sys
+p=sys.argv[1]; d=json.load(open(p)); d["upload"]["active_sha256"]=None; json.dump(d,open(p,"w"),indent=2)' "$e2e/config/release/android_signing.json"
   git -C "$e2e" -c user.name=t -c user.email=t@example.invalid -c commit.gpgsign=false commit -q -am "e2e: raise the build number"
   PW2="$(openssl rand -hex 12)"
   keytool -genkeypair -alias e2e -keyalg RSA -keysize 2048 -validity 10000 -keystore "$tmp/e2e.p12" -storetype PKCS12 \

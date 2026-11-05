@@ -60,7 +60,8 @@ confirmed from the store console:
 
 | Platform | Channel | Package | Version | Recorded |
 |---|---|---|---|---|
-| Android | Google Play | `com.cadenabitcoin.mobile.signer` | 1.0.3 (**1000034**), fully rolled out | 2026-10-19 (Issue #68) |
+| Android | Google Play | `com.cadenabitcoin.mobile.signer` | 1.0.3 (1000034), fully rolled out | 2026-10-19 (Issue #68) |
+| Android | Google Play | `com.cadenabitcoin.mobile.signer` | 1.0.4 (**1000035**), published | 2026-11-04 (Issue #72; release authority, Play Console; publication time not recorded) |
 
 Not recorded: earlier Android releases (all below 1000034), website or internal-test
 APKs, and anything on iOS. No iOS floor is enforced.
@@ -76,14 +77,14 @@ APKs, and anything on iOS. No iOS floor is enforced.
   The signed release pipeline (#72) must run the gate before building and must not bypass
   it. Compile validation does **not** run it: validation builds may equal the published
   number and carry another ID because they are not releases.
-- **Today the repository is at `1.0.3+1000034`** with the Android ID
-  `com.cadenabitcoin.mobile.signer`, the published package (settled in #72; the repository
-  used to build `com.app.cadenabitcoin`, which could not be that application). Rule 2 is
-  therefore satisfied and the gate fails for production on rule 1 only, on purpose: the
-  build number is not above the published one. Raising it to at least `1000035` (a
-  reviewed commit) clears that.
+- **Today the repository is at `1.0.4+1000035`**, which is the version recorded as
+  published (2026-11-04, #72), with the Android ID `com.cadenabitcoin.mobile.signer`, the
+  published package (settled in #72; the repository used to build `com.app.cadenabitcoin`,
+  which could not be that application). Rule 2 is therefore satisfied and the gate fails for
+  production on rule 1 only, on purpose: the build number is not above the published one.
+  The next production release needs a reviewed raise to at least `1000036`; that clears it.
 - The floor applies to the Google Play application. An update of it needs a versionCode
-  above 1000034 *and* the published package ID *and* the published signing lineage. The ID
+  above the published floor (1000035 today) *and* the published package ID *and* the published signing lineage. The ID
   is now right; the signing lineage is still open (#66, #72).
 - The ledger is edited only by a reviewed commit after a maintainer confirms the number in
   the store console. It records history; it authorizes nothing.
@@ -136,7 +137,8 @@ artifact that is not unsigned.
 **Known issues** are recomputed from the ledger and must be present; a manifest that drops
 one fails. Today the Android production manifests carry one:
 
-- `version-code-not-above-published-floor`: the build number is not above 1000034.
+- `version-code-not-above-published-floor`: the build number is not above the published floor
+  (1000035 since 1.0.4 was published).
 
 The second known issue, `application-id-differs-from-published-app`, is raised when the
 Android production ID differs from the package in the ledger. It was open until #72 set the
@@ -182,7 +184,7 @@ published listing's version history nor be described as that application. The is
 cleared only by a **reviewed** change: the ID of the build is the published one (done for
 Android in #72), or the ledger deliberately records the new listing. Ordinary
 compile-validation builds are not releases, so they keep passing at the current version
-(`1.0.3+1000034`); they are simply labelled with the open issues.
+(`1.0.4+1000035`, the published one); they are simply labelled with the open issues.
 
 ### Following a binary back to its source
 
@@ -317,14 +319,14 @@ Properties of such a file that the label and the manifest must keep explicit:
   Google Play app** (since #72) but signed with a different, temporary key. On a device that
   has the Play app it cannot be installed over it (the signatures differ), and a device
   that has this file cannot receive the Play update until the file is uninstalled;
-- build number equal to the published 1000034, so it is not a candidate for any store;
+- build number equal to the published 1000035, so it is not a candidate for any store;
 - production configuration: it talks to the production backend and mainnet. Only disposable
   accounts, never a wallet holding value.
 
 This is **not** an official, update-compatible Google Play artifact. That needs, beyond the
 above: the signing-key governance (#66), the release signing pipeline in protected
 environments (#72), the signing lineage of the published app (the application ID is settled),
-a build number above 1000034 (the gate), a release identifier and tag, the release record
+a build number above the published floor, 1000035 today (the gate), a release identifier and tag, the release record
 of policy section 9, and the tester sign-off of policy 2.2.
 
 ## Version-transition test (needs explicit authorization)
