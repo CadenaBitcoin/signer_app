@@ -26,7 +26,9 @@
 # provisioning profile, and neither `xcodebuild -exportArchive`, App Store Connect nor a device was
 # involved. It shows only that the signing mechanics work on this application's real build output.
 #
-# STATUS: not yet run on macOS when written (developed on Linux); the first hosted run is the test.
+# STATUS: developed on Linux. The first hosted run (39820242689, 2026-10-22) failed on every codesign call
+# and the script discarded codesign's error text, so the cause was not visible. codesign's output is now
+# captured and printed (DIAG and RESULT lines), with a harmless canary file signed first (Issue #71).
 set -uo pipefail
 
 if [ "$(uname -s)" != "Darwin" ]; then
@@ -86,7 +88,8 @@ security create-keychain -p "$password" "$keychain"
 security set-keychain-settings -lut 3600 "$keychain"
 security unlock-keychain -p "$password" "$keychain"
 security import "$work/id.p12" -k "$keychain" -P "$password" -A -T /usr/bin/codesign >/dev/null
-security set-key-partition-list -S apple-tool:,apple: -s -k "$password" "$keychain" >/dev/null 2>&1 || true
+security set-key-partition-list -S apple-tool:,apple: -s -k "$password" "$keychain" >"$work/partition.txt" 2>&1
+partition_rc=$?
 identity="$(security find-identity -p codesigning "$keychain" | awk '/Spike Throwaway Signer/ {print $2; exit}')"
 if [ -z "$identity" ]; then
   echo "spike: the throwaway identity was not created" >&2
@@ -96,6 +99,33 @@ echo "   identity $identity (throwaway, exists only in $keychain)"
 
 sign_one() { codesign --force --sign "$identity" --keychain "$keychain" --timestamp=none "$@"; }
 
+# Diagnostics (Issue #71). The first hosted run (39820242689) failed on every codesign call and discarded
+# the error text, so the cause was never seen. Everything printed here is non-sensitive: the identity and
+# the keychain are throwaway and the password is never printed. DIAG lines are part of the evidence.
+echo "== 1b. diagnostics: can codesign use the throwaway identity at all?"
+{
+  echo "DIAG set-key-partition-list exit code: $partition_rc"
+  head -5 "$work/partition.txt" | sed 's/^/DIAG   /'
+  echo "DIAG identities in the throwaway keychain, all (find-identity -p codesigning):"
+  security find-identity -p codesigning "$keychain" 2>&1 | sed 's/^/DIAG   /'
+  echo "DIAG identities in the throwaway keychain, valid only (find-identity -v -p codesigning):"
+  security find-identity -v -p codesigning "$keychain" 2>&1 | sed 's/^/DIAG   /'
+  echo "DIAG throwaway keychain settings (show-keychain-info):"
+  security show-keychain-info "$keychain" 2>&1 | sed 's/^/DIAG   /'
+} | tee -a "$evidence"
+# Canary: the same signing call on a harmless file. If it fails like the real files did, the cause is the
+# identity or the keychain, not this application's contents.
+cp /bin/ls "$work/canary"
+canary_out="$(sign_one "$work/canary" 2>&1)"
+canary_rc=$?
+echo "DIAG canary codesign --force on a copy of /bin/ls: exit code $canary_rc" | tee -a "$evidence"
+printf '%s\n' "$canary_out" | head -5 | sed 's/^/DIAG   /' | tee -a "$evidence"
+if [ "$canary_rc" -eq 0 ]; then
+  record preflight "codesign signs a harmless canary with the throwaway identity" PASS
+else
+  record preflight "codesign signs a harmless canary with the throwaway identity" FAIL "$(printf '%s' "$canary_out" | tr '\n' ' ' | cut -c1-300)"
+fi
+
 is_apple_signed() { # FILE: already signed by an Apple certificate (not ours, not ad hoc)?
   local info
   info="$(codesign -dvv "$1" 2>&1 || true)"
@@ -103,7 +133,7 @@ is_apple_signed() { # FILE: already signed by an Apple certificate (not ours, no
 }
 
 run_variant() { # VARIANT
-  local variant=$1 app="$work/$1/Payload/Runner.app" skipped="" item count=0 ipa="$out/test-$1-NOT-DISTRIBUTABLE.ipa"
+  local variant=$1 app="$work/$1/Payload/Runner.app" skipped="" item count=0 ipa="$out/test-$1-NOT-DISTRIBUTABLE.ipa" sign_out
   echo
   echo "== variant: $variant"
   mkdir -p "$work/$variant/Payload"
@@ -116,10 +146,10 @@ run_variant() { # VARIANT
       skipped="$skipped $(basename "$item")"
       continue
     fi
-    if sign_one "$item" >/dev/null 2>&1; then
+    if sign_out="$(sign_one "$item" 2>&1)"; then
       count=$((count + 1))
     else
-      record "$variant" "codesign accepts $(basename "$item")" FAIL
+      record "$variant" "codesign accepts $(basename "$item")" FAIL "$(printf '%s' "$sign_out" | tr '\n' ' ' | cut -c1-300)"
     fi
   done < <(find "$app/Frameworks" -maxdepth 1 \( -name '*.framework' -o -name '*.dylib' \) 2>/dev/null | sort)
   cat >"$work/$variant/entitlements.plist" <<EOF
@@ -131,10 +161,10 @@ run_variant() { # VARIANT
   <key>keychain-access-groups</key><array><string>SPIKE00000.$bundle_id</string></array>
 </dict></plist>
 EOF
-  if sign_one --entitlements "$work/$variant/entitlements.plist" "$app" >/dev/null 2>&1; then
+  if sign_out="$(sign_one --entitlements "$work/$variant/entitlements.plist" "$app" 2>&1)"; then
     record "$variant" "codesign signs the app (nested items signed: $count; left unsigned-by-us:${skipped:- none})" PASS
   else
-    record "$variant" "codesign signs the app" FAIL
+    record "$variant" "codesign signs the app" FAIL "$(printf '%s' "$sign_out" | tr '\n' ' ' | cut -c1-300)"
     return
   fi
 

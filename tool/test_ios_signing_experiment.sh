@@ -48,6 +48,10 @@ spike_code="$(grep -vE '^[[:space:]]*#' "$spike")"
 echo "$spike_code" | grep -F -- "--timestamp=none" >/dev/null && ! echo "$spike_code" | grep -E -- '--timestamp([^=]|$)' >/dev/null; wfchk "codesign never contacts a timestamp server (--timestamp=none)" $?
 echo "$spike_code" | grep -F "security delete-keychain" >/dev/null && echo "$spike_code" | grep -F "trap cleanup EXIT" >/dev/null; wfchk "the script deletes its throwaway keychain on exit" $?
 ! echo "$spike_code" | grep -E 'list-keychains|default-keychain|login\.keychain' >/dev/null; wfchk "the script never changes the keychain search list or touches the login keychain" $?
+# Issue #71: the first hosted run failed on every codesign call and its error text was discarded.
+! echo "$spike_code" | grep -E 'sign_one[^|]*(2>|>)[[:space:]]*/dev/null' >/dev/null; wfchk "codesign's error output is captured and reported, never discarded" $?
+echo "$spike_code" | grep -F 'DIAG canary codesign' >/dev/null && echo "$spike_code" | grep -F 'find-identity -v -p codesigning' >/dev/null; wfchk "the script prints preflight diagnostics (canary signing, valid-identity listing)" $?
+! echo "$spike_code" | grep -E '(echo|printf)[^#]*\$\{?password' >/dev/null; wfchk "the throwaway keychain password is never printed" $?
 
 
 if bash -n "$spike"; then ok "the spike script is syntactically valid"; else bad "the spike script is syntactically valid"; fi
