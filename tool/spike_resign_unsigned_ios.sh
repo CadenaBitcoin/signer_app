@@ -28,10 +28,14 @@
 #
 # STATUS: developed on Linux. The first hosted run (39820242689, 2026-10-22) failed on every codesign call
 # and the script discarded codesign's error text. Re-run with the error text visible (42231261892,
-# 2026-11-08), it showed the cause: `codesign: The specified item could not be found in the keychain.` for
+# 2026-11-06), it showed the cause: `codesign: The specified item could not be found in the keychain.` for
 # every file, even a harmless canary, because the self-signed certificate is not TRUSTED for code signing
 # (`security find-identity`: CSSMERR_TP_NOT_TRUSTED, 0 valid identities) and codesign only uses valid
-# identities. This version therefore gives the throwaway certificate a code-signing trust setting, see below.
+# identities. This version gave the throwaway certificate a code-signing trust setting, see below; that
+# attempt (run 42515210134, 2026-11-08) was stopped by an authorization prompt that a headless runner
+# cannot answer (add-trusted-cert in the user domain timed out; nothing was written). The only remaining
+# way is an admin-domain trust change with sudo, which is system-wide and was NOT approved. This branch is
+# kept as evidence only and its trust workaround is not to be merged (Issue #71, docs/IOS_SIGNING.md 3.3).
 #
 # THE TRUST SETTING (the only thing here that lives outside the throwaway keychain; Issue #71):
 #   scope     the USER trust-settings domain of the account that runs the job: never the admin or system
