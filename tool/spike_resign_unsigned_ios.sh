@@ -27,8 +27,25 @@
 # involved. It shows only that the signing mechanics work on this application's real build output.
 #
 # STATUS: developed on Linux. The first hosted run (39820242689, 2026-10-22) failed on every codesign call
-# and the script discarded codesign's error text, so the cause was not visible. codesign's output is now
-# captured and printed (DIAG and RESULT lines), with a harmless canary file signed first (Issue #71).
+# and the script discarded codesign's error text. Re-run with the error text visible (42231261892,
+# 2026-11-08), it showed the cause: `codesign: The specified item could not be found in the keychain.` for
+# every file, even a harmless canary, because the self-signed certificate is not TRUSTED for code signing
+# (`security find-identity`: CSSMERR_TP_NOT_TRUSTED, 0 valid identities) and codesign only uses valid
+# identities. This version therefore gives the throwaway certificate a code-signing trust setting, see below.
+#
+# THE TRUST SETTING (the only thing here that lives outside the throwaway keychain; Issue #71):
+#   scope     the USER trust-settings domain of the account that runs the job: never the admin or system
+#             domain (no `-d`, no sudo), never the login keychain (`-k` names the throwaway keychain).
+#             It names this one certificate (by hash), only for the code-signing policy (`-p codeSign`).
+#   when      only on a GitHub-hosted runner (RUNNER_ENVIRONMENT=github-hosted: a fresh VM that is destroyed
+#             after the job) and only if the untrusted identity was actually unusable. On any other machine
+#             the script refuses to change trust settings and stops, so it cannot alter a developer's Mac.
+#   cleanup   `security remove-trusted-cert` for that certificate in the EXIT trap, then the keychain and
+#             all files are deleted. The workflow checks afterwards that no trust setting remains.
+#   risk      while it exists, code signed with the throwaway key counts as validly signed to that user on
+#             that runner. The key never leaves the runner (it exists only in $work and the throwaway
+#             keychain), the certificate expires after one day, and the job runs only reviewed repository code.
+#   limit     each trust command is cut off after 30 seconds: a headless authorization prompt must not hang the job.
 set -uo pipefail
 
 if [ "$(uname -s)" != "Darwin" ]; then
@@ -49,7 +66,30 @@ evidence="$out/evidence.txt"
 
 work="$(mktemp -d)"
 keychain="$work/spike.keychain-db"
+trust_added=0
+
+run_limited() { # SECONDS OUTFILE COMMAND...: run, and stop it after SECONDS (returns 124 then)
+  local secs=$1 outfile=$2 pid i=0
+  shift 2
+  "$@" >"$outfile" 2>&1 &
+  pid=$!
+  while kill -0 "$pid" 2>/dev/null && [ "$i" -lt "$secs" ]; do sleep 1; i=$((i + 1)); done
+  if kill -0 "$pid" 2>/dev/null; then
+    kill "$pid" 2>/dev/null
+    wait "$pid" 2>/dev/null
+    return 124
+  fi
+  wait "$pid"
+}
+
 cleanup() {
+  if [ "$trust_added" = 1 ]; then
+    if run_limited 30 "$work/untrust.txt" security remove-trusted-cert "$work/cert.pem"; then
+      echo "spike: removed the code-signing trust setting of the throwaway certificate" >&2
+    else
+      echo "spike: WARNING the trust setting of the throwaway certificate could not be removed: $(head -2 "$work/untrust.txt" | tr '\n' ' ')" >&2
+    fi
+  fi
   security delete-keychain "$keychain" >/dev/null 2>&1 || true
   rm -rf "$work"
 }
@@ -115,15 +155,48 @@ echo "== 1b. diagnostics: can codesign use the throwaway identity at all?"
 } | tee -a "$evidence"
 # Canary: the same signing call on a harmless file. If it fails like the real files did, the cause is the
 # identity or the keychain, not this application's contents.
-cp /bin/ls "$work/canary"
-canary_out="$(sign_one "$work/canary" 2>&1)"
-canary_rc=$?
-echo "DIAG canary codesign --force on a copy of /bin/ls: exit code $canary_rc" | tee -a "$evidence"
-printf '%s\n' "$canary_out" | head -5 | sed 's/^/DIAG   /' | tee -a "$evidence"
+try_canary() { # LABEL: sets canary_rc and canary_out
+  cp /bin/ls "$work/canary"
+  canary_out="$(sign_one "$work/canary" 2>&1)"
+  canary_rc=$?
+  echo "DIAG canary ($1): codesign --force on a copy of /bin/ls: exit code $canary_rc" | tee -a "$evidence"
+  printf '%s\n' "$canary_out" | head -5 | sed 's/^/DIAG   /' | tee -a "$evidence"
+}
+# Control: ad-hoc signing needs no identity. If this fails too, codesign itself is unusable on the runner.
+cp /bin/ls "$work/canary-adhoc"
+adhoc_out="$(codesign --force --sign - --timestamp=none "$work/canary-adhoc" 2>&1)"
+adhoc_rc=$?
+echo "DIAG control: ad-hoc codesign (no identity) of a copy of /bin/ls: exit code $adhoc_rc" | tee -a "$evidence"
+printf '%s\n' "$adhoc_out" | head -3 | sed 's/^/DIAG   /' | tee -a "$evidence"
+[ "$adhoc_rc" -eq 0 ] || record preflight "control: ad-hoc codesign works on the runner" FAIL "$(printf '%s' "$adhoc_out" | tr '\n' ' ' | cut -c1-200)"
+
+try_canary "identity as created, before any trust setting"
+if [ "$canary_rc" -ne 0 ]; then
+  if [ "${RUNNER_ENVIRONMENT:-}" = "github-hosted" ]; then
+    echo "== 1c. give the throwaway certificate a code-signing-only trust setting (user domain, removed on exit)" | tee -a "$evidence"
+    echo "DIAG trust settings of the user domain before the change:" | tee -a "$evidence"
+    { security dump-trust-settings 2>&1 | head -8; } | sed 's/^/DIAG   /' | tee -a "$evidence"
+    trust_added=1
+    run_limited 30 "$work/trust.txt" security add-trusted-cert -r trustRoot -p codeSign -k "$keychain" "$work/cert.pem"
+    trust_rc=$?
+    echo "DIAG add-trusted-cert (user domain, codeSign policy, throwaway keychain) exit code: $trust_rc" | tee -a "$evidence"
+    head -5 "$work/trust.txt" | sed 's/^/DIAG   /' | tee -a "$evidence"
+    echo "DIAG trust settings of the user domain after the change:" | tee -a "$evidence"
+    { security dump-trust-settings 2>&1 | head -12; } | sed 's/^/DIAG   /' | tee -a "$evidence"
+    echo "DIAG valid identities now (find-identity -v -p codesigning):" | tee -a "$evidence"
+    security find-identity -v -p codesigning "$keychain" 2>&1 | sed 's/^/DIAG   /' | tee -a "$evidence"
+    try_canary "after the trust setting"
+  else
+    echo "DIAG not changing trust settings: RUNNER_ENVIRONMENT is '${RUNNER_ENVIRONMENT:-unset}', not 'github-hosted'" | tee -a "$evidence"
+  fi
+fi
 if [ "$canary_rc" -eq 0 ]; then
   record preflight "codesign signs a harmless canary with the throwaway identity" PASS
 else
   record preflight "codesign signs a harmless canary with the throwaway identity" FAIL "$(printf '%s' "$canary_out" | tr '\n' ' ' | cut -c1-300)"
+  echo "spike: codesign cannot use the throwaway identity; the variants were not run." | tee -a "$evidence"
+  echo "failures: $failures"
+  exit 1
 fi
 
 is_apple_signed() { # FILE: already signed by an Apple certificate (not ours, not ad hoc)?

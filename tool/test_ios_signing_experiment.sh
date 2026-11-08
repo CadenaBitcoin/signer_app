@@ -50,9 +50,19 @@ echo "$spike_code" | grep -F "security delete-keychain" >/dev/null && echo "$spi
 ! echo "$spike_code" | grep -E 'list-keychains|default-keychain|login\.keychain' >/dev/null; wfchk "the script never changes the keychain search list or touches the login keychain" $?
 # Issue #71: the first hosted run failed on every codesign call and its error text was discarded.
 ! echo "$spike_code" | grep -E 'sign_one[^|]*(2>|>)[[:space:]]*/dev/null' >/dev/null; wfchk "codesign's error output is captured and reported, never discarded" $?
-echo "$spike_code" | grep -F 'DIAG canary codesign' >/dev/null && echo "$spike_code" | grep -F 'find-identity -v -p codesigning' >/dev/null; wfchk "the script prints preflight diagnostics (canary signing, valid-identity listing)" $?
+echo "$spike_code" | grep -F 'DIAG canary (' >/dev/null && echo "$spike_code" | grep -F 'find-identity -v -p codesigning' >/dev/null; wfchk "the script prints preflight diagnostics (canary signing, valid-identity listing)" $?
 ! echo "$spike_code" | grep -E '(echo|printf)[^#]*\$\{?password' >/dev/null; wfchk "the throwaway keychain password is never printed" $?
 
+
+# the trust setting for the throwaway certificate (Issue #71): isolated, narrow, bounded and removed again
+trust_lines="$(echo "$spike_code" | grep -F 'add-trusted-cert' | grep -v '^[[:space:]]*echo' || true)"
+[ -n "$trust_lines" ] && ! echo "$trust_lines" | grep -E 'add-trusted-cert[^|]*[[:space:]]-d([[:space:]]|$)' >/dev/null; wfchk "the trust setting is never written to the admin or system domain (no -d)" $?
+! echo "$spike_code" | grep -E '(^|[^[:alnum:]_-])sudo([^[:alnum:]_-]|$)' >/dev/null; wfchk "the script never uses sudo" $?
+[ -n "$trust_lines" ] && ! echo "$trust_lines" | grep -vE -- '-p codeSign' >/dev/null && ! echo "$trust_lines" | grep -vE -- '-k "\$keychain"' >/dev/null; wfchk "every trust setting is for the code-signing policy only and names the throwaway keychain" $?
+echo "$spike_code" | grep -F 'security remove-trusted-cert' >/dev/null && echo "$spike_code" | grep -F 'trust_added' >/dev/null; wfchk "the trust setting is removed again on exit" $?
+echo "$spike_code" | grep -F 'RUNNER_ENVIRONMENT' >/dev/null && echo "$spike_code" | grep -F 'github-hosted' >/dev/null; wfchk "the trust setting is only changed on a GitHub-hosted runner" $?
+echo "$spike_code" | grep -E 'run_limited 30 .*add-trusted-cert' >/dev/null; wfchk "the trust command is time-limited (a headless authorization prompt cannot hang the job)" $?
+echo "$wfcode" | grep -F 'dump-trust-settings' >/dev/null && echo "$wfcode" | grep -F 'dump-trust-settings -d' >/dev/null; wfchk "the workflow checks that no trust setting remains (user and admin domain)" $?
 
 if bash -n "$spike"; then ok "the spike script is syntactically valid"; else bad "the spike script is syntactically valid"; fi
 
