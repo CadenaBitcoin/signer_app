@@ -176,9 +176,9 @@ if [ "$canary_rc" -ne 0 ]; then
     echo "== 1c. give the throwaway certificate a code-signing-only trust setting (user domain, removed on exit)" | tee -a "$evidence"
     echo "DIAG trust settings of the user domain before the change:" | tee -a "$evidence"
     { security dump-trust-settings 2>&1 | head -8; } | sed 's/^/DIAG   /' | tee -a "$evidence"
-    trust_added=1
     run_limited 30 "$work/trust.txt" security add-trusted-cert -r trustRoot -p codeSign -k "$keychain" "$work/cert.pem"
     trust_rc=$?
+    [ "$trust_rc" -ne 0 ] || trust_added=1   # only a trust setting that was really written has to be removed
     echo "DIAG add-trusted-cert (user domain, codeSign policy, throwaway keychain) exit code: $trust_rc" | tee -a "$evidence"
     head -5 "$work/trust.txt" | sed 's/^/DIAG   /' | tee -a "$evidence"
     echo "DIAG trust settings of the user domain after the change:" | tee -a "$evidence"
