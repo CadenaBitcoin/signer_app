@@ -99,16 +99,16 @@ fn sign_hash_ecdsa_intern(
     Ok(sig.to_lower_hex_string())
 }
 
-fn create_deterministic_nonce_intern(
-    event_id: &str,
-    index: u32,
-) -> Result<(String, String), String> {
-    let (sk, pk) = global_lib()
-        .read()
-        .unwrap()
-        .create_deterministic_nonce(event_id, index)?;
-    Ok((sk, pk.to_string()))
-}
+// fn create_deterministic_nonce_intern(
+//     event_id: &str,
+//     index: u32,
+// ) -> Result<(String, String), String> {
+//     let (sk, pk) = global_lib()
+//         .read()
+//         .unwrap()
+//         .create_deterministic_nonce(event_id, index)?;
+//     Ok((sk, pk.to_string()))
+// }
 
 // Schnorr signing with nonce
 fn sign_schnorr_with_nonce_intern(
@@ -537,25 +537,25 @@ pub extern "C" fn create_cet_adaptor_sigs_c(
     }
 }
 
-#[no_mangle]
-pub extern "C" fn create_deterministic_nonce_c(
-    event_id: *const c_char,
-    index: u32,
-) -> *mut c_char {
-    // Convert the event_id from raw pointer to Rust string
-    let event_id_str = unsafe { CStr::from_ptr(event_id).to_str().unwrap_or("Error in event ID") };
+// #[no_mangle]
+// pub extern "C" fn create_deterministic_nonce_c(
+//     event_id: *const c_char,
+//     index: u32,
+// ) -> *mut c_char {
+//     // Convert the event_id from raw pointer to Rust string
+//     let event_id_str = unsafe { CStr::from_ptr(event_id).to_str().unwrap_or("Error in event ID") };
 
-    // Call your existing function that creates the nonce (assuming this is what you want)
-    match create_deterministic_nonce_intern(event_id_str, index) {
-        Ok((sk, pk)) => {
-            // Return as a C string
-            CString::new(format!("{} {}", sk, pk)).unwrap().into_raw()
-        },
-        Err(e) => {
-            error_as_cstr_prefix(e)
-        }
-    }
-}
+//     // Call your existing function that creates the nonce (assuming this is what you want)
+//     match create_deterministic_nonce_intern(event_id_str, index) {
+//         Ok((sk, pk)) => {
+//             // Return as a C string
+//             CString::new(format!("{} {}", sk, pk)).unwrap().into_raw()
+//         },
+//         Err(e) => {
+//             error_as_cstr_prefix(e)
+//         }
+//     }
+// }
 
 // Additional C exports for Flutter wallet operations
 #[no_mangle]
@@ -675,16 +675,16 @@ pub fn sign_hash_ecdsa(hash: String, signer_index: u32, signer_pubkey: String) -
         .map_err(|e| PyErr::new::<PyException, _>(e))
 }
 
-/// Create a nonce value deterministically
-#[cfg(feature = "with-pyo3")]
-#[pyfunction]
-pub fn create_deterministic_nonce(
-    event_id: String,
-    nonce_index: u32,
-) -> PyResult<(String, String)> {
-    create_deterministic_nonce_intern(&event_id, nonce_index)
-        .map_err(|e| PyErr::new::<PyException, _>(e))
-}
+// /// Create a nonce value deterministically
+// #[cfg(feature = "with-pyo3")]
+// #[pyfunction]
+// pub fn create_deterministic_nonce(
+//     event_id: String,
+//     nonce_index: u32,
+// ) -> PyResult<(String, String)> {
+//     create_deterministic_nonce_intern(&event_id, nonce_index)
+//         .map_err(|e| PyErr::new::<PyException, _>(e))
+// }
 
 /// Sign a message using Schnorr, with a nonce, using a child key
 #[cfg(feature = "with-pyo3")]
@@ -826,7 +826,7 @@ fn dlcplazacryptlib(_py: Python, m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(get_address, m)?)?;
     m.add_function(wrap_pyfunction!(verify_public_key, m)?)?;
     m.add_function(wrap_pyfunction!(sign_hash_ecdsa, m)?)?;
-    m.add_function(wrap_pyfunction!(create_deterministic_nonce, m)?)?;
+    // m.add_function(wrap_pyfunction!(create_deterministic_nonce, m)?)?;
     m.add_function(wrap_pyfunction!(sign_schnorr_with_nonce, m)?)?;
     m.add_function(wrap_pyfunction!(combine_pubkeys, m)?)?;
     m.add_function(wrap_pyfunction!(combine_seckeys, m)?)?;

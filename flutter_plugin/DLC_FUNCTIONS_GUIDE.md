@@ -76,6 +76,7 @@ final signature = await DlcWallet.signHashEcdsa(
 );
 ```
 
+<!--
 #### `create_deterministic_nonce_c(eventId, index)`
 - **Purpose**: Create deterministic nonce for DLC
 - **Parameters**:
@@ -90,6 +91,7 @@ final nonce = await DlcWallet.createDeterministicNonce(
 );
 // Returns: {'secret': '...', 'public': '...'}
 ```
+-->
 
 ### **3. DLC-Specific Operations**
 
@@ -159,6 +161,7 @@ final addresses = await DlcWallet.generateAddresses(10);
 final signature = await DlcWallet.signTransaction(txHash, keyIndex);
 ```
 
+<!--
 ### **2. DLC Contract Creation**
 ```dart
 // Create complete DLC setup
@@ -177,6 +180,7 @@ final eventId = dlcSetup['eventId'];
 final signatures = dlcSetup['signatures'];
 final nonces = dlcSetup['nonces'];
 ```
+-->
 
 ### **3. Transaction Signing**
 ```dart
@@ -203,9 +207,9 @@ final hashSignature = await DlcWallet.signHashEcdsa(
 - **Backup/Restore**: `initFromFile()` for wallet recovery
 
 ### **2. DLC Trading Platform**
-- **Contract Setup**: `createDlcSetup()` for new contracts
+<!-- - **Contract Setup**: `createDlcSetup()` for new contracts -->
 - **Signature Creation**: `createCetAdaptorSigs()` for contract execution
-- **Oracle Integration**: `createDeterministicNonce()` for oracle coordination
+<!-- - **Oracle Integration**: `createDeterministicNonce()` for oracle coordination -->
 - **Settlement**: Final signature functions for contract closure
 
 ### **3. Multi-Signature Wallet**
@@ -245,13 +249,13 @@ flutter run
 4. `getXpub()` - Wallet identification
 
 ### **Medium Priority (Advanced Features)**
-1. `createDeterministicNonce()` - DLC protocols
+<!-- 1. `createDeterministicNonce()` - DLC protocols -->
 2. `signHashEcdsa()` - Custom signing
 3. `generateAddresses()` - Address management
 
 ### **Low Priority (Specialized DLC)**
 1. `createCetAdaptorSigs()` - DLC contracts
-2. `createDlcSetup()` - Full DLC workflow
+<!-- 2. `createDlcSetup()` - Full DLC workflow -->
 3. Verification functions - Contract validation
 
 ## 📊 **Performance Considerations**
