@@ -49,6 +49,12 @@ Branch roles, merge authority and issue handling stay in
    upgrade guarantee; internal testers only; never presented as production.
 8. **Traceability.** A signed artifact is attributable to an approved Git
    revision and carries the release record of [section 9](#9-release-record).
+9. **Independent approval of production.** Production signing and production delivery
+   need approval by a person who did not prepare, merge or trigger the run. Several
+   accounts controlled by one individual count as one person. Until a second
+   independent human is designated, production signing is not authorized
+   ([RELEASE_SIGNING_ARCHITECTURE.md](RELEASE_SIGNING_ARCHITECTURE.md) section 6,
+   [IOS_SIGNING.md](IOS_SIGNING.md) section 6).
 
 ## 2. Release branches and triggers
 
@@ -68,7 +74,12 @@ issue branch → development → staging → production
 | Distribution | iOS: restricted TestFlight (mandatory). Android: internal only, never public (section 8) | Not by the merge. Separately authorized publication |
 | Protected environments | Staging signing/deployment context | Production signing/deployment context |
 
-### 2.1 Creating `production` (Decided: required; not done)
+### 2.1 Creating `production` (Decided: required; branch created, Issue #68)
+
+*Status, not a decision:* the branch exists. It was created at the adopted initial
+baseline `7b63c97` and is protected by rulesets. Requirements 3 and 4 below are not yet
+met; the only merge into it so far was a compile-only infrastructure acceptance under a
+one-time exception approved by the owner (Issue #68).
 
 `production` is not created by this document or without approval. It requires:
 
@@ -178,9 +189,11 @@ Rules common to all five:
 - Validation builds stay as they are until a deliberate, approved transition
   ([RELEASE_IMPLEMENTATION_PLAN.md](RELEASE_IMPLEMENTATION_PLAN.md) section 3).
   They are not promoted, renamed or signed into release artifacts.
-- The Android `release` build type currently uses the **debug signing config**
-  (`CLAUDE.md` section 10). A release build made from the repository today is not
-  official and must not be distributed.
+- The Android `release` build type is **debug-signed unless `CADENA_SIGNING=release`** selects a
+  keystore supplied from outside the repository ([ANDROID_RELEASE.md](ANDROID_RELEASE.md), Issue #72).
+  A build made without it (all CI builds) is not official and must not be distributed. An official
+  Android build is one made by the local release procedure with the Cadena upload key and
+  verified by `tool/verify_android_release.py`; no CI pipeline signs yet.
 - A build is official only if the pipeline of its branch produced it, from an
   approved commit, signed in the matching context, with a complete release
   record. Anything else is not official, whatever it is called.
@@ -194,7 +207,7 @@ assumed.
 
 | | Production (exists) | Staging (proposed, not registered) |
 |---|---|---|
-| Android `applicationId` | `com.app.cadenabitcoin` | `com.app.cadenabitcoin.staging` |
+| Android `applicationId` | `com.cadenabitcoin.mobile.signer` (the package published on Google Play, Issue #72) | `com.cadenabitcoin.mobile.signer.staging` |
 | iOS bundle ID | `com.app.cadenabitcoin` | `com.app.cadenabitcoin.staging` |
 | App Store Connect | Production app record | **Own, separate** app record |
 | Provisioning (iOS) | Production App Store profile | **Own** profile for the staging bundle ID |
@@ -210,7 +223,7 @@ separation trade-off ([RELEASE_SIGNING_ARCHITECTURE.md](RELEASE_SIGNING_ARCHITEC
 
 | Place | Today | Consequence |
 |---|---|---|
-| Android `applicationId` and `namespace` | Both `com.app.cadenabitcoin` (`build.gradle.kts`) | Only `applicationId` must vary; `namespace`/`MainActivity` package can stay, so no source rename is needed |
+| Android `applicationId` and `namespace` | `applicationId` `com.cadenabitcoin.mobile.signer` (flavor suffix `.staging`); `namespace` `com.app.cadenabitcoin` (`build.gradle.kts`, Issue #72) | Only `applicationId` varies; `namespace`/`MainActivity` package stay, so no source rename is needed |
 | Android label | Fixed `"Cadena Bitcoin"` in the manifest | Needs a per-variant label |
 | iOS bundle ID | `PRODUCT_BUNDLE_IDENTIFIER` in the 3 app-target configurations (Debug, Release, Profile) | Needs per-environment values |
 | iOS name | Fixed `CFBundleDisplayName` `"Cadena Bitcoin"` | Needs a per-environment value |
@@ -416,7 +429,14 @@ milestone is not complete without it. Acceptance means at least:
   link, no open beta, never submitted for App Store review);
 - the release record is produced and no one needs to build or sign locally.
 
-*Open (implementation decision):* whether the TestFlight upload itself needs an
+**Decided (Issue #71):** the first delivery target is **internal-only TestFlight** (members of
+the Cadena App Store Connect team; no external group, public link or Beta App Review).
+Assigning a processed build to internal testers needs **explicit approval** at first;
+automatic distribution may be considered after the pipeline is verified. Controlled signed
+testing is also how the minimum-iOS runtime requirement of [IOS_CI.md](IOS_CI.md) is
+established. Details and status: [IOS_SIGNING.md](IOS_SIGNING.md).
+
+*Open (implementation decision):* whether the TestFlight **upload** itself needs an
 additional approval, or runs automatically after the merge. Either way the build
 is delivered through TestFlight only, and tester access stays restricted.
 
@@ -470,13 +490,14 @@ without a record, or from a commit that was not approved, is not official.
 | Item | State |
 |---|---|
 | `development`, `staging` | Exist, protected |
-| `production` | **Does not exist** |
+| `production` | Exists, protected (created at the adopted baseline `7b63c97`, Issue #68); compile-only builds only |
 | Android CI validation (debug-signed APK), iOS CI validation (unsigned `Runner.app`) | Working; unchanged; **not** among the five artifacts |
 | Signing credentials, protected release environments, release workflows | **None** |
 | Tags, GitHub Releases | None |
-| Separate staging application ID / bundle ID / App Store Connect record | **None**; both CI validation builds use `com.app.cadenabitcoin` |
+| Separate staging application ID / bundle ID / App Store Connect record | Android: the `staging` flavor builds `com.cadenabitcoin.mobile.signer.staging` (not registered in Google Play); iOS: the `staging` flavor builds `com.app.cadenabitcoin.staging` (not registered with Apple). No App Store Connect record |
 | Build-time configuration | Unfinished (Issue #57 B1, local branch only); committed constants are production |
-| iOS toolchain | Xcode 16.4 (CI). App Store Connect uploads have required Xcode 26 and the iOS 26 SDK since 2026-04-28 ([Apple](https://developer.apple.com/news/upcoming-requirements/)); Flutter 3.35.3 with Xcode 26 is untested here |
+| iOS toolchain | Xcode 26.3 on `macos-15` with an iOS 26 SDK, pinned by Issue #70 (accepted hosted runs: [IOS_CI.md](IOS_CI.md#verification-status); compile and link only). App Store Connect uploads have required Xcode 26 and the iOS 26 SDK since 2026-04-28 ([Apple](https://developer.apple.com/news/upcoming-requirements/)) |
+| iOS signing, provisioning, App Store Connect integration, TestFlight delivery | **Not implemented** (Issue #71). Readiness record, questionnaire and operating-procedure skeleton: [IOS_SIGNING.md](IOS_SIGNING.md), [APPLE_ACCOUNT_QUESTIONNAIRE.md](APPLE_ACCOUNT_QUESTIONNAIRE.md) |
 | `tool/verify_version.sh` | Exists (this issue), read-only |
 
 ## 11. Open decisions
@@ -503,3 +524,18 @@ without a record, or from a commit that was not approved, is not official.
 10. **Independent builds and branding:** whether forks must change name and ID.
 11. **Support policy:** `SECURITY.md` still defers it; it should state that only
     the latest official release is supported.
+12. **Minimum supported iOS version (production release approval requires verified runtime
+    compatibility).** The app declares iOS
+    14.0, five embedded frameworks are built for 15.5 and eight secp256k1 objects of the Rust
+    library for 18.5 ([IOS_CI.md](IOS_CI.md#release-compatibility-requirement-open-recorded-by-issue-70-accepted-2026-10-21)).
+    The effective minimum must be decided and **tested on real iOS versions before a production
+    release is approved**. The controlled, signed testing that establishes this (the restricted
+    TestFlight delivery of 8.1, to authorized testers) is not blocked by it. The Rust library is not
+    replaced or modified without separate authorization. Green compile and link runs do not satisfy
+    this.
+13. **A second, independent approver** for production signing and delivery (principle 9),
+    and the named release authority and signing custodians. Open until designated.
+14. **Apple account facts** that decide the iOS pipeline: account ownership, the exact live
+    bundle ID and highest build number, App ID registration, existing certificates and
+    profiles, available API permissions, capabilities, export compliance. Collected with
+    [APPLE_ACCOUNT_QUESTIONNAIRE.md](APPLE_ACCOUNT_QUESTIONNAIRE.md).

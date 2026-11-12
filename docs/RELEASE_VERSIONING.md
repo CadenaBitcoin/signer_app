@@ -60,24 +60,32 @@ confirmed from the store console:
 
 | Platform | Channel | Package | Version | Recorded |
 |---|---|---|---|---|
-| Android | Google Play | `com.cadenabitcoin.mobile.signer` | 1.0.3 (**1000034**), fully rolled out | 2026-10-19 (Issue #68) |
+| Android | Google Play | `com.cadenabitcoin.mobile.signer` | 1.0.3 (1000034), fully rolled out | 2026-10-19 (Issue #68) |
+| Android | Google Play | `com.cadenabitcoin.mobile.signer` | 1.0.4 (**1000035**), published | 2026-11-04 (Issue #72; release authority, Play Console; publication time not recorded) |
 
 Not recorded: earlier Android releases (all below 1000034), website or internal-test
 APKs, and anything on iOS. No iOS floor is enforced.
 
-- **A release build must have a build number above every published one on its platform.**
-  `tool/build_manifest.py gate --channel production` fails otherwise. The signed release
-  pipeline (#72) must run it before building and must not bypass it. Compile validation
-  does **not** run it: validation builds may equal the published number because they are
-  not releases.
-- **Today the repository is at `1.0.3+1000034`**, equal to the published number. The gate
-  therefore fails for production, on purpose: a release from the current `pubspec.yaml`
-  would reuse a published version code. The first production release needs a reviewed commit
-  that raises the build number to at least `1000035`.
-- The floor applies to the Google Play application. The repository builds
-  `com.app.cadenabitcoin`, which is **not** that application; whichever ID #72 settles on,
-  an update of the published app needs a versionCode above 1000034 *and* the published
-  package ID and signing lineage. The floor is the conservative rule for either case.
+- **The production release gate has two independent rules.** `tool/build_manifest.py gate
+  --channel production` fails if *either* fails, and reports both:
+  1. the build number is above every published one on its platform (a version code is
+     never reused), and
+  2. the Android application ID of the production build is the published package (a build
+     with another ID is not an update of the published app; #72).
+
+  A high build number does not satisfy rule 2, and the right ID does not satisfy rule 1.
+  The signed release pipeline (#72) must run the gate before building and must not bypass
+  it. Compile validation does **not** run it: validation builds may equal the published
+  number and carry another ID because they are not releases.
+- **Today the repository is at `1.0.4+1000035`**, which is the version recorded as
+  published (2026-11-04, #72), with the Android ID `com.cadenabitcoin.mobile.signer`, the
+  published package (settled in #72; the repository used to build `com.app.cadenabitcoin`,
+  which could not be that application). Rule 2 is therefore satisfied and the gate fails for
+  production on rule 1 only, on purpose: the build number is not above the published one.
+  The next production release needs a reviewed raise to at least `1000036`; that clears it.
+- The floor applies to the Google Play application. An update of it needs a versionCode
+  above the published floor (1000035 today) *and* the published package ID *and* the published signing lineage. The ID
+  is now right; the signing lineage is still open (#66, #72).
 - The ledger is edited only by a reviewed commit after a maintainer confirms the number in
   the store console. It records history; it authorizes nothing.
 
@@ -119,7 +127,7 @@ verifier rejects a mismatch between the kind of artifact and the kind of digest.
 |---|---|---|
 | `unsigned` | no signature (iOS `--no-codesign`) | iOS |
 | `debug` | the temporary Android debug key; **not distributable**; the certificate is recorded | Android |
-| `release` | signed with an official release key; needs a recorded certificate fingerprint and a release identifier | **nothing produces it yet** (#72) |
+| `release` | signed with an official release key; needs a recorded certificate fingerprint and a release identifier | **no CI build produces it**; the local Android procedure (#72, `docs/ANDROID_RELEASE.md`) writes its own release report, not a CI manifest |
 
 `debug` and `unsigned` artifacts can only be classified `compile-validation` or
 `internal-evaluation`, never as a release candidate or a release, and are never
@@ -127,11 +135,15 @@ verifier rejects a mismatch between the kind of artifact and the kind of digest.
 artifact that is not unsigned.
 
 **Known issues** are recomputed from the ledger and must be present; a manifest that drops
-one fails. Today the Android production manifests carry both:
+one fails. Today the Android production manifests carry one:
 
-- `application-id-differs-from-published-app`: the build is `com.app.cadenabitcoin`, the
-  published app is `com.cadenabitcoin.mobile.signer` (outstanding release blocker, #72);
-- `version-code-not-above-published-floor`: the build number is not above 1000034.
+- `version-code-not-above-published-floor`: the build number is not above the published floor
+  (1000035 since 1.0.4 was published).
+
+The second known issue, `application-id-differs-from-published-app`, is raised when the
+Android production ID differs from the package in the ledger. It was open until #72 set the
+production ID to the published package and is kept as a protection: a later change of the
+ID, or a ledger entry for another package, raises it again.
 
 ### What `verify` rejects
 
@@ -162,16 +174,17 @@ A manifest that claims a release (classification `release-candidate` or `release
 
 - its build number is not above the published floor (`release_gate.status` is
   `blocked-not-above-floor`), or
-- any known issue is open, for example `application-id-differs-from-published-app`.
+- any known issue is open, for example `application-id-differs-from-published-app`
+  (this one stays open at any build number, however high, until the ID matches).
 
 With `--repo` both values are recomputed from the repository's ledger, so they cannot be
 edited away in the manifest; the `verdict` job always verifies with `--repo`. The Android
-application ID is the second protection: a build of `com.app.cadenabitcoin` can neither
-borrow the published listing's version history nor be described as that application. The
-issue is cleared only by a **reviewed** change: the ID of the build becomes the published
-one (the #72 decision), or the ledger deliberately records the new listing. Neither is
-changed here. Ordinary compile-validation builds are not releases, so they keep passing at
-the current version (`1.0.3+1000034`); they are simply labelled with the open issues.
+application ID is the second protection: a build with another ID can neither borrow the
+published listing's version history nor be described as that application. The issue is
+cleared only by a **reviewed** change: the ID of the build is the published one (done for
+Android in #72), or the ledger deliberately records the new listing. Ordinary
+compile-validation builds are not releases, so they keep passing at the current version
+(`1.0.4+1000035`, the published one); they are simply labelled with the open issues.
 
 ### Following a binary back to its source
 
@@ -237,6 +250,35 @@ Under the policy (7.1, 7.4), and unchanged by this document:
   open decisions 5 and 6; until they are decided, compile-validation manifests carry
   `release_id: null`, and **no tag or release exists**.
 
+### Showing that a production revision is a tested candidate (no tag needed)
+
+Promotion is a pull-request **merge commit**, so the commit that is built on `production`
+has a different SHA from the commit that was tested on `staging`. "The same source
+revision" therefore means the same **source tree**:
+
+```bash
+# <p> = the merge commit on production; its second parent is the staging commit it promoted
+git rev-parse <p>^{tree} <p>^2^{tree}      # equal trees: production holds exactly the staging content
+```
+
+Observed today: the first promotion `fceeb66` (PR #75) has the tree `2eff33b0…`, equal to
+the tree of the staging commit `e198139` it promoted; `staging` `a4df412` (PR #77) has the
+tree `2af980a3…`, equal to that of `development` `465a367`. This needs no tag, release or
+workflow input.
+
+Limits, stated plainly:
+
+- It shows equal **content**, nothing more: not that the revision was tested or approved,
+  not which candidate it is (there is no identifier), and nothing about the binary, which is
+  not reproducible bit for bit.
+- It is a manual check. No workflow, tool or ruleset enforces it.
+- It fails, correctly, if `production` carries content that `staging` does not.
+
+**Release-candidate identity remains an open requirement.** No release identifier is
+implemented: `release_id` is `null` in every manifest, no tag exists, and `--release-id` only
+checks the form of an identifier given to the tool by hand. Where `vX.Y.Z-rc.N` comes from,
+who creates the tag and how the pipeline checks it are open decisions 1–3 below.
+
 ## Retention of binaries (interface only)
 
 **Today no binary is retained**: the workflow uploads text and JSON only (policy section 3
@@ -273,48 +315,69 @@ Properties of such a file that the label and the manifest must keep explicit:
 - debug-signed: the key is created on the runner, so every run is expected to have a
   different signer (compare the recorded `signer_cert_sha256` of two runs); one evaluation
   APK cannot update another and must be uninstalled first;
-- application ID `com.app.cadenabitcoin`: a different application from the published
-  `com.cadenabitcoin.mobile.signer`; it installs beside it and cannot update it;
-- build number equal to the published 1000034, so it is not a candidate for any store;
+- application ID `com.cadenabitcoin.mobile.signer`: **the same package as the published
+  Google Play app** (since #72) but signed with a different, temporary key. On a device that
+  has the Play app it cannot be installed over it (the signatures differ), and a device
+  that has this file cannot receive the Play update until the file is uninstalled;
+- build number equal to the published 1000035, so it is not a candidate for any store;
 - production configuration: it talks to the production backend and mainnet. Only disposable
   accounts, never a wallet holding value.
 
 This is **not** an official, update-compatible Google Play artifact. That needs, beyond the
 above: the signing-key governance (#66), the release signing pipeline in protected
-environments (#72), a decision on the application ID (the published one or a new listing),
-a build number above 1000034 (the gate), a release identifier and tag, the release record
+environments (#72), the signing lineage of the published app (the application ID is settled),
+a build number above the published floor, 1000035 today (the gate), a release identifier and tag, the release record
 of policy section 9, and the tester sign-off of policy 2.2.
 
 ## Version-transition test (needs explicit authorization)
 
-Issue #69 requires one authorized version transition on staging. It is **not** run by this
-change. Proposed procedure, to be started only on the owner's written authorization naming
-the new version:
+Issue #69 requires one authorized version transition. It is **not** run by this change, and
+this change does not alter the application version. The transition needs no governed branch:
+`build-variants.yml` can be run manually on any ref, so the test runs on a throw-away branch
+that is never merged. Proposed procedure, to be started only on the owner's written
+authorization naming the new version. The owner has approved the test version
+`1.0.3+1000035` **exclusively** for this isolated branch; the application version must not
+change on `development`, `staging` or `production`, and the branch is created and pushed only
+after a separate authorization of the exercise (and after the corrective tests are merged):
 
-1. An issue branch changes only the `version:` line of `pubspec.yaml` (for example
-   `1.0.3+1000034` → `1.0.3+1000035`), reviewed and merged into `development` like any PR.
-2. `tool/verify_version.sh` and `tool/test_release_versioning.sh` pass; the PR states that
-   production is not touched.
-3. The reviewed `development → staging` promotion triggers `build-variants.yml` (two
-   staging variants). Expected: both manifests say `1.0.3+1000035`, Android `versionCode`
-   and iOS `CFBundleVersion` 1000035, the same commit and run, and `verdict` is green.
-4. `tool/build_manifest.py gate --channel production` now passes locally (1000035 > 1000034).
-5. `production` is **not** promoted; no tag, release or signing is involved.
+1. A branch `test/69-version-transition` is created from `development`. One signed commit
+   changes only the `version:` line of `pubspec.yaml` (for example `1.0.3+1000034` →
+   `1.0.3+1000035`). No pull request is opened; nothing is merged.
+2. `tool/verify_version.sh` and `tool/test_release_versioning.sh` pass on the branch (the
+   tests use pinned fixtures and do not depend on the version being 1000034).
+3. `Build variants` is run manually on that branch for `android-staging-apk` and for
+   `ios-staging`. Expected: both manifests say `1.0.3+1000035`, Android `versionCode` and
+   iOS `CFBundleVersion` are 1000035, `version.platform_build_number` equals the pubspec
+   build, the configuration is `config/build/staging.json`, the commit is the branch tip, and
+   the verdict is green.
+4. `tool/build_manifest.py gate --channel production` on the branch reports rule 1 as passed
+   (1000035 > 1000034) and rule 2 as passed (the Android application ID is the published
+   package, #72), exit status 0. (Before #72 it still failed on rule 2.)
+5. The branch is deleted afterwards. `staging` and `production` are not touched; no tag,
+   release, signing or retained binary is involved.
+
+Raising the version on `development` and promoting it to `staging` is a separate decision
+that depends on open decision 3 (where the build number is raised); it is not needed for
+this test.
 
 ## Open decisions
 
 These need a maintainer decision (policy section 11); this change does not take them:
 
 1. **Source of the release identifier and of `N`** (policy open decision 6; proposal:
-   `RELEASE_IDENTIFIER` in the staging configuration).
+   `RELEASE_IDENTIFIER` in the staging configuration). Release-candidate identity is an
+   **open requirement** until decisions 1–3 are taken.
 2. **Who creates tags and with which identity** (decision 5), and when.
 3. **Where the build number is raised for each promotion** (decision 4; proposal: in the
    promotion pull request, checked by the pipeline).
 4. **Whether Android and iOS build numbers may differ** in practice (permitted, not built).
-5. **The iOS published build number**, so an iOS floor can be recorded.
+5. **The iOS published build number**, so an iOS floor can be recorded. Waiting for the
+   Apple account answers (Issue #71, [APPLE_ACCOUNT_QUESTIONNAIRE.md](APPLE_ACCOUNT_QUESTIONNAIRE.md)
+   questions 5 to 7); also whether the live iOS bundle ID is the one this repository builds.
 6. **Retention of an internal evaluation APK**, as described above, and where.
-7. **The Android application ID** of the next release (#72), which decides whether the
-   published listing can be updated.
+7. **The Android signing lineage** of the next release (#66, #72). The application ID is the
+   published package; whether the published listing can be updated also depends on the
+   signing identity.
 8. **Authenticated provenance** (signed attestations of the manifest/binary), which needs a
    permission change and its own authorization.
 
@@ -326,7 +389,7 @@ tool/test_release_triggers.sh                # triggers and the verdict (unchang
 tool/verify_version.sh                       # source wiring
 tool/build_manifest.py verify M.json --repo . --evidence M.txt
 tool/build_manifest.py check-file M.json app-production-release.apk   # does this file match its manifest?
-tool/build_manifest.py gate --channel production   # a release build needs a new build number
+tool/build_manifest.py gate --channel production   # a release build needs a new build number AND the published ID
 ```
 
 Both test scripts run in the `plan` job of every run of `build-variants.yml` before any

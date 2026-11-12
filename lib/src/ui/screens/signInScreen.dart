@@ -222,14 +222,16 @@ class _SignInScreenState extends State<SignInScreen> {
             color: primaryTextColor.value,
           ),
         ),
-        content: Text(
-          'You are registering on Cadena for the first time. You did not introduce a Wallet (SeedPhrase) to Cadena yet.\n\n'
-          'Click "Proceed" if you either:\n'
-          '• Want Cadena to generate you a new SeedPhrase\n'
-          '• Want to import your existing wallet into the Cadena ecosystem\n'
-          '• Want to enter a SeedPhrase you generated using external entropy',
-          style: AppTextStyles.body.copyWith(
-            color: primaryTextColor.value,
+        content: SingleChildScrollView(
+          child: Text(
+            'You are registering on Cadena for the first time. You did not introduce a Wallet (SeedPhrase) to Cadena yet.\n\n'
+            'Click "Proceed" if you either:\n'
+            '• Want Cadena to generate you a new SeedPhrase\n'
+            '• Want to import your existing wallet into the Cadena ecosystem\n'
+            '• Want to enter a SeedPhrase you generated using external entropy',
+            style: AppTextStyles.body.copyWith(
+              color: primaryTextColor.value,
+            ),
           ),
         ),
         actions: [

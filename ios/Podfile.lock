@@ -74,19 +74,19 @@ EXTERNAL SOURCES:
     :path: ".symlinks/plugins/workmanager_apple/ios"
 
 SPEC CHECKSUMS:
-  dlc_wallet: 3de407037d8d2f6e900dfd746ba1e9c992077163
+  dlc_wallet: a27b2e6565aa2ba878bd3d4422d02c93df3a193f
   FingerprintPro: 0316a80c096a09d64f29033417337b134fdf2fe0
   Flutter: cabc95a1d2626b1b06e7179b784ebcf0c0cde467
-  flutter_idensic_mobile_sdk_plugin: 6b7b827478cb993776959c83285d37d2d3284f1d
-  flutter_local_notifications: a5a732f069baa862e728d839dd2ebb904737effb
-  flutter_secure_storage: 1ed9476fba7e7a782b22888f956cce43e2c62f13
-  fluttertoast: 2c67e14dce98bbdb200df9e1acf610d7a6264ea1
+  flutter_idensic_mobile_sdk_plugin: 9a56e094034397fe7864e1c82eb22c2b7c13900b
+  flutter_local_notifications: ff50f8405aaa0ccdc7dcfb9022ca192e8ad9688f
+  flutter_secure_storage: d33dac7ae2ea08509be337e775f6b59f1ff45f12
+  fluttertoast: 21eecd6935e7064cc1fcb733a4c5a428f3f24f0f
   IdensicMobileSDK: a8ec2cf5c216ae138b00e2ff32e0e31c5e366cec
-  mobile_scanner: 9157936403f5a0644ca3779a38ff8404c5434a93
-  path_provider_foundation: bb55f6dbba17d0dccd6737fe6f7f34fbd0376880
-  shared_preferences_foundation: 7036424c3d8ec98dfe75ff1667cb0cd531ec82bb
-  workmanager_apple: 904529ae31e97fc5be632cf628507652294a0778
+  mobile_scanner: 77265f3dc8d580810e91849d4a0811a90467ed5e
+  path_provider_foundation: 0b743cbb62d8e47eab856f09262bb8c1ddcfe6ba
+  shared_preferences_foundation: 5086985c1d43c5ba4d5e69a4e8083a389e2909e6
+  workmanager_apple: 4cb452c58500fede6fb2f099faf7ebc5fcf2d034
 
 PODFILE CHECKSUM: 1ec303cdfa8fd9280f3bda6725ce830d7f709701
 
-COCOAPODS: 1.16.2
+COCOAPODS: 1.17.0

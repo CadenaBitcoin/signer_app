@@ -1,0 +1,19 @@
+{
+  "schema": "cadena-native-libs/1",
+  "purpose": "SHA-256 of the committed prebuilt Rust libraries (libdlcplazacryptlib.so and the libsecp256k1_zkp it loads) AS THEY ARE SHIPPED in a release APK or AAB, that is after the Android Gradle plugin has stripped them (llvm-strip --strip-unneeded, NDK 27.0.12077973). tool/verify_android_release.py compares every shipped library with this list. The files under flutter_plugin/flutter_plugin/android/src/main/jniLibs/ are the unstripped inputs. Changing a library is a reviewed change of both.",
+  "source": "Identical, after the same stripping, in the two archived APKs of the published 1.0.3 (1000034) lineage and in the CI build manifests (native_lib_sha256). Recorded 2026-10-22 (Issue #72).",
+  "abis": {
+    "arm64-v8a": {
+      "libdlcplazacryptlib.so": "c8388afd39eb2e9d64d5c762d79a0f14de287cc90dcc390c7fc9ae083b2c004d",
+      "libsecp256k1_zkp-d503bd59429e1be6.so": "10b56bdf1a09e0e8cd10226857ae0aac4a6e2ffaf66e66d6881d8609e0ee720a"
+    },
+    "armeabi-v7a": {
+      "libdlcplazacryptlib.so": "b3c56cc986a541240363deb0edab20e562de2215f07fc4ef0f019416c0912ac1",
+      "libsecp256k1_zkp-aea876ae2b9315e6.so": "d9f62c04e37884e912ac67ad02f976c8442f4618671fce437ff2bf492047be87"
+    },
+    "x86_64": {
+      "libdlcplazacryptlib.so": "866af52f177bd17ddbe011b2b844028c880bd1a8ce8420642c8ef5e3c36a8839",
+      "libsecp256k1_zkp-b6f2dd6f6ea245d5.so": "aea3dd09dd06e0e643d76f3ee758230fc07145ca19324071d0bab8517707b31f"
+    }
+  }
+}

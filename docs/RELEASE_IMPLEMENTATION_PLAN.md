@@ -42,7 +42,7 @@ account and policy work no code change can replace.
 | 8 | **Signing infrastructure, staging context, iOS first** | 2, 6 (staging bundle ID), Apple items of section 5 | Protected environment `staging-ios` and its secrets, the staging App Store Connect record and profile, TestFlight group of authorized testers, custody procedure. `staging-android` follows in step 10. No credential is created before step 2. |
 | **9** | **M1: signed iOS staging build and restricted TestFlight delivery** | 3, 4, 5, 6, 7, 8 | Push to `staging` builds, signs and delivers to the staging TestFlight record. **Acceptance:** policy section 8.1. Whether the upload needs an additional approval is decided during this step. |
 | 10 | **Signed Android staging build** ∥ with 9, if convenient | 4, 6, 8 (Android staging key) | Same pipeline pattern, no Xcode 26 dependency. **Prerequisite:** the internal, non-public distribution mechanism (policy section 8.2) is chosen first; until then the pipeline only verifies and records the APK and publishes nothing. |
-| 11 | **Create `production` branch** | 2 (lineage), production context of step 8 | Policy section 2.1. Needs explicit approval. Must exist, protected and with its pipeline reviewed, before its first merge. |
+| 11 | **Create `production` branch** | 2 (lineage), production context of step 8 | Policy section 2.1. Needs explicit approval. Must exist, protected and with its pipeline reviewed, before its first merge. *Status: the branch was created at the adopted baseline `7b63c97` (Issue #68); signing and publication are not established.* |
 | 12 | **Signed production builds** (APK, AAB, iOS) | 9, 10, 11, production signing context | Publication still not automatic. |
 | 13 | **Publication and release automation** | 12 | Website upload procedure, Google Play track, App Store submission, release notes, release-record publication, rollbacks. Each channel behind its own approval. |
 
@@ -75,8 +75,8 @@ request:
 | T3 | New signed workflows as **new files**: staging on push to `staging`, production on push to `production`, using the protected environments | Validation workflows keep running beside them. No dependency between the two sets unless later decided. |
 | T4 | Decide whether validation stays as a fast unsigned check (for example as a required status check) or retires | Never removed without approval |
 
-Other consequences to schedule: the iOS validation workflow stays on Xcode 16.4
-until step 3 proves the new toolchain, then moves in a separate approved change;
+Other consequences to schedule: the iOS workflows moved to Xcode 26.3 on `macos-15` with
+Issue #70 (step 3; hosted proof is recorded in `docs/IOS_CI.md`);
 validation artifacts keep their "NOT APPROVED FOR PUBLIC DISTRIBUTION" labels and
 are never renamed into release artifacts; `CLAUDE.md` section 4 and the PR
 template need the explicit-configuration commands in steps 4 and 6.
@@ -132,6 +132,24 @@ Cadena's website; GitHub Organization settings (environments, `production` branc
 ruleset, tag rules); the DLC Plaza backend and the Sumsub/Fingerprint Pro
 configuration for the new staging application ID (to be checked in step 6).
 
-## 6. Not decided here
+## 6. Issue #71 stages (iOS signing and TestFlight)
+
+Readiness record: [IOS_SIGNING.md](IOS_SIGNING.md). Stages A and B are documentation only.
+
+| Stage | Work | Needs Apple credentials? |
+|---|---|---|
+| A | Questionnaire for the Apple account owner ([APPLE_ACCOUNT_QUESTIONNAIRE.md](APPLE_ACCOUNT_QUESTIONNAIRE.md)); answers kept privately | No |
+| B | Documentation corrections, security model, operating-procedure skeleton | No |
+| C | Prerequisites of policy 8.1: release identifier scheme, in-app staging identifier, Signet validation, export-compliance declaration | No (declaration awaits the answers) |
+| D | Static workflow guards; IPA verifier and its fixtures (**done**, security-reviewed: [IOS_SIGNING.md](IOS_SIGNING.md) 3.1); signing-job separation (credential-free evidence **done**, hosted `codesign` experiment **prepared, not run**: 3.2 and 3.3); Stage C audit (**done**, read-only: 3.4); unsigned archive job | No |
+| E | Staging environment, certificate, profile, service user and key; signed staging IPA **without upload** | **Yes** |
+| F | Upload to the staging record, processing state, internal TestFlight; assignment to testers by explicit approval | **Yes** |
+| G | Production signing procedure verified without upload; production upload behind **independent** approval | **Yes**, and a second approver |
+| H | Final runbook; the iOS floor recorded in `published_versions.json` | |
+
+Each stage is its own approved change. Steps 8 and 9 of the sequence above are covered by
+stages E and F.
+
+## 7. Not decided here
 
 Any code, build file, workflow, branch, tag, credential, account or store change.

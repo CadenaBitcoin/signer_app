@@ -8,7 +8,7 @@
 #     (config/build/staging.json), never by the branch name; a missing, incomplete
 #     or contradictory configuration fails the build (lib/config/build_config.dart);
 #   - it is the `staging` flavor (--flavor staging): the separate staging application
-#     com.app.cadenabitcoin.staging. The flavor selects only the application identity and
+#     com.cadenabitcoin.mobile.signer.staging. The flavor selects only the application identity and
 #     must agree with the configuration, otherwise the build fails;
 #   - it uses the committed prebuilt Rust binaries (no native rebuild).
 # See docs/ANDROID_CI.md.

@@ -8,15 +8,23 @@ import 'package:signer/services/secure_storage_service.dart';
 import 'package:signer/src/ui/controllers/appController.dart';
 import 'package:signer/src/ui/screens/splashScreen.dart';
 
+/// Every screen is drawn on a dark background (colors.dart), so the system-bar
+/// icons are always light. Icon brightness must be explicit: left unset, the
+/// platform default follows the system theme and the last style set by an AppBar.
+const SystemUiOverlayStyle _systemOverlayStyle = SystemUiOverlayStyle(
+  statusBarColor: Colors.transparent,
+  statusBarIconBrightness: Brightness.light,
+  statusBarBrightness: Brightness.dark, // iOS naming: dark content background
+  systemNavigationBarColor: Colors.transparent,
+  systemNavigationBarIconBrightness: Brightness.light,
+  systemNavigationBarContrastEnforced: false,
+);
+
 void main() async {
   WidgetsFlutterBinding.ensureInitialized(); // Required for plugin channels
 
   // Edge-to-edge: transparent system bars so scaffold background extends behind them
-  SystemChrome.setSystemUIOverlayStyle(const SystemUiOverlayStyle(
-    statusBarColor: Colors.transparent,
-    systemNavigationBarColor: Colors.transparent,
-    systemNavigationBarContrastEnforced: false,
-  ));
+  SystemChrome.setSystemUIOverlayStyle(_systemOverlayStyle);
 
   // Initialize secure storage service first to handle data persistence
   final secureStorageService = SecureStorageService();
@@ -74,7 +82,14 @@ class _MyAppState extends State<MyApp> with WidgetsBindingObserver {
     return GetMaterialApp(
       title: 'Flutter Demo',
       debugShowCheckedModeBanner: false,
-      theme: ThemeData(colorScheme: ColorScheme.fromSeed(seedColor: Colors.deepPurple)),
+      theme: ThemeData(
+        colorScheme: ColorScheme.fromSeed(seedColor: Colors.deepPurple),
+        appBarTheme: const AppBarTheme(systemOverlayStyle: _systemOverlayStyle),
+      ),
+      builder: (context, child) => AnnotatedRegion<SystemUiOverlayStyle>(
+        value: _systemOverlayStyle,
+        child: child ?? const SizedBox.shrink(),
+      ),
       home: const SplashScreen(),
     );
   }
