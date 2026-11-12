@@ -229,6 +229,11 @@ authorization:
   `config/release/published_versions.json` records the version codes already published:
   never reuse one (`docs/RELEASE_VERSIONING.md`). The application version changes only by a
   reviewed edit of `pubspec.yaml`; no workflow may write or override it.
+- **Retained artifacts** (Stage 2 of #54, `docs/RETAINED_ARTIFACTS.md`): a `build-variants` run can keep the
+  verified Android APK/AAB and the unsigned iOS `.xcarchive`, but only **age-encrypted to public keys**
+  (`config/release/artifact_recipients.txt`, empty today; or a public key given to a manual run) with checksums,
+  manifests and evidence. Never upload a readable artifact, never write a private key into the repository,
+  a log or a chat, and never add a signing credential to these workflows.
 - Android release signing is **explicit** (Issue #72, `docs/ANDROID_RELEASE.md`): without
   `CADENA_SIGNING` the release build type is debug-signed (the credential-free CI validation;
   never distributable); `CADENA_SIGNING=release` signs with a keystore supplied from outside

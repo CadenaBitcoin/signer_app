@@ -279,9 +279,19 @@ implemented: `release_id` is `null` in every manifest, no tag exists, and `--rel
 checks the form of an identifier given to the tool by hand. Where `vX.Y.Z-rc.N` comes from,
 who creates the tag and how the pipeline checks it are open decisions 1–3 below.
 
-## Retention of binaries (interface only)
+## Retention of binaries
 
-**Today no binary is retained**: the workflow uploads text and JSON only (policy section 3
+**Update, Stage 2 of issue #54 ([RETAINED_ARTIFACTS.md](RETAINED_ARTIFACTS.md)).** Verified
+artifacts can now be retained **encrypted to custodian public keys**: the public run exposes
+ciphertext, checksums and manifests only, so the access-control requirement below is met
+cryptographically instead of by a protected environment. A promotion retains only after a reviewed
+change of `config/release/artifact_recipients.txt` names a key (none today). The build manifest
+is unchanged and its `distribution.binary_retained` stays `false`, because it describes the
+build, and no plaintext binary is ever retained; the retained manifest
+(`cadena-retained-artifact/1`) describes the encrypted copy. The rest of this section is the
+earlier interface description, kept for the naming and labelling it defines, which Stage 2 uses.
+
+**Before Stage 2, no binary was retained**: the workflow uploaded text and JSON only (policy section 3
 and 8.2: a binary is never left as an ordinary Actions artifact of this public repository
 before its distribution is authorized; production binaries are deliberately never kept).
 This work does not change that. It provides what a later, separately authorized retention

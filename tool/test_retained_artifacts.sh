@@ -416,6 +416,10 @@ expect_rc "a signed archive packs but is rejected when the key holder verifies i
 
 # ---- 6. tampering with a bundle ---------------------------------------------------------------------------
 clone() { rm -rf "$2"; cp -R "$1" "$2"; }
+# resum DIR: rewrite SHA256SUMS for the other files of DIR (a tamperer who keeps the checksums consistent)
+resum() {
+  ( cd "$1" && rm -f SHA256SUMS && for f in *; do printf '%s  %s\n' "$( (sha256sum "$f" 2>/dev/null || shasum -a 256 "$f") | cut -d' ' -f1)" "$f"; done >"$tmp/sums.new" && mv "$tmp/sums.new" SHA256SUMS )
+}
 clone "$apk" "$tmp/b1"; printf 'extra' >>"$tmp/b1/"*.age
 expect_rc "verify rejects a modified ciphertext" 1 "differs" RAx verify "$tmp/b1" --age "$AGE_BIN"
 clone "$apk" "$tmp/b2"; cp "$fx/android-production-apk/app-production-release.apk" "$tmp/b2/plain.apk"
@@ -425,23 +429,23 @@ expect_rc "verify rejects a missing SHA256SUMS" 1 "expected exactly" RAx verify 
 clone "$apk" "$tmp/b4"; sed -i.bak 's/^[0-9a-f]\{4\}/0000/' "$tmp/b4/SHA256SUMS"; rm -f "$tmp/b4/SHA256SUMS.bak"
 expect_rc "verify rejects a SHA256SUMS that does not match the files" 1 "differs from SHA256SUMS" RAx verify "$tmp/b4" --age "$AGE_BIN"
 clone "$apk" "$tmp/b5"; cp "$fx/android-production-apk/app-production-release.apk" "$tmp/b5/$(ls "$tmp/b5" | grep '\.age$')"
-( cd "$tmp/b5" && rm SHA256SUMS && for f in $(ls); do printf '%s  %s\n' "$( (sha256sum "$f" 2>/dev/null || shasum -a 256 "$f") | cut -d' ' -f1)" "$f"; done >SHA256SUMS )
+resum "$tmp/b5"
 expect_rc "verify rejects a plaintext artifact under the .age name (no age header)" 1 "no age header" RAx verify "$tmp/b5" --age "$AGE_BIN"
 clone "$apk" "$tmp/b6"; echo "note=AGE-SECRET-KEY-1AAAA" >>"$tmp/b6/android-production-apk.txt"
-( cd "$tmp/b6" && rm SHA256SUMS && for f in $(ls); do printf '%s  %s\n' "$( (sha256sum "$f" 2>/dev/null || shasum -a 256 "$f") | cut -d' ' -f1)" "$f"; done >SHA256SUMS )
+resum "$tmp/b6"
 expect_rc "verify rejects a secret key marker anywhere in the bundle" 1 "secret key marker" RAx verify "$tmp/b6" --age "$AGE_BIN"
 clone "$apk" "$tmp/b7"
 python3 -I -c "
 import json,glob
 p=glob.glob('$tmp/b7/*.retained.json')[0]; r=json.load(open(p)); r['source']['commit']='0'*40; json.dump(r,open(p,'w'),indent=2)"
-( cd "$tmp/b7" && rm SHA256SUMS && for f in $(ls); do printf '%s  %s\n' "$( (sha256sum "$f" 2>/dev/null || shasum -a 256 "$f") | cut -d' ' -f1)" "$f"; done >SHA256SUMS )
+resum "$tmp/b7"
 expect_rc "verify rejects a retained manifest that names another commit than the build manifest" 1 "source.commit" RAx verify "$tmp/b7" --age "$AGE_BIN"
 expect_rc "verify rejects evidence that differs from the verified build's evidence" 1 "differs from the verified build evidence" RAx verify "$apk" --against "$fx/android-production-aab" --age "$AGE_BIN"
 clone "$apk" "$tmp/b8"
 python3 -I -c "
 import json,glob
 p=glob.glob('$tmp/b8/*.retained.json')[0]; r=json.load(open(p)); r['encryption']['round_trip_verified']=False; json.dump(r,open(p,'w'),indent=2)"
-( cd "$tmp/b8" && rm SHA256SUMS && for f in $(ls); do printf '%s  %s\n' "$( (sha256sum "$f" 2>/dev/null || shasum -a 256 "$f") | cut -d' ' -f1)" "$f"; done >SHA256SUMS )
+resum "$tmp/b8"
 expect_rc "verify rejects a bundle without a successful round trip" 1 "round trip" RAx verify "$tmp/b8" --age "$AGE_BIN"
 clone "$apk" "$tmp/b9"; mv "$tmp/b9/android-production-apk.retained.json" "$tmp/b9/android-production-aab.retained.json"
 expect_rc "verify rejects a manifest filed under another variant's name" 1 "FAIL" RAx verify "$tmp/b9" --age "$AGE_BIN"
@@ -457,7 +461,7 @@ d='$tmp/b10/'
 c=glob.glob(d+'*.age')[0]
 r=glob.glob(d+'*.retained.json')[0]
 m=json.load(open(r)); m['encryption']['ciphertext']['sha256']=hashlib.sha256(open(c,'rb').read()).hexdigest(); json.dump(m,open(r,'w'),indent=2)"
-  ( cd "$tmp/b10" && rm SHA256SUMS && for f in $(ls); do printf '%s  %s\n' "$( (sha256sum "$f" 2>/dev/null || shasum -a 256 "$f") | cut -d' ' -f1)" "$f"; done >SHA256SUMS )
+  resum "$tmp/b10"
   expect_rc "even with consistent checksums, age's authentication rejects a modified ciphertext" 1 "age decrypt failed" RAx verify "$tmp/b10" --identity "$CUSTODIAN_KEY" --age "$AGE_BIN"
 else
   skip "age's authentication of a modified ciphertext (needs the real age)"
