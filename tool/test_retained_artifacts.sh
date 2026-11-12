@@ -312,7 +312,11 @@ t "the unpacked APK is byte-identical to the verified one" bash -c "cmp -s '$fx/
 aab="$tmp/out-aab"
 expect_rc "pack: the production AAB is retained" 0 "RESULT: OK" pack_aab "$aab"
 expect_rc "pack: the staging APK is retained" 0 "RESULT: OK" pack_apk android-staging-apk "$tmp/out-stg"
-t "the recipient list used is the committed one plus the one-time verification key (two -r/-R entries)" bash -c "$real_age || [ \"\$(grep -c '^enc' '$AGE_STUB_LOG')\" -ge 3 ]"
+if $real_age; then
+  skip "the encryption arguments (recorded by the stub only)"
+else
+  t "the stub recorded -R (recipients file) and -r (the one-time key) for every encryption" bash -c "[ \"\$(grep -c '^enc R=.* r= age1' '$AGE_STUB_LOG')\" -ge 3 ]"
+fi
 
 # the content digest does not change with the signature, and does with the content
 t "content digest: the same entries signed differently give the same digest; another content does not" python3 -I -c "
