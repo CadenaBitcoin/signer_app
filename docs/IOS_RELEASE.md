@@ -463,16 +463,21 @@ nm -a "$WORK/lib-arm64.a" > "$WORK/evidence/lib-arm64.nm.txt"
 # (a) Names that must NOT exist (Rust-side signer, its nonce callback and wrapper): no output.
 grep -E 'sign_schnorr_with_nonce|schnorrsig_sign_with_nonce|constant_nonce_fn' "$WORK/evidence/lib-arm64.nm.txt"
 
-# (b) The C functions the library exports. Expected: exactly these nine.
+# (b) The C functions the library exports. Expected for THIS release's committed library: exactly these nine.
 nm -g --defined-only "$WORK/lib-arm64.a" | grep -E ' T _(create|free|get|init|sign)[a-z_]*$' | awk '{print $3}' | sort -u
 #   _create_cet_adaptor_sigs_c  _create_deterministic_nonce_c  _free_cstring  _get_address_c
 #   _get_public_key_c  _get_xpub_c  _init_from_file_c  _init_with_entropy_c  _sign_hash_ecdsa_c
+#   `_create_deterministic_nonce_c` is EXPECTED to be present: the helper was removed from the source interfaces
+#   (PR #97) but the precompiled library was not rebuilt (section 11). A list without it means this is not the
+#   pinned library: stop (the SHA-256 check of section 8 would already have failed).
+grep -c 'create_deterministic_nonce' "$WORK/evidence/lib-arm64.nm.txt"    # record the count (the C export and the Rust method)
 
 # (c) The built app: the same names must not appear as exported symbols or strings.
 FW="$APP/Frameworks/dlc_wallet.framework/dlc_wallet"
 nm -gU "$FW" > "$WORK/evidence/dlc_wallet.exports.txt"
 grep -E 'sign_schnorr_with_nonce|schnorrsig_sign_with_nonce|constant_nonce_fn' "$WORK/evidence/dlc_wallet.exports.txt"   # no output
 strings -a "$FW" | grep -E 'sign_schnorr_with_nonce|schnorrsig_sign_with_nonce|constant_nonce_fn'                          # no output
+grep -c 'create_deterministic_nonce' "$WORK/evidence/dlc_wallet.exports.txt"   # record only; see below
 ```
 
 How to read it, honestly:
@@ -483,8 +488,9 @@ How to read it, honestly:
 - **A stripped release binary cannot prove absence**, because Xcode removes local symbols. Check (a) on the
   unstripped committed library is the strong check; (c) is supporting evidence. The pinned SHA-256 of the
   library (section 8) ties the two together.
-- Result in the dry run: **(a) no output; (b) exactly the nine functions**, including
-  `_create_deterministic_nonce_c`.
+- Result in the dry run, on the committed library at `862831e`: **(a) no output; (b) exactly the nine functions**, including
+  `_create_deterministic_nonce_c`. That inclusion is the documented, expected state (section 11), not a pass or a fail of its
+  own. Whether the built framework still exports it is recorded, not judged: Xcode may hide or strip symbols.
 - This is evidence about symbols, not a proof that no unsafe signing is reachable. The source review of Issue #22 for
   this release is in section 11.
 
@@ -560,22 +566,37 @@ authorizer's explicit approval. **No test result in this document implies G4 or 
 
 ### Issue #22: unresolved security consideration for this release
 
-Facts (Verified in the repository at `5d90291`, which the library has not changed since the baseline `df269f6`):
-- The custom Schnorr signer that derives its nonce from public data (`sign_schnorr_with_nonce`) is in the Rust
-  source and is exposed only through the optional `with-pyo3` Python module. It is not a C export and not part of
-  the iOS plugin, which handles only `signHashEcdsa`, `createCetAdaptorSigs` and `initWithEntropy`.
-- **`create_deterministic_nonce_c` is a real C export** of the library, declared in `dlc_wallet_bridge.h` and wrapped
-  by the Dart plugin (`createDeterministicNonce`, `createDlcSetup`). It returns a nonce **secret** that is a hash of a
-  public string. **The application never calls it** (no caller in `lib/`; the iOS method channel does not expose it). It is
-  **unused but present**, and it is the "nonce-generation helper" Issue #22 asks to remove.
+Facts (**Verified** in the repository at `862831e`; the precompiled library has not changed since the baseline `df269f6`):
+- The custom Schnorr signer that takes a caller-supplied secret nonce (`sign_schnorr_with_nonce`, with `constant_nonce_fn` and
+  `schnorrsig_sign_with_nonce`) is **still in the Rust source** and is exposed only through the optional `with-pyo3` Python
+  module. It is not a C export and not part of the iOS plugin, which handles only `signHashEcdsa`, `createCetAdaptorSigs` and
+  `initWithEntropy`. The symbol check of section 9 finds none of these names in the committed iOS library.
+- **PR #97 (merged 2026-11-12, merge commit `862831e`)** commented out the deterministic-nonce helper, which returned a nonce
+  **secret** that is a hash of a public string, in the **source interfaces**: the Rust method and its internal wrapper, the C
+  export `create_deterministic_nonce_c`, the Python binding and its registration, the declaration in `dlc_wallet_bridge.h`, the
+  Dart plugin's lookup, `createDeterministicNonce` and `createDlcSetup`, the example app, the test scripts and the guide. The
+  Rust test of the final CET signatures now uses fixed oracle nonces with the same assertion.
+- **The precompiled native library was not rebuilt.** The PR says so itself. The committed iOS library (SHA-256
+  `203dcd7abe4187de0b756638a55f691b2d5c680b17d4fbfa7dda550ed703949b`, last changed at the baseline) **still contains and exports
+  `_create_deterministic_nonce_c`** and the Rust method behind it. Source and binary now differ. **The source-level change is
+  not a binary remediation**, and nothing in this document presents it as one.
+- **No identified call path to the helper in the current application:** no caller in `lib/`, none in the iOS plugin (its method
+  channel does not expose it), and the Dart wrapper and symbol lookup that could have reached it no longer exist at `862831e`.
+  This rests on source review and the symbol checks; it is **not a formal proof** that no path exists.
 - Sensitive logging named by #22 was removed by `9a37b8d` (Issue #37, 2026-10-06); runtime proof in this release is the check of section 9.
 
-**Recorded as unresolved, not as resolved:** the helper stays in this release because removing it means changing the Rust
-library and rebuilding native code, which this release does not do and which needs separate authorization (open PR #97
-appears related and was not reviewed for this document). The #22 items beyond the iOS binary (Oracle and backend callers,
-whether any real key used the unsafe API, the runtime sentinel tests, the exposure scope of earlier builds) remain open.
-**The coordinator records, in the release record, an explicit disposition of #22 for this release; the independent
-authorizer accepts or rejects it at G2.** Android's earlier publication is not such a disposition.
+**Issue #22 stays open and unresolved.** Beyond the iOS binary it still lists: the caller-supplied-nonce signer in the source
+and the Python module, the Oracle and backend callers, whether any real key used the unsafe API, the runtime sentinel tests, and
+the exposure scope of earlier builds. Android's earlier publication, and PR #97, are not a disposition of #22.
+
+**Proposed release-specific risk disposition (requires the CTO's explicit approval before G2 is requested; not yet approved).**
+Retain the **existing native Rust binary** for the iOS 1.0.4 TestFlight candidate instead of introducing a rebuild. Reasons: the
+repository has no `Cargo.lock`, so a rebuild would resolve current dependency versions that nobody has reviewed and could not be
+reproduced (Issue #89); a rebuild would change the cryptographic library and its pinned SHA-256 (`EXPECTED_RUST_LIB_SHA256` in the iOS CI
+validation workflow) and would need its own verification; and the helper has no identified call path. The
+disposition is recorded in the release record (section 4), the independent authorizer accepts or rejects it at G2, and the helper
+remains in the shipped binary until a **separately authorized** rebuild under #22 and #89. If the CTO decides to rebuild instead,
+this procedure's pinned values and checks are stale and the candidate process restarts.
 
 ## 12. Evidence to return
 
@@ -642,7 +663,7 @@ Connect.
 - `verify_ipa.py` has never verified a real Apple-signed IPA; the first run may need a reviewed adjustment.
 - The unsigned CI build proves compile and link only, not runtime ([IOS_CI.md](IOS_CI.md)).
 - The effective minimum iOS version, the five 15.5 frameworks and the eight 18.5 Rust objects are unresolved.
-- The Rust library's provenance is undocumented (Issue #89); the unused `create_deterministic_nonce_c` stays in it.
+- The Rust library's provenance is undocumented and the repository has no `Cargo.lock` (Issue #89). The deterministic-nonce helper is removed from the source interfaces (PR #97) but **remains in the precompiled library**, which source no longer matches; Issue #22 stays open.
 - The `NSLog` lines of the iOS plugin and the BGTask identifier mismatch are unresolved.
 - The production gate has no per-platform mode (section 4); a reviewed tool change would add one.
 - Retention of the signed IPA and the evidence is only the temporary procedure of section 12; a permanent custody arrangement is open.
