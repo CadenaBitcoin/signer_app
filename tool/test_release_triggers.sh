@@ -289,6 +289,30 @@ t "the plan step reads the parents with tool/commit_parents.sh" has "$jplan" 'pa
 t "the planner is called with the parent count and the creation flag" has "$jplan" 'tool/plan_build_variants.sh "$EVENT_NAME" "$REF" "$INPUT_VARIANT" "$parents" "$CREATED"'
 t "the concurrency group of a push contains its commit" hasre "$(cat "$wf")" '^  group: .*github\.sha'
 
+# --- 5. retained artifacts (Stage 2, docs/RETAINED_ARTIFACTS.md) ---------------------------------
+gate_retain="        if: \${{ needs.plan.outputs.retain == 'true' }}"
+ja="$(job android)"; ji="$(job ios)"
+t "manual runs offer retain (boolean, default false) and a public-key recipient (string)" bash -c "grep -q '^      retain:' <<<\"\$1\" && grep -q '^        type: boolean' <<<\"\$1\" && grep -q '^      recipient:' <<<\"\$1\"" _ "$on_block"
+t "the plan job installs the pinned age and runs the retained-artifact tests, which may not skip it" has "$jplan" 'CADENA_REQUIRE_AGE: "1"'
+t "the plan job runs tool/test_retained_artifacts.sh" has "$jplan" 'run: tool/test_retained_artifacts.sh'
+t "the plan job decides retention with tool/retain_artifact.py plan" has "$jplan" 'tool/retain_artifact.py plan --event "$EVENT_NAME"'
+t "the plan exposes the retention decision and the recipients to the jobs" has "$jplan" 'recipients: ${{ steps.retention.outputs.recipients }}'
+t "android: every retention step is gated by the plan's retention decision (3)" eq "$(grep -cF "$gate_retain" <<<"$ja")" 3
+t "ios: every retention step is gated by the plan's retention decision (5)" eq "$(grep -cF "$gate_retain" <<<"$ji")" 5
+t "verdict: the retained checks are gated by the plan's retention decision (2)" eq "$(grep -cF "$gate_retain" <<<"$vj")" 2
+for j in android ios; do
+  jt="$(job $j)"
+  t "$j: age is installed only by tool/install_age.sh" has "$jt" 'run: tool/install_age.sh'
+  t "$j: the artifact is packed (encrypted) before anything is uploaded as retained" bash -c 'a="${1%%tool/retain_artifact.py pack*}"; b="${1%%Upload the retained*}"; [ "${#a}" -lt "${#b}" ]' _ "$jt"
+  t "$j: the retained upload is the retained/ directory only" eq "$(grep -cE '^          path: retained/$' <<<"$jt")" 1
+  t "$j: retention packs into retained/" has "$jt" '--out retained --retention-days "$RETENTION_DAYS"'
+done
+t "ios: the archive is unsigned (flutter build ipa --no-codesign) and no export is requested" bash -c 'grep -q "flutter build ipa --release --no-codesign --flavor" <<<"$1" && ! grep -qE "export-options-plist|--export-method|exportArchive" <<<"$1"' _ "$ji"
+t "ios: the archived application is verified and the drift check runs after the archive build" bash -c 'grep -q "Runner.xcarchive\|ARCHIVE_PATH/Products/Applications/Runner.app" <<<"$1" && [ "$(grep -c "check_build_drift.sh" <<<"$1")" -ge 2 ]' _ "$ji"
+t "no job downloads age or installs it by another route" lacksre "$(cat "$wf")" '(brew install age|apt(-get)? install age|go install .*age|FiloSottile/age)'
+t "the verdict downloads the retained artifacts of this attempt and verifies each bundle against the verified evidence" bash -c 'grep -q "pattern: retained_\*_a\${{ github.run_attempt }}" <<<"$1" && grep -q "tool/check_verdict.sh retained retained" <<<"$1" && grep -q "retain_artifact.py verify \"retained/retained_\${v}_a\${RUN_ATTEMPT}\" --repo . --against evidence" <<<"$1"' _ "$vj"
+t "no workflow step selects release signing (CADENA_SIGNING) or exports an IPA" lacksre "$(cat "$wf")" '(CADENA_SIGNING|exportArchive|--export-options-plist)'
+
 echo
 echo "$pass passed, $failed failed"
 [ "$failed" -eq 0 ]
