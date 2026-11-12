@@ -134,23 +134,23 @@ class _WalletScreenState extends State<WalletScreen> with TickerProviderStateMix
     }
   }
 
-  Future<void> _createNonce() async {
-    if (!_isInitialized) {
-      _showError('Wallet not initialized');
-      return;
-    }
+  // Future<void> _createNonce() async {
+  //   if (!_isInitialized) {
+  //     _showError('Wallet not initialized');
+  //     return;
+  //   }
 
-    try {
-      final nonce = await DlcWallet.createDeterministicNonce(
-        'test_event_${DateTime.now().millisecondsSinceEpoch}',
-        int.parse(_indexController.text),
-      );
+  //   try {
+  //     final nonce = await DlcWallet.createDeterministicNonce(
+  //       'test_event_${DateTime.now().millisecondsSinceEpoch}',
+  //       int.parse(_indexController.text),
+  //     );
 
-      _showResult('Deterministic Nonce', 'Secret: ${nonce['secret']}\nPublic: ${nonce['public']}');
-    } catch (e) {
-      _showError('Nonce creation failed: ${e.toString()}');
-    }
-  }
+  //     _showResult('Deterministic Nonce', 'Secret: ${nonce['secret']}\nPublic: ${nonce['public']}');
+  //   } catch (e) {
+  //     _showError('Nonce creation failed: ${e.toString()}');
+  //   }
+  // }
 
   Future<void> _signTransaction() async {
     if (!_isInitialized) {
@@ -172,46 +172,46 @@ class _WalletScreenState extends State<WalletScreen> with TickerProviderStateMix
 
   // ==================== DLC OPERATIONS ====================
 
-  Future<void> _createDlcSetup() async {
-    if (!_isInitialized) {
-      _showError('Wallet not initialized');
-      return;
-    }
+  // Future<void> _createDlcSetup() async {
+  //   if (!_isInitialized) {
+  //     _showError('Wallet not initialized');
+  //     return;
+  //   }
 
-    setState(() {
-      _isLoading = true;
-      _status = 'Creating DLC setup...';
-    });
+  //   setState(() {
+  //     _isLoading = true;
+  //     _status = 'Creating DLC setup...';
+  //   });
 
-    try {
-      final dlcSetup = await DlcWallet.createDlcSetup(
-        eventId: 'btc_price_${DateTime.now().millisecondsSinceEpoch}',
-        keyIndex: int.parse(_indexController.text),
-        digitStringTemplate: 'BTCUSD',
-        oraclePublicKey: '0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798',
-        intervalWildcards: ['50000-60000', '60000-70000', '70000-80000'],
-        sighashes: [
-          'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855',
-          'a665a45920422f9d417e4867efdc4fb8a04a1f3fff1fa07e998e86f7f7a27ae3',
-          'b5d4045c3f466fa91fe2cc6abe79232a1a57cdf104f7eceb4e05cb9c1b2c8b7a',
-        ],
-        numDigits: 2,
-      );
+  //   try {
+  //     final dlcSetup = await DlcWallet.createDlcSetup(
+  //       eventId: 'btc_price_${DateTime.now().millisecondsSinceEpoch}',
+  //       keyIndex: int.parse(_indexController.text),
+  //       digitStringTemplate: 'BTCUSD',
+  //       oraclePublicKey: '0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798',
+  //       intervalWildcards: ['50000-60000', '60000-70000', '70000-80000'],
+  //       sighashes: [
+  //         'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855',
+  //         'a665a45920422f9d417e4867efdc4fb8a04a1f3fff1fa07e998e86f7f7a27ae3',
+  //         'b5d4045c3f466fa91fe2cc6abe79232a1a57cdf104f7eceb4e05cb9c1b2c8b7a',
+  //       ],
+  //       numDigits: 2,
+  //     );
 
-      setState(() {
-        _dlcSetup = dlcSetup;
-        _status = 'DLC setup created successfully';
-      });
-    } catch (e) {
-      setState(() {
-        _status = 'DLC setup failed: ${e.toString()}';
-      });
-    } finally {
-      setState(() {
-        _isLoading = false;
-      });
-    }
-  }
+  //     setState(() {
+  //       _dlcSetup = dlcSetup;
+  //       _status = 'DLC setup created successfully';
+  //     });
+  //   } catch (e) {
+  //     setState(() {
+  //       _status = 'DLC setup failed: ${e.toString()}';
+  //     });
+  //   } finally {
+  //     setState(() {
+  //       _isLoading = false;
+  //     });
+  //   }
+  // }
 
   Future<void> _createCetAdaptorSigs() async {
     if (!_isInitialized) {
@@ -476,14 +476,14 @@ class _WalletScreenState extends State<WalletScreen> with TickerProviderStateMix
                       ),
                     ],
                   ),
-                  SizedBox(height: 8),
-                  SizedBox(
-                    width: double.infinity,
-                    child: ElevatedButton(
-                      onPressed: _createNonce,
-                      child: Text('Create Nonce'),
-                    ),
-                  ),
+                  // SizedBox(height: 8),
+                  // SizedBox(
+                  //   width: double.infinity,
+                  //   child: ElevatedButton(
+                  //     onPressed: _createNonce,
+                  //     child: Text('Create Nonce'),
+                  //   ),
+                  // ),
                 ],
               ),
             ),
@@ -512,13 +512,13 @@ class _WalletScreenState extends State<WalletScreen> with TickerProviderStateMix
                   SizedBox(height: 16),
                   Row(
                     children: [
-                      Expanded(
-                        child: ElevatedButton(
-                          onPressed: _createDlcSetup,
-                          child: Text('Create DLC Setup'),
-                        ),
-                      ),
-                      SizedBox(width: 8),
+                      // Expanded(
+                      //   child: ElevatedButton(
+                      //     onPressed: _createDlcSetup,
+                      //     child: Text('Create DLC Setup'),
+                      //   ),
+                      // ),
+                      // SizedBox(width: 8),
                       Expanded(
                         child: ElevatedButton(
                           onPressed: _createCetAdaptorSigs,
