@@ -21,8 +21,8 @@ pull request; `M` (section 3 below) never changes after G1 without a new G1.
 | Bundle ID | `com.app.cadenabitcoin` |
 | Version / build | `1.0.4` / `1000035` (`pubspec.yaml`; Android already published 1.0.4 (1000035)) |
 | Configuration | `config/build/production.json` (SHA-256: TBD) |
-| Reviewed content (`CONTENT_REF`) | `5d90291` (`development`) unless the coordinator records another reviewed commit |
-| Unsigned compile validation of `CONTENT_REF` | run `43201104133`, `ios-production`, success (compile and link only) |
+| Reviewed content (`CONTENT_REF`) | `862831e0b3a0f30c4155d2e086c69fc28bdab286` (`development`, merge of PR #97; includes PRs #97, #98 and #99) unless the coordinator records another reviewed commit |
+| Unsigned compile validation of `CONTENT_REF` | run `43210431581`, `ios-production`, success (compile and link only; no signing, no runtime evidence) |
 
 ## 2. Roles for this release (names or accounts; no role is implied by another)
 
@@ -46,7 +46,8 @@ pull request; `M` (section 3 below) never changes after G1 without a new G1.
 
 | Item | Decision | By | Date |
 |---|---|---|---|
-| Issue #22 for this release (IOS_RELEASE.md section 11; the unused `create_deterministic_nonce_c` stays) | TBD | TBD | TBD |
+| Issue #22 for this release (IOS_RELEASE.md section 11). #22 stays open. The deterministic-nonce helper is removed from the source interfaces (PR #97) but remains in the precompiled library; no identified call path | TBD | TBD | TBD |
+| **Proposed:** retain the existing native Rust binary for the 1.0.4 TestFlight candidate; no rebuild. **Requires the CTO's explicit approval before G2 is requested**; the independent authorizer accepts or rejects it at G2 | TBD | TBD | TBD |
 | Production App Store Connect record used for the first TestFlight delivery (IOS_SIGNING.md section 2 item 1 names a staging record) | TBD | TBD | TBD |
 | Mac-local signing instead of a protected CI environment (policy section 2.1) | TBD | TBD | TBD |
 | `gate --channel production` read as applicable to iOS only (IOS_RELEASE.md section 4) | TBD | TBD | TBD |
@@ -89,7 +90,7 @@ pull request; `M` (section 3 below) never changes after G1 without a new G1.
 |---|---|
 | IPA SHA-256 and size | TBD |
 | Verification V1 to V9 | TBD |
-| Symbol inspection (a) to (c); the nine exported names | TBD |
+| Symbol inspection (a) to (c); the nine exported names (expected to include `_create_deterministic_nonce_c`: the library is not rebuilt) | TBD |
 | Upload time, tool, App Store Connect messages (verbatim) | TBD |
 | Processed build as shown in App Store Connect | TBD |
 | Tester group and testers (roles or names) | TBD |
