@@ -29,10 +29,10 @@ typedef SignHashEcdsaC = Pointer<Utf8> Function(
 typedef SignHashEcdsaCDart = Pointer<Utf8> Function(
     Pointer<Utf8> hash, int signerIndex, Pointer<Utf8> signerPubkey);
 
-typedef CreateDeterministicNonceC = Pointer<Utf8> Function(
-    Pointer<Utf8> eventId, Uint32 index);
-typedef CreateDeterministicNonceCDart = Pointer<Utf8> Function(
-    Pointer<Utf8> eventId, int index);
+// typedef CreateDeterministicNonceC = Pointer<Utf8> Function(
+//     Pointer<Utf8> eventId, Uint32 index);
+// typedef CreateDeterministicNonceCDart = Pointer<Utf8> Function(
+//     Pointer<Utf8> eventId, int index);
 
 typedef CreateCetAdaptorSigsC = Pointer<Utf8> Function(
     Uint8 numDigits,
@@ -66,7 +66,7 @@ class DlcWallet {
   static late final GetPublicKeyCDart _getPublicKey;
   static late final GetAddressCDart _getAddress;
   static late final SignHashEcdsaCDart _signHashEcdsa;
-  static late final CreateDeterministicNonceCDart _createDeterministicNonce;
+  // static late final CreateDeterministicNonceCDart _createDeterministicNonce;
   static late final CreateCetAdaptorSigsCDart _createCetAdaptorSigs;
   static late final FreeCStringCDart _freeCString;
   
@@ -113,10 +113,10 @@ class DlcWallet {
         _signHashEcdsa = _lib!
             .lookup<NativeFunction<SignHashEcdsaC>>('sign_hash_ecdsa_c')
             .asFunction();
-        _createDeterministicNonce = _lib!
-            .lookup<NativeFunction<CreateDeterministicNonceC>>(
-                'create_deterministic_nonce_c')
-            .asFunction();
+        // _createDeterministicNonce = _lib!
+        //     .lookup<NativeFunction<CreateDeterministicNonceC>>(
+        //         'create_deterministic_nonce_c')
+        //     .asFunction();
         _createCetAdaptorSigs = _lib!
             .lookup<NativeFunction<CreateCetAdaptorSigsC>>(
                 'create_cet_adaptor_sigs_c')
@@ -264,32 +264,32 @@ class DlcWallet {
     }
   }
 
-  /// Create deterministic nonce
-  /// Used for: DLC protocols, ensuring nonce uniqueness
-  static Future<Map<String, String>> createDeterministicNonce(
-      String eventId, int index) async {
-    _loadLibrary();
+  // /// Create deterministic nonce
+  // /// Used for: DLC protocols, ensuring nonce uniqueness
+  // static Future<Map<String, String>> createDeterministicNonce(
+  //     String eventId, int index) async {
+  //   _loadLibrary();
 
-    final eventIdPtr = eventId.toNativeUtf8();
+  //   final eventIdPtr = eventId.toNativeUtf8();
 
-    try {
-      final result = _createDeterministicNonce(eventIdPtr, index);
-      final resultStr = _convertCStringAndFree(result);
+  //   try {
+  //     final result = _createDeterministicNonce(eventIdPtr, index);
+  //     final resultStr = _convertCStringAndFree(result);
 
-      // Parse "secret_key public_key" format
-      final parts = resultStr.split(' ');
-      if (parts.length != 2) {
-        throw Exception('Invalid nonce format: $resultStr');
-      }
+  //     // Parse "secret_key public_key" format
+  //     final parts = resultStr.split(' ');
+  //     if (parts.length != 2) {
+  //       throw Exception('Invalid nonce format: $resultStr');
+  //     }
 
-      return {
-        'secret': parts[0],
-        'public': parts[1],
-      };
-    } finally {
-      malloc.free(eventIdPtr);
-    }
-  }
+  //     return {
+  //       'secret': parts[0],
+  //       'public': parts[1],
+  //     };
+  //   } finally {
+  //     malloc.free(eventIdPtr);
+  //   }
+  // }
 
   // ==================== DLC OPERATIONS ====================
 
@@ -395,58 +395,58 @@ class DlcWallet {
     return addresses;
   }
 
-  /// Create a complete DLC setup
-  /// Used for: Setting up DLC contracts with all required components
-  static Future<Map<String, dynamic>> createDlcSetup({
-    required String eventId,
-    required int keyIndex,
-    required String digitStringTemplate,
-    required String oraclePublicKey,
-    required List<String> intervalWildcards,
-    required List<String> sighashes,
-    required int numDigits,
-  }) async {
-    // Create deterministic nonce
-    final nonce = await createDeterministicNonce(eventId, keyIndex);
+  // /// Create a complete DLC setup
+  // /// Used for: Setting up DLC contracts with all required components
+  // static Future<Map<String, dynamic>> createDlcSetup({
+  //   required String eventId,
+  //   required int keyIndex,
+  //   required String digitStringTemplate,
+  //   required String oraclePublicKey,
+  //   required List<String> intervalWildcards,
+  //   required List<String> sighashes,
+  //   required int numDigits,
+  // }) async {
+  //   // Create deterministic nonce
+  //   final nonce = await createDeterministicNonce(eventId, keyIndex);
 
-    // Get signing public key
-    final signingPublicKey = await getPublicKey(keyIndex);
+  //   // Get signing public key
+  //   final signingPublicKey = await getPublicKey(keyIndex);
 
-    // Create multiple nonces for multi-digit outcomes
-    final nonces = <String>[];
-    for (int i = 0; i < numDigits; i++) {
-      final n = await createDeterministicNonce('$eventId-$i', keyIndex);
-      nonces.add(n['public']!);
-    }
+  //   // Create multiple nonces for multi-digit outcomes
+  //   final nonces = <String>[];
+  //   for (int i = 0; i < numDigits; i++) {
+  //     final n = await createDeterministicNonce('$eventId-$i', keyIndex);
+  //     nonces.add(n['public']!);
+  //   }
 
-    // Create CET adaptor signatures
-    final signatures = await createCetAdaptorSigs(
-      numDigits: numDigits,
-      numCets: intervalWildcards.length,
-      digitStringTemplate: digitStringTemplate,
-      oraclePublicKey: oraclePublicKey,
-      signingKeyIndex: keyIndex,
-      signingPublicKey: signingPublicKey,
-      nonces: nonces,
-      intervalWildcards: intervalWildcards,
-      sighashes: sighashes,
-    );
+  //   // Create CET adaptor signatures
+  //   final signatures = await createCetAdaptorSigs(
+  //     numDigits: numDigits,
+  //     numCets: intervalWildcards.length,
+  //     digitStringTemplate: digitStringTemplate,
+  //     oraclePublicKey: oraclePublicKey,
+  //     signingKeyIndex: keyIndex,
+  //     signingPublicKey: signingPublicKey,
+  //     nonces: nonces,
+  //     intervalWildcards: intervalWildcards,
+  //     sighashes: sighashes,
+  //   );
 
-    return {
-      'eventId': eventId,
-      'keyIndex': keyIndex,
-      'signingPublicKey': signingPublicKey,
-      'nonce': nonce,
-      'nonces': nonces,
-      'signatures': signatures,
-      'setup': {
-        'digitStringTemplate': digitStringTemplate,
-        'oraclePublicKey': oraclePublicKey,
-        'intervalWildcards': intervalWildcards,
-        'sighashes': sighashes,
-      }
-    };
-  }
+  //   return {
+  //     'eventId': eventId,
+  //     'keyIndex': keyIndex,
+  //     'signingPublicKey': signingPublicKey,
+  //     'nonce': nonce,
+  //     'nonces': nonces,
+  //     'signatures': signatures,
+  //     'setup': {
+  //       'digitStringTemplate': digitStringTemplate,
+  //       'oraclePublicKey': oraclePublicKey,
+  //       'intervalWildcards': intervalWildcards,
+  //       'sighashes': sighashes,
+  //     }
+  //   };
+  // }
 
   /// Sign a Bitcoin transaction hash
   /// Used for: Transaction signing in wallet applications

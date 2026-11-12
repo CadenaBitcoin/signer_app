@@ -10,8 +10,9 @@
 #                    RESULT_PLAN, RESULT_STATIC, RESULT_REJECT, RESULT_ANDROID, RESULT_IOS
 #
 #   tool/check_verdict.sh evidence DIR
-#       DIR must hold a non-empty <variant>.txt for every required variant and no evidence
-#       file for any other variant ("exactly the selected builds").
+#       DIR must hold a non-empty <variant>.txt and <variant>.manifest.json for every required
+#       variant and no evidence file for any other variant ("exactly the selected builds").
+#       (What the manifests say is checked by tool/build_manifest.py verify-dir.)
 #       Environment: REQUIRED_VARIANTS
 set -euo pipefail
 
@@ -47,16 +48,23 @@ case "$mode" in
     dir="${2:-}"
     [ -d "$dir" ] || { echo "::error::No evidence directory '$dir'"; exit 1; }
     for v in ${REQUIRED_VARIANTS:-}; do
-      if [ ! -s "$dir/$v.txt" ]; then
-        echo "::error::Missing verification evidence for $v"
-        exit 1
-      fi
+      for f in "$v.txt" "$v.manifest.json"; do
+        if [ ! -s "$dir/$f" ]; then
+          echo "::error::Missing verification evidence $f"
+          exit 1
+        fi
+      done
     done
     for f in "$dir"/*; do
       [ -e "$f" ] || continue
       name="$(basename "$f")"
+      case "$name" in
+        *.manifest.json) base="${name%.manifest.json}" ;;
+        *.txt) base="${name%.txt}" ;;
+        *) echo "::error::Unexpected evidence file $name"; exit 1 ;;
+      esac
       case " ${REQUIRED_VARIANTS:-} " in
-        *" ${name%.txt} "*) [ "$name" = "${name%.txt}.txt" ] || { echo "::error::Unexpected evidence file $name"; exit 1; } ;;
+        *" $base "*) ;;
         *) echo "::error::Evidence for a variant that was not selected: $name"; exit 1 ;;
       esac
     done

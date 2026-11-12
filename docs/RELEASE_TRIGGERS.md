@@ -105,8 +105,11 @@ The group names `staging` / `production` are not manual choices; they exist only
     all fail the run;
   - every job that was **not selected** must be `skipped`; one that ran anyway fails the
     run, so "intentionally unselected" and "missing" stay distinct;
-  - each required variant must have a non-empty evidence file, and **no** evidence may exist
-    for any other variant (the "exactly N builds" proof);
+  - each required variant must have a non-empty evidence file **and manifest**, and **no**
+    evidence may exist for any other variant (the "exactly N builds" proof);
+  - every manifest must be valid for the checked-out commit and agree with its text evidence,
+    and the manifests of the run must agree with each other (one commit, one run, one
+    version, unique build identifiers; `tool/build_manifest.py verify-dir`);
   - then the cross-artifact checks: APK/AAB consistency (production), and staging and
     production are different applications on each platform.
 
@@ -116,7 +119,21 @@ selector options, job graph, `always()`, the branch-creation guards, permissions
 only `bash`, `git`, `awk`, `sed` and `grep`, which every GitHub-hosted runner has, so no
 package is installed and no YAML parser is involved: the workflow is read as text, and the
 test fails when a pinned line is edited, which asks for a deliberate review. It needs no
-Flutter and can be run locally.
+Flutter and can be run locally. The job then runs `tool/test_release_versioning.sh` (the
+version rules, the build manifests and the published-version gate; it also needs `python3`,
+present on every runner) and `tool/test_android_release.sh` (the Android release signing and
+verification, credential-free and without artifacts, Issue #72; `docs/ANDROID_RELEASE.md`).
+
+## Tests on pull requests (not a build, not a promotion)
+
+`build-variants.yml` never starts from a pull request (above). A separate, test-only workflow,
+`.github/workflows/android-release-tests.yml` (Issue #72), does: on every pull request to `development`,
+`staging` or `production` it runs the credential-free Android release tests (the verifier and ledgers,
+the identity matrix and version wiring, and the release-signing rules in real Gradle dry runs;
+`docs/ANDROID_RELEASE.md` section 7). It builds no application, produces no artifact, has read-only
+permissions and no secret, and uses `pull_request`, never `pull_request_target`. It is therefore not a
+release trigger and does not touch the policy above; `tool/test_android_release.sh` pins its shape and
+that `build-variants.yml` still has no `pull_request` trigger.
 
 ## Concurrency
 
@@ -128,8 +145,10 @@ run. Runs of the existing Android and iOS validation workflows are independent.
 
 ## Evidence and what a green run means
 
-Text evidence only (identity, version, signing status, SHA-256, run metadata), one file per
-variant, uploaded per run. **No application binary is uploaded.** A green `verdict` means:
+Text evidence (identity, version, signing status, SHA-256, run metadata) and a JSON build
+manifest (`tool/build_manifest.py`, see [RELEASE_VERSIONING.md](RELEASE_VERSIONING.md)), one
+of each per variant, uploaded per run. **No application binary is uploaded.** A green
+`verdict` means:
 the selected variants compiled, were read back as the right application, and nothing else
 ran. It does **not** mean the build is installable as an official app, signed, tested on a
 device, tagged or approved for release.
@@ -187,12 +206,13 @@ can.
 
 - A push runs the workflow file **as it is on the pushed commit**. The first promotion that
   brings this file to `staging` therefore starts it on that very merge.
-- `production` does not exist and is not created by this change. The entry in the trigger
-  list is inert until it does.
-- The literal `production` trigger cannot be demonstrated on GitHub before the branch
-  exists and receives its first merge; until then it is covered by the planner tests and by
-  review. The branch-creation behavior depends on GitHub's `created` event field and is
-  likewise demonstrated only by the real creation (a skipped run is the expected result).
+- `production` was created after this change (Issue #68); until then the entry in the
+  trigger list was inert.
+- The literal `production` trigger was demonstrated by the first merge into the branch
+  (PR #75, run 39237471969: the three production variants). The branch-creation behavior
+  depends on GitHub's `created` event field; creating `production` ran no workflow at all,
+  because its baseline commit predates the workflow files, so the `created` guard is still
+  covered only by the planner tests and by review.
 
 ## Verification record
 
