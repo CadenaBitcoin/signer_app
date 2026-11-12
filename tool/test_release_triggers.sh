@@ -298,7 +298,8 @@ t "the plan job runs tool/test_retained_artifacts.sh" has "$jplan" 'run: tool/te
 t "the plan job decides retention with tool/retain_artifact.py plan" has "$jplan" 'tool/retain_artifact.py plan --event "$EVENT_NAME"'
 t "the plan exposes the retention decision and the recipients to the jobs" has "$jplan" 'recipients: ${{ steps.retention.outputs.recipients }}'
 t "android: every retention step is gated by the plan's retention decision (3)" eq "$(grep -cF "$gate_retain" <<<"$ja")" 3
-t "ios: every retention step is gated by the plan's retention decision (5)" eq "$(grep -cF "$gate_retain" <<<"$ji")" 5
+t "ios: every retention step is gated by the plan's retention decision (4: archive build, age, pack, upload)" eq "$(grep -cF "$gate_retain" <<<"$ji")" 4
+t "ios: the ordinary build step runs only when the run does not retain (the archive replaces it)" has "$ji" "        if: \${{ needs.plan.outputs.retain != 'true' }}"
 t "verdict: the retained checks are gated by the plan's retention decision (2)" eq "$(grep -cF "$gate_retain" <<<"$vj")" 2
 for j in android ios; do
   jt="$(job $j)"
@@ -308,7 +309,8 @@ for j in android ios; do
   t "$j: retention packs into retained/" has "$jt" '--out retained --retention-days "$RETENTION_DAYS"'
 done
 t "ios: the archive is unsigned (flutter build ipa --no-codesign) and no export is requested" bash -c 'grep -q "flutter build ipa --release --no-codesign --flavor" <<<"$1" && ! grep -qE "export-options-plist|--export-method|exportArchive" <<<"$1"' _ "$ji"
-t "ios: the archived application is verified and the drift check runs after the archive build" bash -c 'grep -q "Runner.xcarchive\|ARCHIVE_PATH/Products/Applications/Runner.app" <<<"$1" && [ "$(grep -c "check_build_drift.sh" <<<"$1")" -ge 2 ]' _ "$ji"
+t "ios: when retaining, the application that is verified and recorded is the one inside the archive" bash -c 'grep -q "app=\"\$ARCHIVE_PATH/Products/Applications/Runner.app\"" <<<"$1" && grep -q "build_command=\${BUILD_COMMAND:-" <<<"$1"' _ "$ji"
+t "ios: the archive is packed from the same path the evidence describes (no second archive step after the evidence)" eq "$(grep -c 'flutter build ipa .*| tee ' <<<"$ji")" 1
 t "no job downloads age or installs it by another route" lacksre "$(cat "$wf")" '(brew install age|apt(-get)? install age|go install .*age|FiloSottile/age)'
 t "the verdict downloads the retained artifacts of this attempt and verifies each bundle against the verified evidence" bash -c 'grep -q "pattern: retained_\*_a\${{ github.run_attempt }}" <<<"$1" && grep -q "tool/check_verdict.sh retained retained" <<<"$1" && grep -q "retain_artifact.py verify \"retained/retained_\${v}_a\${RUN_ATTEMPT}\" --repo . --against evidence" <<<"$1"' _ "$vj"
 t "no workflow step selects release signing (CADENA_SIGNING) or exports an IPA" lacksre "$(cat "$wf")" '(CADENA_SIGNING|exportArchive|--export-options-plist)'

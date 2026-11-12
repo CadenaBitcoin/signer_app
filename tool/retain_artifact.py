@@ -18,7 +18,7 @@ ciphertext, public checksums and manifests. The runner never holds a key that ca
 
   retain_artifact.py pack --variant V --kind apk|aab|ios-xcarchive --artifact PATH
         --evidence V.txt --manifest V.manifest.json --recipients FILE --out DIR
-        [--archive-evidence F] [--retention-days N] [--require-identical] [--age BIN --age-keygen BIN]
+        [--retention-days N] [--age BIN --age-keygen BIN]
       Packs the artifact the build job has just verified: plaintext checksum and content digest,
       encryption to the recipients, a round-trip proof with a one-time key that is discarded, the
       retained manifest, the build evidence and SHA256SUMS. Then verifies the bundle.
@@ -65,12 +65,6 @@ KIND_OF_VARIANT_KIND = {"apk": "apk", "aab": "aab", "ios-app": "ios-xcarchive"}
 LABEL = "NON-DISTRIBUTABLE_INTERNAL-EVALUATION_"
 ARCHIVE_ROOT = "Runner.xcarchive"
 APP_IN_ARCHIVE = ARCHIVE_ROOT + "/Products/Applications/Runner.app"
-# Identity and version facts of the archive's application that must equal the validated build's.
-IDENTITY_KEYS = ("application_id", "display_name", "version_name", "version_code", "environment",
-                 "signing", "minimum_os_version", "executable_archs")
-DIGEST_KEYS = (("artifact_sha256", "app_directory_sha256_equal"),
-               ("executable_sha256", "executable_sha256_equal"),
-               ("app_snapshot_sha256", "app_snapshot_sha256_equal"))
 
 
 class Fail(Exception):
@@ -361,32 +355,23 @@ def cmd_pack(a):
                        "basis": "sha256 of the sorted '<sha256>  <entry>' lines of every zip entry except META-INF/MANIFEST.MF and *.SF *.RSA *.DSA *.EC"}
             fmt = "file"
         else:
-            if not a.archive_evidence:
-                raise Fail("--archive-evidence is required for an iOS archive")
-            aev = bm.read_kv(a.archive_evidence)
+            # The evidence of an iOS run that retains describes the application INSIDE the archive
+            # (the workflow builds the archive instead of a separate Runner.app), so the archive's
+            # application is the verified artifact itself, not a second compile of it.
             app = os.path.join(a.artifact, "Products", "Applications", "Runner.app")
             if not os.path.isdir(app):
                 raise Fail("%s has no Products/Applications/Runner.app" % a.artifact)
             tree = bm.tree_digest(app)
-            if tree != aev.get("artifact_sha256"):
+            if tree != ev.get("artifact_sha256"):
                 raise Fail("the application inside the archive is not the one whose verification evidence was recorded")
-            for k in IDENTITY_KEYS:
-                if aev.get(k) != ev.get(k):
-                    raise Fail("%s differs between the archive's application (%r) and the validated build (%r)"
-                               % (k, aev.get(k), ev.get(k)))
-            correspondence["identity_and_version_equal"] = True
-            for key, label in DIGEST_KEYS:
-                correspondence[label] = bool(aev.get(key)) and aev.get(key) == ev.get(key)
-            if a.require_identical and not all(correspondence.values()):
-                raise Fail("the archive's application is not bit-identical to the validated build: %s"
-                           % json.dumps(correspondence, sort_keys=True))
+            correspondence["application_digest_equals_verified_artifact"] = True
             plain = os.path.join(staging, name)
             deterministic_tar_gz(a.artifact, ARCHIVE_ROOT, plain)
             sha, size = sha256_file(plain), os.path.getsize(plain)
             content = {"digest_kind": "directory-manifest", "sha256": tree,
                        "basis": "sha256 of the sorted per-file sha256 manifest of Runner.app inside the archive (the digest of tool/verify_artifact.sh)",
-                       "executable_sha256": aev.get("executable_sha256", ""),
-                       "app_snapshot_sha256": aev.get("app_snapshot_sha256", "")}
+                       "executable_sha256": ev.get("executable_sha256", ""),
+                       "app_snapshot_sha256": ev.get("app_snapshot_sha256", "")}
             fmt = "tar.gz"
 
         cipher_name = name + ".age"
@@ -574,8 +559,8 @@ def verify_bundle(directory, repo, against, identity, age, keep=None):
             if corr.get("plaintext_sha256_equals_verified_artifact") is not True:
                 p.add("the correspondence to the verified artifact is not recorded")
         else:
-            if corr.get("identity_and_version_equal") is not True:
-                p.add("the identity of the archive's application was not shown equal to the validated build")
+            if corr.get("application_digest_equals_verified_artifact") is not True or content.get("sha256") != ev.get("artifact_sha256"):
+                p.add("the archive's application is not shown to be the verified artifact (its digest differs from the build evidence)")
     if against:
         for n in (variant + ".txt", variant + ".manifest.json"):
             other = os.path.join(against, n)
@@ -691,9 +676,7 @@ def main(argv):
     s.add_argument("--manifest", required=True)
     s.add_argument("--recipients", required=True)
     s.add_argument("--out", required=True)
-    s.add_argument("--archive-evidence", default="")
     s.add_argument("--retention-days", type=int, default=14)
-    s.add_argument("--require-identical", action="store_true")
     s.add_argument("--age", default="age")
     s.add_argument("--age-keygen", default="age-keygen")
     s.set_defaults(fn=cmd_pack)

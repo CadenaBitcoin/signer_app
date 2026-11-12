@@ -225,43 +225,33 @@ def ios_app(app, version, build_no, bundle_id, exe=b"MACHO-EXE", extra=None):
     os.chmod(os.path.join(app, "Runner"), 0o755)
     with open(os.path.join(app, "Frameworks", "App.framework", "App"), "wb") as f: f.write(b"AOT-SNAPSHOT" + (extra or b""))
 
-def ios_evidence(app, extra=None):
+def ios_evidence(app):
     snap = sha(open(os.path.join(app, "Frameworks", "App.framework", "App"), "rb").read())
     exe = sha(open(os.path.join(app, "Runner"), "rb").read())
     return [("artifact_sha256", bm.tree_digest(app)), ("app_snapshot_sha256", snap), ("executable_sha256", exe),
-            ("minimum_os_version", "14.0"), ("executable_archs", "arm64"), ("signing", "unsigned"),
-            ("environment", "production"), ("application_id", "com.app.cadenabitcoin"), ("display_name", "Cadena Bitcoin"),
-            ("version_name", name), ("version_code", str(build))]
+            ("minimum_os_version", "14.0"), ("executable_archs", "arm64"), ("signing", "unsigned")]
 
 def ios(variant, env):
     d = os.path.join(out, variant); os.makedirs(d)
     bundle = "com.app.cadenabitcoin" + (".staging" if env == "staging" else "")
     dname = "Cadena Signer STAGING" if env == "staging" else "Cadena Bitcoin"
-    # the validated build (flutter build ios): Runner.app
-    built = os.path.join(d, "built", "Runner.app")
-    ios_app(built, name, build, bundle)
+    # an iOS run that retains verifies the application INSIDE the unsigned archive
+    # (flutter build ipa --no-codesign), and its evidence describes that application
+    arch = os.path.join(d, "Runner.xcarchive")
+    app = os.path.join(arch, "Products", "Applications", "Runner.app")
+    ios_app(app, name, build, bundle)
+    os.makedirs(os.path.join(arch, "dSYMs", "Runner.app.dSYM"))
+    with open(os.path.join(arch, "dSYMs", "Runner.app.dSYM", "sym"), "wb") as f: f.write(b"dsym")
+    with open(os.path.join(arch, "Info.plist"), "wb") as f:
+        plistlib.dump({"ApplicationProperties": {"ApplicationPath": "Applications/Runner.app"}}, f)
     ev = common(variant, env, bundle, "", "ios")
-    ev[1] = ("build_command", "flutter build ios --release --no-codesign --flavor %s --dart-define-from-file=config/build/%s.json" % (env, env))
+    ev[1] = ("build_command", "flutter build ipa --release --no-codesign --flavor %s --dart-define-from-file=config/build/%s.json" % (env, env))
     ev += [("podfile_lock_drift", "no"), ("rust_lib_sha256", Z), ("artifact_kind", "ios-app"), ("artifact_file", "Runner.app"),
            ("artifact_sha256_basis", "sha256 of the sorted per-file sha256 manifest of the .app directory"), ("artifact_bytes", "12KiB")]
-    base = dict(ios_evidence(built))
-    ev += [("artifact_sha256", base["artifact_sha256"]), ("app_snapshot_sha256", base["app_snapshot_sha256"]),
-           ("executable_sha256", base["executable_sha256"]), ("minimum_os_version", "14.0"), ("executable_archs", "arm64"),
-           ("signing", "unsigned")]
+    ev += ios_evidence(app)
     ev += tail(env, bundle, dname)
     write_ev(d, variant, ev)
     create_manifest(d, variant, IOS_TC)
-    # the unsigned archive of the same build (flutter build ipa --no-codesign); identical application
-    for label, exe in (("same", b"MACHO-EXE"), ("rebuilt", b"MACHO-EXE-REBUILT")):
-        arch = os.path.join(d, label, "Runner.xcarchive")
-        app = os.path.join(arch, "Products", "Applications", "Runner.app")
-        ios_app(app, name, build, bundle, exe=exe)
-        os.makedirs(os.path.join(arch, "dSYMs", "Runner.app.dSYM"))
-        with open(os.path.join(arch, "dSYMs", "Runner.app.dSYM", "sym"), "wb") as f: f.write(b"dsym")
-        with open(os.path.join(arch, "Info.plist"), "wb") as f:
-            plistlib.dump({"ApplicationProperties": {"ApplicationPath": "Applications/Runner.app"}}, f)
-        with open(os.path.join(d, label + ".archive-evidence.txt"), "w") as f:
-            f.write("".join("%s=%s\n" % kv for kv in ios_evidence(app)))
 
 android("android-production-apk", "apk", "production")
 android("android-production-aab", "aab", "production")
@@ -275,9 +265,9 @@ REC="$tmp/recipients.txt"; printf '%s\n' "$CUSTODIAN_PUB" >"$REC"
 # the artifact file name carries the environment: app-production-release.apk / .aab, app-staging-release.apk
 pack_apk() { local v="$1" o="$2"; shift 2; RAx pack --variant "$v" --kind apk --artifact "$fx/$v/app-$( [[ $v == *staging* ]] && echo staging || echo production )-release.apk" --evidence "$fx/$v/$v.txt" --manifest "$fx/$v/$v.manifest.json" --recipients "$REC" --out "$o" "${PACK_AGE[@]}" "$@"; }
 pack_aab() { local v=android-production-aab o="$1"; shift; RAx pack --variant $v --kind aab --artifact "$fx/$v/app-production-release.aab" --evidence "$fx/$v/$v.txt" --manifest "$fx/$v/$v.manifest.json" --recipients "$REC" --out "$o" "${PACK_AGE[@]}" "$@"; }
-pack_ios() { # LABEL(same|rebuilt) OUT [extra]
-  local l="$1" o="$2"; shift 2
-  RAx pack --variant ios-production --kind ios-xcarchive --artifact "$fx/ios-production/$l/Runner.xcarchive" --archive-evidence "$fx/ios-production/$l.archive-evidence.txt" \
+pack_ios() { # OUT [extra]
+  local o="$1"; shift
+  RAx pack --variant ios-production --kind ios-xcarchive --artifact "$fx/ios-production/Runner.xcarchive" \
     --evidence "$fx/ios-production/ios-production.txt" --manifest "$fx/ios-production/ios-production.manifest.json" --recipients "$REC" --out "$o" "${PACK_AGE[@]}" "$@"
 }
 
@@ -336,13 +326,15 @@ assert a==b and a!=c, (a,b,c)
 
 # ---- 4. iOS archive -----------------------------------------------------------------------------------
 ios="$tmp/out-ios"
-expect_rc "pack: the unsigned iOS archive is retained" 0 "RESULT: OK" pack_ios same "$ios"
+expect_rc "pack: the unsigned iOS archive is retained" 0 "RESULT: OK" pack_ios "$ios"
 t "the iOS bundle holds exactly five files, the ciphertext is an .xcarchive.tar.gz.age" bash -c "[ \"\$(ls '$ios' | wc -l | tr -d ' ')\" = 5 ] && ls '$ios' | grep -qE 'ios-xcarchive-.*\.xcarchive\.tar\.gz\.age\$'"
-t "the retained manifest records an application bit-identical to the validated build" python3 -I -c "
+t "the retained manifest records that the archive's application IS the verified artifact" python3 -I -c "
 import json,glob
 r=json.load(open(glob.glob('$ios/*.retained.json')[0]))
-c=r['artifact']['correspondence_to_validated_build']
-assert c['identity_and_version_equal'] and c['app_directory_sha256_equal'] and c['executable_sha256_equal'] and c['app_snapshot_sha256_equal'], c
+ev=dict(l.split('=',1) for l in open('$fx/ios-production/ios-production.txt').read().splitlines() if '=' in l)
+assert r['artifact']['correspondence_to_validated_build']=={'application_digest_equals_verified_artifact': True}
+assert r['artifact']['content']['sha256']==ev['artifact_sha256']
+assert r['artifact']['content']['executable_sha256']==ev['executable_sha256'] and r['artifact']['content']['app_snapshot_sha256']==ev['app_snapshot_sha256']
 assert r['artifact']['content']['digest_kind']=='directory-manifest' and r['signing']['status']=='unsigned'
 "
 expect_rc "verify (no key) of the iOS bundle" 0 "RESULT: OK" RAx verify "$ios" --repo "$root" --against "$fx/ios-production" --age "$AGE_BIN"
@@ -354,25 +346,32 @@ import sys,os
 sys.dont_write_bytecode=True
 sys.path.insert(0,'$root/tool'); import build_manifest as bm
 a=bm.tree_digest('$out_ios/Runner.xcarchive/Products/Applications/Runner.app')
-b=bm.tree_digest('$fx/ios-production/same/Runner.xcarchive/Products/Applications/Runner.app')
+b=bm.tree_digest('$fx/ios-production/Runner.xcarchive/Products/Applications/Runner.app')
 assert a==b, (a,b)
 assert os.path.isfile('$out_ios/Runner.xcarchive/dSYMs/Runner.app.dSYM/sym')
 assert os.access('$out_ios/Runner.xcarchive/Products/Applications/Runner.app/Runner', os.X_OK)
 "
-t "the archive is deterministic: packing the same tree twice gives the same plaintext digest" bash -c "
+t "the archive is deterministic: packing the same tree twice gives the same bytes" bash -c "
 python3 -I -c \"
 import sys
 sys.dont_write_bytecode=True
 sys.path.insert(0,'$root/tool'); import retain_artifact as r
-r.deterministic_tar_gz('$fx/ios-production/same/Runner.xcarchive','Runner.xcarchive','$tmp/t1.tgz'); r.deterministic_tar_gz('$fx/ios-production/same/Runner.xcarchive','Runner.xcarchive','$tmp/t2.tgz')\" && cmp -s '$tmp/t1.tgz' '$tmp/t2.tgz'"
-# a rebuilt application: allowed and recorded as not identical, unless identity is demanded
-expect_rc "pack: a rebuilt archive application is recorded as not bit-identical" 0 "RESULT: OK" pack_ios rebuilt "$tmp/out-ios-rebuilt"
-t "the correspondence records the difference honestly" python3 -I -c "
-import json,glob
-c=json.load(open(glob.glob('$tmp/out-ios-rebuilt/*.retained.json')[0]))['artifact']['correspondence_to_validated_build']
-assert c['identity_and_version_equal'] is True and c['executable_sha256_equal'] is False, c
+r.deterministic_tar_gz('$fx/ios-production/Runner.xcarchive','Runner.xcarchive','$tmp/t1.tgz'); r.deterministic_tar_gz('$fx/ios-production/Runner.xcarchive','Runner.xcarchive','$tmp/t2.tgz')\" && cmp -s '$tmp/t1.tgz' '$tmp/t2.tgz'"
+t "a signed or profiled application is flagged by the archive check (unit)" python3 -I -c "
+import sys,os,shutil
+sys.dont_write_bytecode=True
+sys.path.insert(0,'$root/tool'); import retain_artifact as r, build_manifest as bm
+src='$fx/ios-production/Runner.xcarchive/Products/Applications/Runner.app'
+rj={'application':{'id':'com.app.cadenabitcoin'},'version':{'name':bm.load_pubspec('$root')[1],'build':bm.load_pubspec('$root')[2]}}
+p=bm.Problems(); r.check_archive_app(src, rj, p); assert not p, p.items
+for extra in ('_CodeSignature/CodeResources','embedded.mobileprovision'):
+    d='$tmp/signedapp'; shutil.rmtree(d, ignore_errors=True); shutil.copytree(src, d)
+    os.makedirs(os.path.dirname(os.path.join(d,extra)), exist_ok=True); open(os.path.join(d,extra),'w').write('x')
+    p=bm.Problems(); r.check_archive_app(d, rj, p); assert any('must be unsigned' in i for i in p.items), (extra, p.items)
+d='$tmp/wrongver'; shutil.rmtree(d, ignore_errors=True); shutil.copytree(src, d)
+rj2=dict(rj, version={'name':'9.9.9','build':rj['version']['build']})
+p=bm.Problems(); r.check_archive_app(d, rj2, p); assert any('CFBundleShortVersionString' in i for i in p.items), p.items
 "
-expect_rc "pack --require-identical refuses a rebuilt application" 2 "not bit-identical" pack_ios rebuilt "$tmp/out-ios-req" --require-identical
 
 # ---- 5. refusals at pack time --------------------------------------------------------------------------
 cp "$fx/android-production-apk/app-production-release.apk" "$tmp/other.apk"
@@ -386,33 +385,18 @@ expect_rc "pack refuses to run without a recipient" 2 "no recipient" \
   RAx pack --variant android-production-apk --kind apk --artifact "$fx/android-production-apk/app-production-release.apk" --evidence "$fx/android-production-apk/android-production-apk.txt" --manifest "$fx/android-production-apk/android-production-apk.manifest.json" --recipients "$tmp/norecips.txt" --out "$tmp/o3" "${PACK_AGE[@]}"
 mkdir -p "$tmp/o4" && : >"$tmp/o4/leftover"
 expect_rc "pack refuses a non-empty output directory" 2 "not empty" pack_apk android-production-apk "$tmp/o4"
-expect_rc "pack refuses an iOS archive without its evidence" 2 "--archive-evidence is required" \
-  RAx pack --variant ios-production --kind ios-xcarchive --artifact "$fx/ios-production/same/Runner.xcarchive" --evidence "$fx/ios-production/ios-production.txt" --manifest "$fx/ios-production/ios-production.manifest.json" --recipients "$REC" --out "$tmp/o5" "${PACK_AGE[@]}"
-sed 's/^version_name=.*/version_name=9.9.9/' "$fx/ios-production/same.archive-evidence.txt" >"$tmp/ios-wrong-version.txt"
-expect_rc "pack refuses an archive whose application has another version than the validated build" 2 "version_name differs" \
-  RAx pack --variant ios-production --kind ios-xcarchive --artifact "$fx/ios-production/same/Runner.xcarchive" --archive-evidence "$tmp/ios-wrong-version.txt" --evidence "$fx/ios-production/ios-production.txt" --manifest "$fx/ios-production/ios-production.manifest.json" --recipients "$REC" --out "$tmp/o6" "${PACK_AGE[@]}"
-cp -R "$fx/ios-production/same/Runner.xcarchive" "$tmp/tampered.xcarchive"
+cp -R "$fx/ios-production/Runner.xcarchive" "$tmp/tampered.xcarchive"
 printf 'x' >>"$tmp/tampered.xcarchive/Products/Applications/Runner.app/Runner"
 expect_rc "pack refuses an archive whose application is not the one whose evidence was recorded" 2 "not the one whose verification evidence" \
-  RAx pack --variant ios-production --kind ios-xcarchive --artifact "$tmp/tampered.xcarchive" --archive-evidence "$fx/ios-production/same.archive-evidence.txt" --evidence "$fx/ios-production/ios-production.txt" --manifest "$fx/ios-production/ios-production.manifest.json" --recipients "$REC" --out "$tmp/o7" "${PACK_AGE[@]}"
+  RAx pack --variant ios-production --kind ios-xcarchive --artifact "$tmp/tampered.xcarchive" --evidence "$fx/ios-production/ios-production.txt" --manifest "$fx/ios-production/ios-production.manifest.json" --recipients "$REC" --out "$tmp/o7" "${PACK_AGE[@]}"
+expect_rc "pack refuses an iOS variant retained as an APK" 2 "is retained as" \
+  RAx pack --variant ios-production --kind apk --artifact "$fx/android-production-apk/app-production-release.apk" --evidence "$fx/ios-production/ios-production.txt" --manifest "$fx/ios-production/ios-production.manifest.json" --recipients "$REC" --out "$tmp/o9" "${PACK_AGE[@]}"
 cp "$fx/ios-production/ios-production.manifest.json" "$tmp/bad.manifest.json"
 python3 -I -c "
 import json
 m=json.load(open('$tmp/bad.manifest.json')); m['signing']['status']='debug'; json.dump(m,open('$tmp/bad.manifest.json','w'))"
 expect_rc "pack refuses a manifest that does not verify" 2 "does not verify" \
-  RAx pack --variant ios-production --kind ios-xcarchive --artifact "$fx/ios-production/same/Runner.xcarchive" --archive-evidence "$fx/ios-production/same.archive-evidence.txt" --evidence "$fx/ios-production/ios-production.txt" --manifest "$tmp/bad.manifest.json" --recipients "$REC" --out "$tmp/o8" "${PACK_AGE[@]}"
-# a signed archive: the digest evidence matches (it is computed over what is there), but it must not be retained as unsigned
-cp -R "$fx/ios-production/same/Runner.xcarchive" "$tmp/signed.xcarchive"
-mkdir -p "$tmp/signed.xcarchive/Products/Applications/Runner.app/_CodeSignature" && printf 'sig' >"$tmp/signed.xcarchive/Products/Applications/Runner.app/_CodeSignature/CodeResources"
-python3 -I -c "
-import sys
-sys.dont_write_bytecode=True
-sys.path.insert(0,'$root/tool'); import build_manifest as bm
-d=bm.tree_digest('$tmp/signed.xcarchive/Products/Applications/Runner.app')
-t=open('$fx/ios-production/same.archive-evidence.txt').read().splitlines()
-open('$tmp/signed-evidence.txt','w').write(''.join(('artifact_sha256='+d if l.startswith('artifact_sha256=') else l)+'\n' for l in t))"
-RAx pack --variant ios-production --kind ios-xcarchive --artifact "$tmp/signed.xcarchive" --archive-evidence "$tmp/signed-evidence.txt" --evidence "$fx/ios-production/ios-production.txt" --manifest "$fx/ios-production/ios-production.manifest.json" --recipients "$REC" --out "$tmp/out-signed" "${PACK_AGE[@]}" >/dev/null 2>&1
-expect_rc "a signed archive packs but is rejected when the key holder verifies it" 1 "must be unsigned" RAx verify "$tmp/out-signed" --identity "$CUSTODIAN_KEY" --age "$AGE_BIN"
+  RAx pack --variant ios-production --kind ios-xcarchive --artifact "$fx/ios-production/Runner.xcarchive" --evidence "$fx/ios-production/ios-production.txt" --manifest "$tmp/bad.manifest.json" --recipients "$REC" --out "$tmp/o8" "${PACK_AGE[@]}"
 
 # ---- 6. tampering with a bundle ---------------------------------------------------------------------------
 clone() { rm -rf "$2"; cp -R "$1" "$2"; }

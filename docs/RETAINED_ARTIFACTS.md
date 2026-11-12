@@ -92,13 +92,15 @@ Inside the build job, in this order, and each step fails the job:
    (`tool/build_manifest.py`). **Unchanged by Stage 2.**
 2. **Android:** the file that is packed must have the SHA-256 and size that the evidence recorded
    for the verified artifact. It is the same file, not a rebuild.
-3. **iOS:** the archive is built with `flutter build ipa --release --no-codesign` (same flavor, same
-   configuration file); its `Runner.app` is verified by the same `tool/verify_artifact.sh`; the
-   identity, version, signing state, minimum OS and architecture must equal the validated
-   `flutter build ios` build, and `tool/check_build_drift.sh` must still find no changed tracked
-   file. The archive application's directory, executable and Dart-snapshot digests are compared
-   with the validated build's and the result is **recorded** (`correspondence_to_validated_build`),
-   because an archive is a second compile; `--require-identical` makes inequality fatal.
+3. **iOS:** when a run retains, the build step is `flutter build ipa --release --no-codesign` (same flavor,
+   same configuration file) **instead of** `flutter build ios`, and the application **inside the
+   archive** is the one that is located, read back by `tool/verify_artifact.sh`, drift-checked and
+   recorded in the evidence and the manifest. The archive is therefore the verified artifact: its
+   application digest must equal the evidence's `artifact_sha256`, or packing fails.
+   (The first demonstration built the archive after a separate `flutter build ios`. The two
+   applications were **not** bit-identical: directory, executable and Dart-snapshot digests all
+   differed. A retained archive that merely resembled the verified app would have been a weaker
+   claim, so the design was changed.)
 4. The bundle is written, then verified by `tool/retain_artifact.py verify` (section 5).
 
 The `verdict` job then requires one bundle per required variant (and none for others), downloads
@@ -222,9 +224,10 @@ none of it is created by Stage 2.
 - This is **compile validation plus retention**. The kept artifacts are debug-signed (Android) or
   unsigned (iOS). They prove what was built from which commit; they do not prove runtime behaviour,
   and a signing stage has not been run on them.
-- The iOS archive is a second compile of the same source. Its application is verified like the
-  validated build and compared with it; whether it is bit-identical is recorded per run, not assumed
-  (see the run evidence in the pull request).
+- Compile and archive are not reproducible bit for bit across two builds (observed). Retention does
+  not claim that a rebuild of the commit yields the same bytes; it claims that the kept file is the
+  file whose evidence was recorded in that run. A signing stage must therefore sign the retained
+  file, not rebuild it.
 - Encryption protects the content from readers without a key. It does not hide that an artifact
   exists, its size, its checksums or its manifest, which are public by design.
 - Anyone who holds a recipient private key can read every artifact encrypted to it; key custody is

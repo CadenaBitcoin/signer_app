@@ -513,6 +513,9 @@ jobs:
       # Prebuilt Rust static library linked by the dlc_wallet plugin; never rebuilt here.
       RUST_LIB: flutter_plugin/flutter_plugin/ios/Classes/libdlcplazacryptlib.a
       EXPECTED_RUST_LIB_SHA256: 203dcd7abe4187de0b756638a55f691b2d5c680b17d4fbfa7dda550ed703949b
+      # Stage 2: when the run retains artifacts, the unsigned ARCHIVE is built (and verified) instead
+      # of a separate Runner.app, so the application that is verified is the one that is kept.
+      RETAIN: ${{ needs.plan.outputs.retain }}
     steps:
       - name: Checkout exact commit
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
@@ -617,14 +620,39 @@ jobs:
       # The output is also kept (text only, in the diagnostics artifact) so that a compiler or
       # CocoaPods failure under the new toolchain can be read and reported exactly.
       - name: Build (${{ matrix.variant }})
+        if: ${{ needs.plan.outputs.retain != 'true' }}
         run: |
           set -o pipefail
           mkdir -p diagnostics
           flutter build ios --release --no-codesign --flavor "$BUILD_ENV" --dart-define-from-file="$BUILD_CONFIG_FILE" 2>&1 | tee diagnostics/build.log
 
+      # Stage 2 (retention): the unsigned archive that a later signing stage exports (Route B of
+      # docs/IOS_SIGNING.md). `flutter build ipa --no-codesign` archives with CODE_SIGNING_ALLOWED=NO
+      # and skips the export. The application INSIDE the archive is then located, verified, drifted-
+      # checked and recorded below exactly like the Runner.app of the other build, so the evidence
+      # and the manifest describe what is kept. (A separate `flutter build ios` is a second compile
+      # and is not bit-identical to the archive's application: observed in the first demonstration.)
+      - name: Build and archive, unsigned (${{ matrix.variant }}, retention)
+        if: ${{ needs.plan.outputs.retain == 'true' }}
+        run: |
+          set -o pipefail
+          mkdir -p diagnostics
+          flutter build ipa --release --no-codesign --flavor "$BUILD_ENV" --dart-define-from-file="$BUILD_CONFIG_FILE" 2>&1 | tee diagnostics/build.log
+          archive=build/ios/archive/Runner.xcarchive
+          if [ ! -d "$archive/Products/Applications/Runner.app" ]; then
+            echo "::error::flutter build ipa --no-codesign produced no $archive/Products/Applications/Runner.app"
+            find build/ios/archive -maxdepth 4 2>/dev/null | head -n 40 || true
+            exit 1
+          fi
+          echo "ARCHIVE_PATH=$archive" >> "$GITHUB_ENV"
+          echo "BUILD_COMMAND=flutter build ipa --release --no-codesign --flavor $BUILD_ENV --dart-define-from-file=$BUILD_CONFIG_FILE" >> "$GITHUB_ENV"
+
       - name: Locate the built app
         run: |
           app="build/ios/Release-${BUILD_ENV}-iphoneos/Runner.app"
+          if [ "$RETAIN" = true ]; then
+            app="$ARCHIVE_PATH/Products/Applications/Runner.app"
+          fi
           if [ ! -d "$app" ]; then
             app="$(find build/ios -maxdepth 3 -type d -name Runner.app -print 2>/dev/null | sort | head -n1 || true)"
           fi
@@ -667,7 +695,7 @@ jobs:
           mkdir -p evidence
           {
             echo "variant=$BUILD_VARIANT"
-            echo "build_command=flutter build ios --release --no-codesign --flavor $BUILD_ENV --dart-define-from-file=$BUILD_CONFIG_FILE"
+            echo "build_command=${BUILD_COMMAND:-flutter build ios --release --no-codesign --flavor $BUILD_ENV --dart-define-from-file=$BUILD_CONFIG_FILE}"
             echo "config_file=$BUILD_CONFIG_FILE"
             echo "config_file_sha256=$(shasum -a 256 "$BUILD_CONFIG_FILE" | awk '{print $1}')"
             echo "commit=$GITHUB_SHA"
@@ -701,30 +729,6 @@ jobs:
           if-no-files-found: error
           retention-days: 14
 
-      # Stage 2: the unsigned archive that a later signing stage exports (Route B of
-      # docs/IOS_SIGNING.md). `flutter build ipa --no-codesign` archives with CODE_SIGNING_ALLOWED=NO
-      # and skips the export. The application inside is verified like the validated build and
-      # compared with it before the archive is kept (encrypted).
-      - name: Archive, unsigned (flutter build ipa --no-codesign)
-        if: ${{ needs.plan.outputs.retain == 'true' }}
-        run: |
-          set -o pipefail
-          mkdir -p diagnostics
-          flutter build ipa --release --no-codesign --flavor "$BUILD_ENV" --dart-define-from-file="$BUILD_CONFIG_FILE" 2>&1 | tee diagnostics/archive.log
-          archive=build/ios/archive/Runner.xcarchive
-          if [ ! -d "$archive/Products/Applications/Runner.app" ]; then
-            echo "::error::flutter build ipa --no-codesign produced no $archive/Products/Applications/Runner.app"
-            find build/ios/archive -maxdepth 4 2>/dev/null | head -n 40 || true
-            exit 1
-          fi
-          echo "ARCHIVE_PATH=$archive" >> "$GITHUB_ENV"
-
-      - name: Verify the archived application and that the archive build changed no tracked file
-        if: ${{ needs.plan.outputs.retain == 'true' }}
-        run: |
-          /bin/bash tool/verify_artifact.sh ios "$BUILD_ENV" "$ARCHIVE_PATH/Products/Applications/Runner.app" --min-sdk "$EXPECTED_MIN_SDK_MAJOR" --evidence "$RUNNER_TEMP/archive-evidence.txt"
-          /bin/bash tool/check_build_drift.sh
-
       - name: Install the pinned age
         if: ${{ needs.plan.outputs.retain == 'true' }}
         run: tool/install_age.sh
@@ -736,7 +740,6 @@ jobs:
         run: |
           python3 -I tool/retain_artifact.py write-recipients --list "$RECIPIENTS" --out "$RUNNER_TEMP/recipients.txt"
           python3 -I tool/retain_artifact.py pack --variant "$BUILD_VARIANT" --kind ios-xcarchive --artifact "$ARCHIVE_PATH" \
-            --archive-evidence "$RUNNER_TEMP/archive-evidence.txt" \
             --evidence "evidence/$BUILD_VARIANT.txt" --manifest "evidence/$BUILD_VARIANT.manifest.json" \
             --recipients "$RUNNER_TEMP/recipients.txt" --out retained --retention-days "$RETENTION_DAYS"
           ls -l retained
