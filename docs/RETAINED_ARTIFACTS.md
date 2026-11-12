@@ -235,3 +235,61 @@ none of it is created by Stage 2.
   it from the commit).
 - Nothing in this stage changes the application, a build variant, a version, a signing
   configuration or any promotion. The release `production` branch and the published 1.0.4 are untouched.
+
+## 10. Demonstration and acceptance (2026-11-12, issue #54)
+
+Manual runs of `build-variants.yml` on the issue branch with **retain** ticked and a throwaway
+demonstration public key as **recipient** (`all` five variants). The private half stayed in the
+reviewer's scratch directory; it is not a custodian key and is not committed anywhere.
+
+| Run | Commit | Result | What it showed |
+|---|---|---|---|
+| `43311731163` | `0c69fd5` | success | First end-to-end retention. Showed that an archive made by a separate `flutter build ipa --no-codesign` is **not bit-identical** to the verified `Runner.app` (directory, executable and Dart snapshot digests differ); the design was changed (section 4, step 3) |
+| `43315635021` | `27fb88e` | failure, not the code | The unchanged `reject` job could not install an Android SDK platform (runner infrastructure); every build, both iOS archives included, was green |
+| `43317677295` | `27fb88e` | **success** | The accepted run: `plan`, `static`, `reject`, the five variants and the verdict all green. Job ids: `android-staging-apk` 131530515622, `android-production-apk` 131530515620, `android-production-aab` 131530515725, `ios-staging` 131530515628, `ios-production` 131530515664, verdict 131539042542 |
+
+Retained artifacts of the accepted run (GitHub artifacts `retained_<variant>_a1`, kept 14 days):
+
+| Variant | Kind | Plaintext SHA-256 | Plaintext bytes | Ciphertext bytes |
+|---|---|---|---|---|
+| `android-staging-apk` | apk | `f921777778bff99422f4fcf23267a7adbef10af5ce54cf14e327d5b9e08b940f` | 100420992 | 100445802 |
+| `android-production-apk` | apk | `c2c0dd82fca08aa8e851a613fdda95ac723d94ad0f513e395a0fc7d2917cf922` | 100404524 | 100429334 |
+| `android-production-aab` | aab | `aea868bc5f55d6b505972d7684214174beca1e736148acf4db58dcd7cde32581` | 85711805 | 85733015 |
+| `ios-staging` | ios-xcarchive | `feb6723ee37ff02be75b54e6a0d9044f2c3f4af0c5c5b0b14cf307f632dd5852` | 65538015 | 65554313 |
+| `ios-production` | ios-xcarchive | `e85660448939f5401c53c0a3eab0eb0dcca9948f8375a40e50112ab4370dacca` | 65536850 | 65553148 |
+
+Checked **outside the build jobs**, on a fresh download of the run's artifacts:
+
+1. `retain_artifact.py verify --repo . --against <the run's build-evidence>` without a key: OK for all five.
+   `build_manifest.py verify` for each manifest and `verify-dir` with its cross-checks: OK.
+2. Decryption with the demonstration private key by an **independent implementation written from the
+   age v1 specification** (X25519, HKDF-SHA256, ChaCha20-Poly1305 STREAM, header MAC), not the age
+   binary. In the build jobs the pinned age binary had already decrypted every file with the
+   one-time key and compared it (the recorded round trip). Then `retain_artifact.py unpack` with that
+   decryptor: OK for all five (checksum, size, content digest, archive structure and unsigned state).
+3. The recovered APKs and the AAB have the SHA-256 and size that the **original** build manifest, the
+   text evidence and the retained manifest all record, and pass a zip integrity check.
+4. The recovered iOS archives: `Runner.xcarchive` with `Products/Applications/Runner.app` and 12 dSYM
+   bundles; bundle ID, version `1.0.4`, build `1000035`, SDK `iphoneos26.2`, Xcode `2630`, arm64;
+   `ApplicationProperties` has an empty `SigningIdentity` and `Team`; no `_CodeSignature`, no embedded
+   profile; the application digest, executable digest and Dart snapshot digest equal the evidence of
+   the run; `tool/verify_artifact.sh ios` run locally on the recovered application: OK.
+5. Exposure scan of the run's public logs (166 files) and artifacts: the demonstration secret key
+   appears nowhere; no string shaped like an age secret key; no PEM private key, token or credential
+   marker (the only hits are two existing test names, `gitignore: ... key.properties / .p8 is ignored`);
+   every ciphertext starts with the age header; the only other files are the four small text/JSON
+   files (the largest is 3.4 KB); no file in the public artifacts has zip or gzip magic. Every job's
+   `GITHUB_TOKEN` was `Contents: read, Metadata: read`; no secret and no environment is used.
+6. `production` stayed `42d358a` and `staging` `f7e0bd5`; the runs were `workflow_dispatch` on the
+   issue branch only; no run started on `production` or `staging`; no application, dependency,
+   other workflow or release-record file is in the change.
+
+**Not shown.** Android: signing the retained file with an upload key and the signature-independent
+content digest on a real re-signed artifact (the digest is unit-tested on synthetic archives), Play
+acceptance, and a device install. The local checks could not run `aapt2` (no Android SDK on the
+reviewer's machine); the CI job ran `tool/verify_artifact.sh` on the same file before packing.
+iOS: Apple distribution signing of the archive; whether `xcodebuild -exportArchive` accepts an
+archive built unsigned and re-signs the 15 embedded frameworks correctly; the entitlements the export
+would carry (the archive has none, so no `aps-environment`); App Store Connect validation of the
+result; and installation or launch on a device. None of these can be shown without Apple-authorised
+signing material and a Mac, which is Stage 3.
