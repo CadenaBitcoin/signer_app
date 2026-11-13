@@ -74,6 +74,7 @@ request:
 | T2 | **Configuration lands (step 4), then flavors (step 6).** While the legacy path still works, the new mechanism is additive and the validation workflows keep passing. Fail-closed is then switched on **in the same pull request that adds the explicit configuration (and `--flavor`) to both validation workflows' build commands.** | **Must change, deliberately.** Once configuration is mandatory, `flutter build apk --debug` and `flutter build ios --release --no-codesign` without it fail, as intended. The change is small, reviewed, and shown green with a manual run before merge. |
 | T3 | New signed workflows as **new files**: staging on push to `staging`, production on push to `production`, using the protected environments | Validation workflows keep running beside them. No dependency between the two sets unless later decided. |
 | T4 | Decide whether validation stays as a fast unsigned check (for example as a required status check) or retires | Never removed without approval |
+| Stage 2 of #54 (retained artifacts) | `build-variants.yml` can keep each verified Android APK/AAB and unsigned iOS `.xcarchive`, encrypted to public keys, with checksums and manifests ([RETAINED_ARTIFACTS.md](RETAINED_ARTIFACTS.md)). It is the credential-free input of the signing stages T3 and 8 to 12; it signs and uploads nothing | Untouched; the validation workflows keep their meaning |
 
 Other consequences to schedule: the iOS workflows moved to Xcode 26.3 on `macos-15` with
 Issue #70 (step 3; hosted proof is recorded in `docs/IOS_CI.md`);

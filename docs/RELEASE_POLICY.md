@@ -171,7 +171,9 @@ Rules common to all five:
   artifact is therefore never left as an ordinary Actions artifact, a GitHub
   Release or a pull request attachment before its distribution is authorized
   (section 8.2). Digests and the release record, which contain no binary, may be
-  public.
+  public. An artifact kept **encrypted to the custodians' public keys**
+  ([RETAINED_ARTIFACTS.md](RETAINED_ARTIFACTS.md), Stage 2) is ciphertext and is not retrievable
+  in this sense; a readable artifact is still never uploaded.
 - Successful compilation is not signing and signing is not distribution. The CI
   validation builds (section 4) are none of the five.
 
@@ -492,6 +494,7 @@ without a record, or from a commit that was not approved, is not official.
 | `development`, `staging` | Exist, protected |
 | `production` | Exists, protected (created at the adopted baseline `7b63c97`, Issue #68); compile-only builds only |
 | Android CI validation (debug-signed APK), iOS CI validation (unsigned `Runner.app`) | Working; unchanged; **not** among the five artifacts |
+| Retained build artifacts (Stage 2, issue #54): verified Android APK/AAB and unsigned iOS `.xcarchive`, kept **encrypted** to public keys, with checksums, manifests and evidence | Implemented for review ([RETAINED_ARTIFACTS.md](RETAINED_ARTIFACTS.md)); retention on promotions is off until `config/release/artifact_recipients.txt` lists a key |
 | Signing credentials, protected release environments, release workflows | **None** |
 | Tags, GitHub Releases | None |
 | Separate staging application ID / bundle ID / App Store Connect record | Android: the `staging` flavor builds `com.cadenabitcoin.mobile.signer.staging` (not registered in Google Play); iOS: the `staging` flavor builds `com.app.cadenabitcoin.staging` (not registered with Apple). No App Store Connect record |

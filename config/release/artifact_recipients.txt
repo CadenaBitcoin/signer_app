@@ -1,0 +1,20 @@
+# Who can read the retained build artifacts (docs/RETAINED_ARTIFACTS.md).
+#
+# One age PUBLIC key per line (age1 followed by 58 characters), nothing else. Public keys are not
+# secrets. The private half of a key pair (the line that age-keygen prints as the secret) must NEVER
+# be written here, in the repository, in a chat or in a log: tool/retain_artifact.py refuses it.
+#
+# What this file decides:
+#   - EMPTY (as now): a push to `staging` or `production` retains nothing, exactly as before
+#     Stage 2. A manual run can still retain, to a public key given as a run input (demonstrations).
+#   - ONE OR MORE KEYS: every promotion encrypts each verified build to these keys and keeps the
+#     ciphertext for 14 days. Only a holder of a matching private key can open it.
+#
+# Adding or removing a key is a reviewed pull request by the release authority. The key holders
+# generate their own key pair (`age-keygen`) and send only the public key line. Rotation: add the
+# new key, remove the old one; retained files already encrypted stay readable by the old key only
+# until they expire.
+#
+# Intended holders (to be decided and recorded by the release authority, none is configured yet):
+#   - the release custodians who retrieve unsigned builds by hand;
+#   - the key used by the Stage 3 signing job (a dedicated key kept in the protected environment).

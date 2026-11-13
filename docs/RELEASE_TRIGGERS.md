@@ -91,6 +91,8 @@ runs do not need, and do not imitate, a promotion: they are for validating a fea
 branch, re-checking a variant, or the pre-merge test of workflow changes.
 
 The group names `staging` / `production` are not manual choices; they exist only for pushes.
+Two further inputs control retention and nothing else: **retain** (default off) and **recipient**
+(an age *public* key; never a secret key). See "Retained artifacts" below.
 
 ## One implementation, three decision points
 
@@ -147,11 +149,24 @@ run. Runs of the existing Android and iOS validation workflows are independent.
 
 Text evidence (identity, version, signing status, SHA-256, run metadata) and a JSON build
 manifest (`tool/build_manifest.py`, see [RELEASE_VERSIONING.md](RELEASE_VERSIONING.md)), one
-of each per variant, uploaded per run. **No application binary is uploaded.** A green
+of each per variant, uploaded per run. **No plaintext application binary is uploaded.** A green
 `verdict` means:
 the selected variants compiled, were read back as the right application, and nothing else
 ran. It does **not** mean the build is installable as an official app, signed, tested on a
 device, tagged or approved for release.
+
+## Retained artifacts (Stage 2)
+
+A run can also **keep** the verified artifact, encrypted to public keys, so that a later signing
+stage can sign exactly what was verified ([RETAINED_ARTIFACTS.md](RETAINED_ARTIFACTS.md)). The
+plan job decides it (`tool/retain_artifact.py plan`): a push to `staging` or `production` retains
+only if `config/release/artifact_recipients.txt` lists a key (it is empty: nothing changes for
+promotions); a manual run retains when **retain** is ticked, with the committed keys plus an
+optional public key in **recipient**. Retention is not a new variant and not a new job: it is the
+last steps of the existing build jobs and two extra checks of the `verdict` job, and a run that
+retains is green only if every required variant produced a verified bundle. The artifacts are
+ciphertext (`retained_<variant>_a<attempt>`, 14 days), so the permissions stay `contents: read`
+and no secret or environment is involved.
 
 ## Failure handling
 

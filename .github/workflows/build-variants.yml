@@ -19,10 +19,16 @@
 #   - It is not signing and not distribution. Android release builds keep the repository's
 #     temporary debug signing; iOS builds are unsigned (--no-codesign). None of the five is
 #     installable as an official build, and none is distributable.
-#   - It uploads NO application binary. Only small text evidence files (identity, version,
+#   - It uploads NO plaintext application binary. Small text evidence files (identity, version,
 #     SHA-256 of the artifact, signer status, run metadata) and one JSON build manifest per
-#     variant (tool/build_manifest.py; docs/RELEASE_VERSIONING.md) are uploaded; the binaries
-#     stay on the runner. Production binaries are deliberately never retained.
+#     variant (tool/build_manifest.py; docs/RELEASE_VERSIONING.md) are always uploaded.
+#   - RETAINED ARTIFACTS (Stage 2, docs/RETAINED_ARTIFACTS.md): when retention is on, the verified
+#     artifact (Android APK/AAB; iOS unsigned .xcarchive) is also kept, but only ENCRYPTED to the
+#     public keys of the release custodians (config/release/artifact_recipients.txt, or a public
+#     key given to a manual run) and next to its checksums, build manifest and evidence. The
+#     public run therefore exposes ciphertext only; the runner holds no key that can read it.
+#     Retention is on for a push exactly when that file lists a key (it is empty today: nothing
+#     changes for pushes), and for a manual run when `retain` is chosen.
 #   - It has no secrets, no deployment permission and no write access.
 #
 # Coordinated AND individual execution, from one set of build jobs:
@@ -67,11 +73,25 @@ on:
           - android-production-apk
           - android-production-aab
           - ios-production
+      retain:
+        description: Also keep the verified artifacts, encrypted to the recipients (Stage 2; docs/RETAINED_ARTIFACTS.md)
+        type: boolean
+        required: false
+        default: false
+      recipient:
+        description: Optional age PUBLIC key (age1...) to encrypt to, in addition to the committed recipients. Never a secret key.
+        type: string
+        required: false
+        default: ""
 
 # Least privilege: the jobs only read the repository. No release, no write access, and no
 # secret of any kind is used.
 permissions:
   contents: read
+
+env:
+  # How long GitHub keeps a retained (encrypted) artifact. Days, not weeks (docs/RELEASE_VERSIONING.md).
+  RETENTION_DAYS: "14"
 
 # Every promotion is built, none is superseded: the group of a push contains its commit, so
 # two quick merges never replace each other's pending run (GitHub keeps only one pending run
@@ -79,7 +99,7 @@ permissions:
 # selection is part of the group; repeating the SAME manual run on the same commit replaces
 # the older one.
 concurrency:
-  group: build-variants-${{ github.event_name }}-${{ github.ref }}-${{ github.sha }}-${{ inputs.variant }}
+  group: build-variants-${{ github.event_name }}-${{ github.ref }}-${{ github.sha }}-${{ inputs.variant }}-${{ inputs.retain }}
   cancel-in-progress: ${{ github.event_name == 'workflow_dispatch' }}
 
 jobs:
@@ -100,6 +120,9 @@ jobs:
       has_ios: ${{ steps.plan.outputs.has_ios }}
       android_matrix: ${{ steps.plan.outputs.android_matrix }}
       ios_matrix: ${{ steps.plan.outputs.ios_matrix }}
+      retain: ${{ steps.retention.outputs.retain }}
+      recipients: ${{ steps.retention.outputs.recipients }}
+      recipient_count: ${{ steps.retention.outputs.recipient_count }}
     steps:
       - name: Checkout exact commit
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
@@ -132,6 +155,16 @@ jobs:
       - name: Test the Android release signing and verification (credential-free)
         run: tool/test_android_release.sh
 
+      # The retained-artifact tool and its checks (Stage 2, docs/RETAINED_ARTIFACTS.md). They need
+      # the pinned age (tool/install_age.sh), and they fail rather than skip when it is missing.
+      - name: Install the pinned age
+        run: tool/install_age.sh
+
+      - name: Test the retained-artifact tool (encryption, round trip, tampering, access rules)
+        env:
+          CADENA_REQUIRE_AGE: "1"
+        run: tool/test_retained_artifacts.sh
+
       - name: Plan
         id: plan
         env:
@@ -155,6 +188,24 @@ jobs:
             echo "Required variants ($(sed -n 's/^count=//p' "$RUNNER_TEMP/plan.txt")): \`$(sed -n 's/^variants=//p' "$RUNNER_TEMP/plan.txt")\`"
             echo
             echo "Trigger: \`$EVENT_NAME\` on \`$REF\`. Variants not listed are not executed and not required."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      # Retention is a separate decision from the build selection: it needs recipients (public
+      # keys), and without any it is off. Public data only: a public key is not confidential.
+      - name: Retention (are the verified artifacts kept, and for whom?)
+        id: retention
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          INPUT_RETAIN: ${{ inputs.retain }}
+          INPUT_RECIPIENT: ${{ inputs.recipient }}
+        run: |
+          python3 -I tool/retain_artifact.py plan --event "$EVENT_NAME" --retain "$INPUT_RETAIN" --recipient "$INPUT_RECIPIENT" \
+            --recipients-file config/release/artifact_recipients.txt > "$RUNNER_TEMP/retention.txt"
+          cat "$RUNNER_TEMP/retention.txt" >> "$GITHUB_OUTPUT"
+          {
+            echo "### Retention: $(sed -n 's/^retain=//p' "$RUNNER_TEMP/retention.txt")"
+            echo
+            echo "Recipients: $(sed -n 's/^recipient_count=//p' "$RUNNER_TEMP/retention.txt") (source: \`$(sed -n 's/^source=//p' "$RUNNER_TEMP/retention.txt")\`). $(sed -n 's/^note=//p' "$RUNNER_TEMP/retention.txt")"
           } >> "$GITHUB_STEP_SUMMARY"
 
   # ---------------------------------------------------------------------------------------
@@ -405,6 +456,32 @@ jobs:
           if-no-files-found: error
           retention-days: 14
 
+      # Stage 2: the artifact that was just verified is kept, ENCRYPTED to the recipients. The
+      # file packed is the one verify_artifact.sh read (its SHA-256 must equal the evidence).
+      - name: Install the pinned age
+        if: ${{ needs.plan.outputs.retain == 'true' }}
+        run: tool/install_age.sh
+
+      - name: Retain the verified artifact (encrypted; checksums, manifest and evidence alongside)
+        if: ${{ needs.plan.outputs.retain == 'true' }}
+        env:
+          RECIPIENTS: ${{ needs.plan.outputs.recipients }}
+        run: |
+          python3 -I tool/retain_artifact.py write-recipients --list "$RECIPIENTS" --out "$RUNNER_TEMP/recipients.txt"
+          python3 -I tool/retain_artifact.py pack --variant "$BUILD_VARIANT" --kind "$BUILD_KIND" --artifact "$ARTIFACT_PATH" \
+            --evidence "evidence/$BUILD_VARIANT.txt" --manifest "evidence/$BUILD_VARIANT.manifest.json" \
+            --recipients "$RUNNER_TEMP/recipients.txt" --out retained --retention-days "$RETENTION_DAYS"
+          ls -l retained
+
+      - name: Upload the retained artifact (ciphertext, checksums, manifests)
+        if: ${{ needs.plan.outputs.retain == 'true' }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: retained_${{ matrix.variant }}_a${{ github.run_attempt }}
+          path: retained/
+          if-no-files-found: error
+          retention-days: ${{ env.RETENTION_DAYS }}
+
   # ---------------------------------------------------------------------------------------
   # The matrix (variant, env, other) comes from the plan.
   ios:
@@ -436,6 +513,9 @@ jobs:
       # Prebuilt Rust static library linked by the dlc_wallet plugin; never rebuilt here.
       RUST_LIB: flutter_plugin/flutter_plugin/ios/Classes/libdlcplazacryptlib.a
       EXPECTED_RUST_LIB_SHA256: 203dcd7abe4187de0b756638a55f691b2d5c680b17d4fbfa7dda550ed703949b
+      # Stage 2: when the run retains artifacts, the unsigned ARCHIVE is built (and verified) instead
+      # of a separate Runner.app, so the application that is verified is the one that is kept.
+      RETAIN: ${{ needs.plan.outputs.retain }}
     steps:
       - name: Checkout exact commit
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
@@ -540,14 +620,39 @@ jobs:
       # The output is also kept (text only, in the diagnostics artifact) so that a compiler or
       # CocoaPods failure under the new toolchain can be read and reported exactly.
       - name: Build (${{ matrix.variant }})
+        if: ${{ needs.plan.outputs.retain != 'true' }}
         run: |
           set -o pipefail
           mkdir -p diagnostics
           flutter build ios --release --no-codesign --flavor "$BUILD_ENV" --dart-define-from-file="$BUILD_CONFIG_FILE" 2>&1 | tee diagnostics/build.log
 
+      # Stage 2 (retention): the unsigned archive that a later signing stage exports (Route B of
+      # docs/IOS_SIGNING.md). `flutter build ipa --no-codesign` archives with CODE_SIGNING_ALLOWED=NO
+      # and skips the export. The application INSIDE the archive is then located, verified, drifted-
+      # checked and recorded below exactly like the Runner.app of the other build, so the evidence
+      # and the manifest describe what is kept. (A separate `flutter build ios` is a second compile
+      # and is not bit-identical to the archive's application: observed in the first demonstration.)
+      - name: Build and archive, unsigned (${{ matrix.variant }}, retention)
+        if: ${{ needs.plan.outputs.retain == 'true' }}
+        run: |
+          set -o pipefail
+          mkdir -p diagnostics
+          flutter build ipa --release --no-codesign --flavor "$BUILD_ENV" --dart-define-from-file="$BUILD_CONFIG_FILE" 2>&1 | tee diagnostics/build.log
+          archive=build/ios/archive/Runner.xcarchive
+          if [ ! -d "$archive/Products/Applications/Runner.app" ]; then
+            echo "::error::flutter build ipa --no-codesign produced no $archive/Products/Applications/Runner.app"
+            find build/ios/archive -maxdepth 4 2>/dev/null | head -n 40 || true
+            exit 1
+          fi
+          echo "ARCHIVE_PATH=$archive" >> "$GITHUB_ENV"
+          echo "BUILD_COMMAND=flutter build ipa --release --no-codesign --flavor $BUILD_ENV --dart-define-from-file=$BUILD_CONFIG_FILE" >> "$GITHUB_ENV"
+
       - name: Locate the built app
         run: |
           app="build/ios/Release-${BUILD_ENV}-iphoneos/Runner.app"
+          if [ "$RETAIN" = true ]; then
+            app="$ARCHIVE_PATH/Products/Applications/Runner.app"
+          fi
           if [ ! -d "$app" ]; then
             app="$(find build/ios -maxdepth 3 -type d -name Runner.app -print 2>/dev/null | sort | head -n1 || true)"
           fi
@@ -590,7 +695,7 @@ jobs:
           mkdir -p evidence
           {
             echo "variant=$BUILD_VARIANT"
-            echo "build_command=flutter build ios --release --no-codesign --flavor $BUILD_ENV --dart-define-from-file=$BUILD_CONFIG_FILE"
+            echo "build_command=${BUILD_COMMAND:-flutter build ios --release --no-codesign --flavor $BUILD_ENV --dart-define-from-file=$BUILD_CONFIG_FILE}"
             echo "config_file=$BUILD_CONFIG_FILE"
             echo "config_file_sha256=$(shasum -a 256 "$BUILD_CONFIG_FILE" | awk '{print $1}')"
             echo "commit=$GITHUB_SHA"
@@ -623,6 +728,30 @@ jobs:
           path: evidence/
           if-no-files-found: error
           retention-days: 14
+
+      - name: Install the pinned age
+        if: ${{ needs.plan.outputs.retain == 'true' }}
+        run: tool/install_age.sh
+
+      - name: Retain the verified archive (encrypted; checksums, manifest and evidence alongside)
+        if: ${{ needs.plan.outputs.retain == 'true' }}
+        env:
+          RECIPIENTS: ${{ needs.plan.outputs.recipients }}
+        run: |
+          python3 -I tool/retain_artifact.py write-recipients --list "$RECIPIENTS" --out "$RUNNER_TEMP/recipients.txt"
+          python3 -I tool/retain_artifact.py pack --variant "$BUILD_VARIANT" --kind ios-xcarchive --artifact "$ARCHIVE_PATH" \
+            --evidence "evidence/$BUILD_VARIANT.txt" --manifest "evidence/$BUILD_VARIANT.manifest.json" \
+            --recipients "$RUNNER_TEMP/recipients.txt" --out retained --retention-days "$RETENTION_DAYS"
+          ls -l retained
+
+      - name: Upload the retained archive (ciphertext, checksums, manifests)
+        if: ${{ needs.plan.outputs.retain == 'true' }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: retained_${{ matrix.variant }}_a${{ github.run_attempt }}
+          path: retained/
+          if-no-files-found: error
+          retention-days: ${{ env.RETENTION_DAYS }}
 
       # Diagnostics for the Podfile.lock drift investigation and for build failures (Issue #70):
       # the build output, the CocoaPods version, the Podfile.lock diff and the regenerated lock.
@@ -672,6 +801,8 @@ jobs:
       HAS_IOS: ${{ needs.plan.outputs.has_ios }}
       REQUIRED_VARIANTS: ${{ needs.plan.outputs.variants }}
       SELECTION: ${{ needs.plan.outputs.selection }}
+      RETAIN: ${{ needs.plan.outputs.retain }}
+      RUN_ATTEMPT: ${{ github.run_attempt }}
     steps:
       - name: Checkout exact commit
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
@@ -690,6 +821,25 @@ jobs:
           pattern: build-evidence_*_a${{ github.run_attempt }}
           merge-multiple: true
           path: evidence
+
+      # Retention is required exactly when the plan asked for it: every required variant has its
+      # retained bundle, no other one exists, and each bundle verifies (ciphertext, checksums,
+      # and its manifest and evidence equal the verified build's).
+      - name: Download the retained artifacts
+        if: ${{ needs.plan.outputs.retain == 'true' }}
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          pattern: retained_*_a${{ github.run_attempt }}
+          path: retained
+
+      - name: Retained artifacts correspond to the verified builds
+        if: ${{ needs.plan.outputs.retain == 'true' }}
+        run: |
+          ls -l retained
+          tool/check_verdict.sh retained retained
+          for v in $REQUIRED_VARIANTS; do
+            python3 -I tool/retain_artifact.py verify "retained/retained_${v}_a${RUN_ATTEMPT}" --repo . --against evidence
+          done
 
       - name: Evidence check, cross-artifact checks and summary
         run: |
@@ -719,7 +869,7 @@ jobs:
           {
             echo "## Build variants ($SELECTION): all required variants compiled and verified"
             echo
-            echo "No signing credentials. Android: temporary debug signing; iOS: unsigned. **None of these is distributable**, and no binary was uploaded."
+            echo "No signing credentials. Android: temporary debug signing; iOS: unsigned. **None of these is distributable**, and no plaintext binary was uploaded."
             echo
             echo "| Variant | Application ID | Name | Version | Build | Signing | SHA-256 |"
             echo "|---|---|---|---|---|---|---|"
@@ -727,3 +877,24 @@ jobs:
               echo "| $v | \`$(get "$v" application_id)\` | $(get "$v" display_name) | $(get "$v" version_name) | $(get "$v" version_code) | $(get "$v" signing) | \`$(get "$v" artifact_sha256 | cut -c1-16)\` |"
             done
           } >> "$GITHUB_STEP_SUMMARY"
+          if [ "${RETAIN:-false}" = true ]; then
+            {
+              echo
+              echo "### Retained artifacts (encrypted; only the recipients' key holders can open them)"
+              echo
+              echo "| Variant | Plaintext SHA-256 | Ciphertext SHA-256 | Size | Retained as |"
+              echo "|---|---|---|---|---|"
+              for v in $REQUIRED_VARIANTS; do
+                r="retained/retained_${v}_a${RUN_ATTEMPT}/$v.retained.json"
+                python3 -I - "$r" "$v" <<'PY' >> "$GITHUB_STEP_SUMMARY"
+          import json, sys
+          r = json.load(open(sys.argv[1]))
+          a, e = r["artifact"], r["encryption"]["ciphertext"]
+          print("| %s | `%s` | `%s` | %d | `%s` (%s) |" % (sys.argv[2], a["plaintext"]["sha256"], e["sha256"], e["size"], a["plaintext"]["file_name"] + ".age", a["kind"]))
+          PY
+              done
+            } >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo >> "$GITHUB_STEP_SUMMARY"
+            echo "Retention: off for this run (no recipient configured or not requested); nothing was kept." >> "$GITHUB_STEP_SUMMARY"
+          fi
