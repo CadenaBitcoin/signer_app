@@ -281,7 +281,12 @@ p=sys.argv[1]; d=json.load(open(p)); d["upload"]["active_sha256"]=sys.argv[2]; j
   # a wrong version in the repository
   mkrepo "$tmp/fxver"
   sed -i.bak 's/^version: .*/version: 1.0.3+1000099/' "$tmp/fxver/pubspec.yaml"; rm -f "$tmp/fxver/pubspec.yaml.bak"
-  expect_rc "apk: a versionCode that differs from pubspec.yaml is refused" 1 "versionCode '1000034' != pubspec 1000099" VX "$tmp/fxver" apk production "$tmp/up.apk" --expect-cert-sha256 "$FP_UP"
+  # The artifact's own versionCode is read from the artifact (aapt2), so the case keeps working when the real
+  # artifact is from another release (it was hard-coded to 1000034, the previous release). The repository copy
+  # claims 1000099, which the artifact cannot match: the verifier must still refuse it.
+  APK_CODE="$("${ABT}aapt2" dump badging "$REAL_APK" 2>/dev/null | sed -n "s/^package: .*versionCode='\([0-9]*\)'.*/\1/p" | head -n1)"
+  t "apk: the real APK's versionCode is readable and is not the 1000099 of the mismatched repository copy" test -n "$APK_CODE" -a "$APK_CODE" != 1000099
+  expect_rc "apk: a versionCode that differs from pubspec.yaml is refused" 1 "versionCode '$APK_CODE' != pubspec 1000099" VX "$tmp/fxver" apk production "$tmp/up.apk" --expect-cert-sha256 "$FP_UP"
 
   # native libraries: altered, missing ABI, mis-aligned
   mutate_zip() { # IN OUT PYTHON_BODY (variables: zin, zout, names)
