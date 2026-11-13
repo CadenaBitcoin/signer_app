@@ -146,20 +146,44 @@ today (section 8). What a signing job must do, and what is already provided:
 bundle with a key that is a recipient (`unpack`), and refuses to continue unless `verify` with that
 key passes and the retained manifest's commit is the one the release authority approved.
 
-**Android (AAB for Google Play, APK for the website).**
-1. `unpack` gives the debug-signed file; its `content.sha256` is the signature-independent digest.
-2. Remove the debug signature and sign with the Cadena upload key: for an AAB delete the
-   `META-INF/*.SF|*.RSA|*.DSA|*.EC` entries and `META-INF/MANIFEST.MF`, then `jarsigner` with the upload
-   key; for an APK `apksigner sign` (it replaces an existing signature) after `zipalign`.
-3. Compute the same content digest of the signed file (`zip_content_digest` in
-   `tool/retain_artifact.py`) and require equality with the retained manifest: the signed artifact
-   contains exactly the verified entries. Then run the existing release verifier
-   (`tool/verify_android_release.py`, [ANDROID_RELEASE.md](ANDROID_RELEASE.md) section 4) for the
-   certificate fingerprint, schemes and ledger gate.
-   Re-signing keeps the verified bits; the alternative of the existing procedure
-   (`tool/release_android.sh`: rebuild the commit with `CADENA_SIGNING=release`) stays valid and
-   is what produced 1.0.4; a signing job may prefer it, in which case the retained debug-signed file is
-   the reference for comparing the content digest.
+**Android AAB (for Google Play): implemented offline by `tool/resign_android_aab.py` (Stage 3B).**
+
+```bash
+# the key holder's identity for the retained bundle, and the upload keystore supplied from OUTSIDE the repository
+# (the same variables as android/app/build.gradle.kts: CADENA_KEYSTORE_FILE, CADENA_KEY_ALIAS,
+#  CADENA_KEYSTORE_PASSWORD, CADENA_KEY_PASSWORD, or CADENA_SIGNING_PROPERTIES)
+python3 -I tool/resign_android_aab.py sign retained_android-production-aab_aN --identity age-identity.txt \
+  --expect-cert-sha256 <upload certificate SHA-256> --out OUT
+python3 -I tool/resign_android_aab.py verify OUT --expect-cert-sha256 <upload certificate SHA-256>
+```
+
+`sign` recovers and verifies the retained bundle (`retain_artifact.py`), refuses anything that is not the
+production AAB of a debug-signed compile-validation build, removes exactly the signature entries
+(`META-INF/MANIFEST.MF`, `*.SF`, `*.RSA`, `*.DSA`, `*.EC`), proves the content digest unchanged, signs with
+`jarsigner` (`-digestalg SHA-256`, `-sigalg SHA256withRSA`; passwords only through the child's environment) after
+checking that the keystore's certificate equals the **required** expected fingerprint, and verifies the result: the
+content digest again, `jarsigner`, and
+`tool/verify_android_release.py aab` (which reads the bundle with the pinned bundletool: identity, signature,
+certificate class, native libraries, ledgers). Any failure
+leaves nothing behind. `OUT` holds the signed AAB (`...upload-signed.aab`), `signing-record.json`
+(`cadena-resigned-artifact/1`: source commit, run, original plaintext/ciphertext/content digests, signed digest and
+content digest, the signer's certificate, the signature entries removed and added, the algorithms, the verification
+result), the verifier's output, copies of the retained manifest, build manifest and evidence, and `SHA256SUMS`.
+`verify` re-checks all of it later, for example immediately before an upload. The signed file has **another SHA-256 than
+the retained one** by construction; the **content digest** is what must not change, and the record shows both.
+
+*Why re-sign and not rebuild.* Two clean builds of one commit differ in exactly one AAB entry,
+`BUNDLE-METADATA/com.android.tools.build.libraries/dependencies.pb` (a 32-byte dependency digest), whether or not the
+build is validation- or release-mode signed (measured: validation, release with a disposable key, validation again; the
+other 1601 entries, including every native library and `libapp.so`, were byte-identical). A rebuild with
+`CADENA_SIGNING=release` would therefore not carry the verified content digest. Re-signing the retained file does.
+
+**Not shown.** That Google Play accepts the re-signed bundle (only an authorized upload shows that), signing with the
+real upload key (none was used), and CI integration (no workflow runs this tool and no secret exists).
+
+**Android APK (website), not implemented.** `apksigner sign` replaces an existing signature after `zipalign`; the
+signature-independent content digest and the verifier apply in the same way. The website APK is signed with the upload
+key and is not update-compatible with Google Play installations ([ANDROID_RELEASE.md](ANDROID_RELEASE.md) section 1).
 
 **iOS (App Store Connect / TestFlight).**
 1. `unpack` gives `OUT/Runner.xcarchive` with `Products/Applications/Runner.app` (unsigned) and `dSYMs/`.
