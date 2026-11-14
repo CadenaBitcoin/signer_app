@@ -11,6 +11,7 @@ import 'package:signer/src/ui/widgets/primaryButton.dart';
 
 import '../../../services/storage_service.dart';
 import '../widgets/bottomNavbar.dart';
+import '../widgets/security_help_link.dart';
 
 class SignInScreen extends StatefulWidget {
   const SignInScreen({super.key});
@@ -203,6 +204,8 @@ class _SignInScreenState extends State<SignInScreen> {
                   text: "Proceed",
                   onTap: handleProceed,
                 ),
+                const SizedBox(height: 8),
+                const SecurityHelpLink(),
                 SizedBox(height: MediaQuery.of(context).viewPadding.bottom + 16),
               ],
             ),

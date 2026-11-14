@@ -6,6 +6,7 @@ import 'package:signer/src/ui/screens/mnemonic_screen.dart';
 
 import '../theme/colors.dart';
 import '../widgets/primaryButton.dart';
+import '../widgets/security_help_link.dart';
 
 class ChooseOptionScreen extends StatefulWidget {
   final String email;
@@ -128,6 +129,7 @@ class _ChooseOptionScreenState extends State<ChooseOptionScreen> {
                     isLoading: _isLoading,
                     loadingText: 'Generating...',
                   ),
+                  const SecurityHelpLink(),
                   SizedBox(height: MediaQuery.of(context).viewPadding.bottom + 16),
                 ],
               ),

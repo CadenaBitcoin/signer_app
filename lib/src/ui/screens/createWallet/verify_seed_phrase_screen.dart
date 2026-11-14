@@ -236,6 +236,16 @@ class _ConfirmSeedPhraseScreenState extends State<ConfirmSeedPhraseScreen> {
         // }
         // );
       }
+    } else {
+      appController.userUpgradeLoader.value = false;
+      Get.snackbar(
+        'Backup not confirmed',
+        'Those words do not match your seed phrase. Check the backup you wrote down and try again.',
+        snackPosition: SnackPosition.BOTTOM,
+        backgroundColor: errorColor.value,
+        colorText: primaryTextColor.value,
+        duration: const Duration(seconds: 4),
+      );
     }
   }
 
@@ -264,6 +274,11 @@ class _ConfirmSeedPhraseScreenState extends State<ConfirmSeedPhraseScreen> {
                     fontSize: 16,
                     fontWeight: FontWeight.bold,
                   ),
+                ),
+                const SizedBox(height: 8),
+                Text(
+                  "This checks the backup you wrote down. A wrong word is not saved, and Cadena cannot restore the seed later.",
+                  style: TextStyle(color: subTextColor.value, height: 1.35),
                 ),
                 const SizedBox(height: 16),
                 Row(

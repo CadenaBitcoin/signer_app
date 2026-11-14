@@ -8,6 +8,7 @@ import 'package:signer/src/ui/screens/verify_password_screen.dart';
 import '../../../services/storage_service.dart';
 import '../theme/app_Text_Styles.dart';
 import '../theme/colors.dart';
+import '../widgets/security_video_launch_gate.dart';
 import 'onBoarding.dart';
 
 class SplashScreen extends StatefulWidget {
@@ -42,23 +43,23 @@ class _SplashScreenState extends State<SplashScreen> {
 
       if (isFirstTime == null) {
         await storage.write(key: 'onboarding_seen', value: 'true');
-        Get.off(() => OnboardingScreen());
+        Get.off(() => const SecurityVideoLaunchGate(child: OnboardingScreen()));
         return;
       }
 
       if (userData != null &&
           (userData['email']?.isNotEmpty == true ||
               userData['password']?.isNotEmpty == true)) {
-        Get.off(() => VerifyPasswordScreen());
+        Get.off(() => const SecurityVideoLaunchGate(child: VerifyPasswordScreen()));
       } else if (userData == null) {
-        Get.off(() => SignInScreen());
+        Get.off(() => const SecurityVideoLaunchGate(child: SignInScreen()));
       } else {
-        Get.off(() => VerifyPasswordScreen());
+        Get.off(() => const SecurityVideoLaunchGate(child: VerifyPasswordScreen()));
       }
     } catch (e) {
       print('Error in splash screen navigation: $e');
       // Fallback to onboarding if there's any error
-      Get.off(() => OnboardingScreen());
+      Get.off(() => const SecurityVideoLaunchGate(child: OnboardingScreen()));
     }
   }
 
