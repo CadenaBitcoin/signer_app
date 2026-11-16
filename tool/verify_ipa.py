@@ -2,6 +2,7 @@
 """Independent verification of a signed iOS IPA, before anything is uploaded.
 
   tool/verify_ipa.py verify ENV IPA --team-id TEAM [options]
+  tool/verify_ipa.py certificate RUNNER_APP_OR_IPA [--pem FILE] [--team-id TEAM] [--trust-anchors PEM]
   tool/verify_ipa.py structure RUNNER_APP_OR_IPA
   tool/verify_ipa.py compare UNSIGNED_RUNNER_APP SIGNED_RUNNER_APP_OR_IPA
   tool/verify_ipa.py analyze-unsigned RUNNER_APP_DIR
@@ -573,6 +574,11 @@ def verify(args):
                       "entitlement com.apple.developer.team-identifier is '%s', expected %s" % (ents.get("com.apple.developer.team-identifier"), team))
             rep.check(not ents.get("get-task-allow"), "get-task-allow is absent or false (not debuggable)",
                       "get-task-allow is true (a development entitlement)")
+            for key in args.forbid_entitlement:
+                rep.check(key not in ents, "entitlement %s is absent, as required" % key,
+                          "entitlement %s is present (%r) but the release record requires it to be absent" % (key, ents.get(key)))
+            for key in sorted(ents):
+                rep.ev("entitlement." + key, repr(ents[key]))
             if "aps-environment" in ents:
                 rep.check(ents["aps-environment"] == "production", "aps-environment is production",
                           "aps-environment is '%s', an App Store build needs production" % ents["aps-environment"])
@@ -718,6 +724,11 @@ def same_code_check(rep, unsigned, signed):
             same_plain += 1
         elif rel.endswith("_CodeSignature/CodeResources"):
             continue
+        elif rel == "embedded.mobileprovision":
+            # A baseline taken from a signed archive (Xcode's automatic signing embeds a development
+            # profile there) legitimately gets the distribution profile at export. The profile is
+            # judged on its own by `verify`; it is never part of the code.
+            continue
         else:
             changed.append(rel)
     rep.ev("same_code_macho_files", same_macho)
@@ -750,6 +761,147 @@ def finish(rep, args, unverified=True):
         return 1
     print("verify_ipa: all %d checks passed (%d warning(s))" % (rep.passed, rep.warned))
     return 0
+
+
+# ---- certificate -------------------------------------------------------------------------------
+
+
+def pem_of(der):
+    import base64
+    b = base64.b64encode(der).decode("ascii")
+    return "-----BEGIN CERTIFICATE-----\n%s\n-----END CERTIFICATE-----\n" % "\n".join(b[i:i + 64] for i in range(0, len(b), 64))
+
+
+def certificate(args):
+    """Collect the PUBLIC signing certificate of an Apple-signed app or IPA, with its SHA-256 fingerprint.
+
+    This is how the fingerprint of a cloud-managed distribution certificate (which exists in no local
+    keychain, so `security find-certificate` cannot show it) is read from the signed artifact itself. It
+    judges nothing and pins nothing: it reports who signed, whether every executable agrees, and what the
+    embedded profile says, so that the fingerprint can be recorded and later pinned with
+    `verify --expect-cert-sha256`. It reads public data only; no private key exists in an IPA."""
+    rep = Report()
+    print("verify_ipa certificate: %s" % os.path.basename(args.target.rstrip("/")))
+    with tempfile.TemporaryDirectory(prefix="verify_ipa_") as tmp:
+        target = args.target
+        if os.path.isfile(target):
+            rep.ev("ipa_sha256", sha256_path(target))
+            app_dir, extra = extract_ipa(target, tmp)
+            if app_dir is None:
+                for p in extra:
+                    rep.fail("container: %s" % p)
+                return finish(rep, args, unverified=False)
+        elif os.path.isdir(target):
+            app_dir = target
+        else:
+            die("%s is neither an .ipa nor a directory" % target)
+        try:
+            with open(os.path.join(app_dir, "Info.plist"), "rb") as f:
+                info = plistlib.load(f)
+            exe_name = info["CFBundleExecutable"]
+        except Exception as e:
+            rep.fail("Info.plist is unreadable: %s" % e)
+            return finish(rep, args, unverified=False)
+        if not isinstance(exe_name, str) or not exe_name or "/" in exe_name or exe_name.startswith("."):
+            rep.fail("CFBundleExecutable %r is not a plain file name" % (exe_name,))
+            return finish(rep, args, unverified=False)
+        rep.ev("bundle_id", info.get("CFBundleIdentifier", ""))
+        rep.ev("version_name", info.get("CFBundleShortVersionString", ""))
+        rep.ev("version_code", info.get("CFBundleVersion", ""))
+
+        signers, main_signer, main_certs = {}, None, None
+        files = [exe_name] + [r for r in all_macho(app_dir) if r != exe_name]
+        for rel in files:
+            path = os.path.join(app_dir, rel)
+            if not os.path.isfile(path):
+                rep.fail("executable '%s' is missing" % rel)
+                continue
+            sig = I.read_signature(path)
+            if sig["error"] or not sig["slices"]:
+                rep.fail("%s: %s" % (rel, sig["error"] or "no architecture slice"))
+                continue
+            for s in sig["slices"]:
+                if not s["signed"] or s["cms"] is None:
+                    rep.fail("%s is not signed by an identity (no CMS signature)" % rel)
+                    continue
+                try:
+                    cms = I.parse_cms(s["cms"])
+                except (I.Asn1Error, IndexError, ValueError, KeyError) as e:
+                    rep.fail("%s: the signature is unreadable: %s" % (rel, e))
+                    continue
+                if cms["signer"] is None:
+                    rep.fail("%s: the signature carries no signer certificate" % rel)
+                    continue
+                v = I.cms_verify(s["cms"], detached=s["slots"].get(I.SLOT_CODEDIRECTORY))
+                if not v["ok"] or v["signer_sha256"] != cms["signer"]["sha256"]:
+                    rep.fail("%s: the CMS signature is not valid (%s)" % (rel, v["why"] or "signer mismatch"))
+                    continue
+                signers.setdefault(cms["signer"]["sha256"], (cms["signer"], []))[1].append(rel)
+                if rel == exe_name and main_signer is None:
+                    main_signer, main_certs = cms["signer"], cms["certs"]
+        if main_signer is None:
+            rep.fail("the main executable has no verifiable signing certificate")
+            return finish(rep, args, unverified=False)
+
+        sg = main_signer
+        for k, v in (("subject", dn_text(sg["subject"])), ("issuer", dn_text(sg["issuer"])), ("serial", sg["serial"]),
+                     ("not_before", sg["not_before"]), ("not_after", sg["not_after"]),
+                     ("sha256", sg["sha256"]), ("sha1", sg["sha1"])):
+            print("  %-10s %s" % (k, v))
+            rep.ev("signer_" + k, v)
+        rep.check(len(signers) == 1, "all %d signed executable(s) carry this one certificate" % sum(len(v[1]) for v in signers.values()),
+                  "the bundle is signed by %d different certificates (an App Store build needs one): %s" % (
+                      len(signers), "; ".join("%s: %d file(s)" % (h[:16], len(v[1])) for h, v in sorted(signers.items()))))
+        leaf_cn = (sg["subject"].get("CN") or [""])[0]
+        prefixes = args.leaf_prefix or list(LEAF_PREFIXES)
+        rep.check(any(leaf_cn.startswith(p) for p in prefixes), "the certificate's name is a distribution certificate (%s)" % leaf_cn,
+                  "the certificate '%s' is not named as a distribution certificate (%s)" % (leaf_cn, " / ".join(prefixes)))
+        marked = [t for t in SYNTHETIC_MARKERS if any(t in v for d in (sg["subject"], sg["issuer"]) for vals in d.values() for v in vals)]
+        if marked and not args.allow_synthetic:
+            rep.fail("the certificate is a %s identity, not a genuine Apple-issued one" % marked[0].lower())
+        elif marked:
+            rep.warn("accepting a %s identity because --allow-synthetic was given (tests only)" % marked[0].lower())
+        if args.team_id:
+            rep.check(args.team_id in sg["subject"].get("OU", []), "the certificate belongs to Team ID %s" % args.team_id,
+                      "the certificate's OU %s is not Team ID %s" % (sg["subject"].get("OU"), args.team_id))
+        prof_path = os.path.join(app_dir, "embedded.mobileprovision")
+        if os.path.isfile(prof_path):
+            try:
+                prof = I.read_profile(prof_path)
+                listed = [hashlib.sha256(bytes(c)).hexdigest() for c in prof["plist"].get("DeveloperCertificates", [])]
+                rep.ev("profile_type", I.profile_type(prof["plist"]))
+                rep.info("embedded profile: '%s', type %s, lists %d certificate(s)" % (
+                    prof["plist"].get("Name", ""), I.profile_type(prof["plist"]), len(listed)))
+                rep.check(prof["signature_valid"], "the profile's CMS signature is valid",
+                          "the profile's CMS signature is not valid: %s" % prof["signature_error"])
+                rep.check(sg["sha256"] in listed, "the embedded profile lists this certificate",
+                          "the profile does not list this certificate")
+            except Exception as e:
+                rep.fail("embedded.mobileprovision is unreadable: %s" % e)
+        else:
+            rep.warn("no embedded.mobileprovision: the profile's listing of the certificate could not be compared")
+        if args.trust_anchors:
+            extra = [c["der"] for c in (main_certs or []) if c["sha256"] != sg["sha256"]]
+            probs = I.chain_problems(sg["der"], extra, args.trust_anchors,
+                                     int(parse_now(args.now).replace(tzinfo=datetime.timezone.utc).timestamp()))
+            rep.check(not probs, "the certificate chains to the supplied trust anchors",
+                      "the certificate does not chain to the supplied trust anchors: %s" % "; ".join(probs))
+        else:
+            rep.warn("no --trust-anchors: nothing here shows the certificate chains to an Apple root")
+        rep.warn("revocation is never checked (no OCSP/CRL lookup): a revoked certificate would look the same here")
+        if args.pem:
+            with open(args.pem, "w", encoding="ascii") as f:
+                f.write(pem_of(sg["der"]))
+            rep.info("wrote the PUBLIC certificate to %s" % args.pem)
+        print("")
+        if not rep.failed:
+            print("RECORD (a public value; the pin for `verify --expect-cert-sha256`): %s" % sg["sha256"])
+            print("This command pins and approves nothing: a fingerprint read from the artifact it will later")
+            print("judge is evidence only after the release coordinator has recorded it and it agrees with an")
+            print("independent source (trust anchors, the profile, the Apple account).")
+        else:
+            print("Nothing to record: the checks above failed.")
+    return finish(rep, args, unverified=False)
 
 
 # ---- structure ----------------------------------------------------------------------------------
@@ -904,11 +1056,23 @@ def main(argv):
     v.add_argument("--unsigned-app", help="the unsigned Runner.app directory the manifest describes")
     v.add_argument("--trust-anchors", metavar="PEM", help="trust-anchor certificates (PEM) the signing chain must reach; supplied by the operator")
     v.add_argument("--allow-synthetic", action="store_true", help="tests only: accept a throwaway/synthetic identity (never for production)")
+    v.add_argument("--forbid-entitlement", action="append", default=[], metavar="KEY",
+                   help="fail when the app's signed entitlements contain KEY (repeatable), e.g. aps-environment "
+                        "when the release record decides there is no push capability")
     v.add_argument("--min-sdk", type=int)
     v.add_argument("--warn-days", type=int, default=30)
     v.add_argument("--now", help="UTC time to judge validity at (default now), e.g. 2026-10-22T12:00:00Z")
     v.add_argument("--repo", default=os.path.dirname(HERE))
     v.add_argument("--evidence", help="write text evidence (key=value) here")
+    ce = sub.add_parser("certificate", help="read the public signing certificate and its SHA-256 fingerprint from a signed app or IPA")
+    ce.add_argument("target", help="a Runner.app directory or an .ipa")
+    ce.add_argument("--pem", metavar="FILE", help="write the PUBLIC signing certificate (PEM) here")
+    ce.add_argument("--team-id")
+    ce.add_argument("--leaf-prefix", action="append", default=None, help="accepted prefixes of the certificate CN (default: Apple Distribution:, iPhone Distribution:)")
+    ce.add_argument("--allow-synthetic", action="store_true", help="tests only")
+    ce.add_argument("--trust-anchors", metavar="PEM")
+    ce.add_argument("--now")
+    ce.add_argument("--evidence")
     a = sub.add_parser("analyze-unsigned", help="describe what re-signing an unsigned Runner.app involves")
     a.add_argument("app")
     st = sub.add_parser("structure", help="check the signing structure of an app or IPA without judging the identity")
@@ -936,6 +1100,18 @@ def main(argv):
             return 1
     if args.cmd == "analyze-unsigned":
         return analyze_unsigned(args)
+    if args.cmd == "certificate":
+        if args.team_id and not re.match(r"^[A-Z0-9]{10}$", args.team_id):
+            die("--team-id must be a 10-character Apple Team ID")
+        if args.trust_anchors and not os.path.isfile(args.trust_anchors):
+            die("--trust-anchors %s is not a file" % args.trust_anchors)
+        try:
+            return certificate(args)
+        except SystemExit:
+            raise
+        except Exception as e:
+            print("  FAIL  internal error while reading the certificate (%s: %s)" % (type(e).__name__, e))
+            return 1
     if args.cmd == "structure":
         try:
             return structure(args)
