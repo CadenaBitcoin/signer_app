@@ -54,13 +54,16 @@ tool/verify_version.sh && /bin/bash tool/verify_build_config.sh verify
 flutter build ios --release --no-codesign --flavor production --dart-define-from-file=config/build/production.json
 tool/verify_artifact.sh ios production build/ios/iphoneos/Runner.app --min-sdk 26
 
-# 4. Only with Status G2 AUTHORIZED (re-read the record first): signed build (section 8, step 5)
+# 4. Only with Status G2 AUTHORIZED (re-read the record first): ONE archive, signed and exported from it
+#    (section 8, step 5). There is no second compile: the archive's own Runner.app is the comparison baseline (step 6).
 flutter build ipa --release --flavor production --dart-define-from-file=config/build/production.json \
   --export-options-plist "$WORK/ExportOptions.plist"
 
-# 5. Verify the IPA: checks V1 to V9 and the symbol inspection of section 9.
-# 6. Retain the artifacts (section 12), then upload with Transporter or Xcode Organizer "TestFlight & App Store"
-#    (section 10), after re-reading the record again. Do not assign testers, do not submit for review.
+# 5. Verify the exported IPA (section 9) with the verifier from a separate checkout of `development` at the record's TOOLS_SHA:
+#    collect the signing certificate with `verify_ipa.py certificate`, wait until the coordinator has RECORDED its
+#    fingerprint, then checks V1 to V9 and the symbol inspection.
+# 6. Retain the artifacts (section 12), then upload THAT SAME verified IPA with Transporter (section 10), after re-reading
+#    the record again. Never use Organizer's integrated Upload. Do not assign testers, do not submit for review.
 ```
 
 **What you return** (text and hashes only, through the channel the coordinator names; section 12 lists every item):
@@ -77,7 +80,7 @@ never as a public GitHub artifact.
 - A tool version differs from section 7; the native library SHA-256 differs; `ios/Podfile.lock` changes by anything but checksum
   lines, or any other tracked file changes.
 - Any stop answer of section 6 (wrong team, no or different App Store Connect record, highest uploaded build 1000035 or more,
-  unknown certificate fingerprint, missing export-compliance answer).
+  a certificate that is neither known beforehand nor cloud-managed, missing export-compliance answer).
 - Any check of section 9 fails, or `verify_ipa.py` rejects the IPA. Report it with its full output; never edit, skip or bypass it.
 - Apple rejects the build number, or App Store Connect shows a message the coordinator has not seen.
 - You are asked to edit the source, the version or the build number, to choose "TestFlight Internal Only", to assign testers,
@@ -283,8 +286,8 @@ files, passwords or codes to anyone.
 | 3 | Whether an iOS version is live, its version, and the **highest build number ever uploaded** (including never-released builds) | The highest build is 1000035 or more, or 1.0.4 is closed to new builds |
 | 4 | `com.app.cadenabitcoin` is registered as an App ID in that team, and the capabilities enabled on it. The app declares the `remote-notification` background mode and has **no** `aps-environment` entitlement ([IOS_SIGNING.md](IOS_SIGNING.md) section 3.4) | The capability state is not what the coordinator recorded as decided |
 | 5 | Your role and access in the team (Users and Access), and whether you may upload builds and manage certificates and profiles | You lack upload access |
-| 6 | Distribution certificate: which one signs, its **SHA-256 fingerprint** (a public value), expiry, creator, and who holds its private key | The fingerprint is unknown or differs from the record |
-| 7 | Signing method (section 8): **automatic** (Xcode may create or refresh a certificate and profile in the team, with `-allowProvisioningUpdates`) or **manual** with an administrator-supplied certificate and App Store profile | You cannot say which |
+| 6 | Distribution certificate: which one signs, expiry, creator, and who holds its private key; its **SHA-256 fingerprint** (a public value) if it exists in your keychain. A **cloud-managed** certificate (Apple holds the key; none in your keychain) has no fingerprint you can read beforehand: say so. It is then collected from the signed IPA and recorded by the coordinator before upload (section 9, V3) | The certificate is neither known beforehand nor cloud-managed, or its fingerprint differs from the record |
+| 7 | Signing method (section 8): **automatic** (Xcode may create or refresh a certificate and profile in the team, with `-allowProvisioningUpdates`; with a cloud-managed certificate the export is signed at Apple, and Xcode may also create an Apple Development certificate and a development profile for the archive) or **manual** with an administrator-supplied certificate and App Store profile | You cannot say which |
 | 8 | Agreements are accepted in the Developer portal and in App Store Connect | Any is pending |
 | 9 | The export-compliance answer for this app (the app uses cryptography and HTTPS) and the App Privacy answers, **given by the owner and legal**, not by the operator. `ITSAppUsesNonExemptEncryption` is not set in `Info.plist`, so App Store Connect will ask for each build | No answer exists |
 | 10 | Whether the privacy-manifest and push-entitlement findings of [IOS_SIGNING.md](IOS_SIGNING.md) section 3.2 were decided (accept as is, or change by a separate approved issue) | Undecided |
@@ -327,11 +330,12 @@ shasum -a 256 flutter_plugin/flutter_plugin/ios/Classes/libdlcplazacryptlib.a
 #   203dcd7abe4187de0b756638a55f691b2d5c680b17d4fbfa7dda550ed703949b  (pinned; any other value: STOP)
 python3 -I tool/build_manifest.py gate --channel production   # read section 4 before judging the result
 
-# 3. Unsigned reference build, the same command CI runs. It is the comparison baseline for step 6.
+# 3. Credential-free preflight build, the same command CI runs. It shows that the approved source builds on this Mac and
+#    is the input of the required-reason import scan (section 9). It is NOT the comparison baseline: V8 compares against
+#    the archive of step 5, because a separate build is not bit-identical to an archive (Stage 2, run 43311731163).
 flutter build ios --release --no-codesign --flavor production \
   --dart-define-from-file=config/build/production.json
 tool/verify_artifact.sh ios production build/ios/iphoneos/Runner.app --min-sdk 26
-mkdir -p "$WORK/unsigned" && ditto build/ios/iphoneos/Runner.app "$WORK/unsigned/Runner.app"
 
 # 4. Drift rule. The build may rewrite ios/Podfile.lock on a Mac whose Ruby `json` gem differs from
 #    the pinned runner (IOS_CI.md, "ios/Podfile.lock drift"). Only checksum lines may differ:
@@ -377,7 +381,13 @@ the repository, switches that off and states the distribution method explicitly:
   (verified in the pinned SDK, `build_ios.dart`).
 - Route A (**automatic**) is the committed project style (`DEVELOPMENT_TEAM` set, no signing style
   override) and Flutter then passes `-allowProvisioningUpdates` to the export, so Xcode may create
-  or refresh certificates and profiles in the Apple account. Route B (**manual**) uses an
+  or refresh certificates and profiles in the Apple account. **Unconfirmed until the first run:** with a cloud-managed
+  distribution certificate the export is signed at Apple (Apple's WWDC21 session 10204, quoted in community answers, says
+  Export signs exactly as Upload does); Xcode must be signed in to the Apple account for it, the archive step may need an
+  Apple Development certificate and profile that Xcode then creates in the team's account (an Apple-side change the coordinator
+  accepts in the release record before G2), and the export folder should contain `DistributionSummary.plist`, which names the
+  signing certificate type and profile (keep it as evidence). If `flutter build ipa` cannot complete this, the fallback is Xcode
+  Organizer **Export** of the same archive (section 10), never a rebuild. Route B (**manual**) uses an
   administrator-created distribution certificate and App Store profile already in your keychain.
   Which one is used, and who created the certificate, is recorded (section 6, items 6 and 7).
 
@@ -389,9 +399,21 @@ flutter build ipa --release --flavor production \
 #    Output (verified in the pinned Flutter): build/ios/archive/Runner.xcarchive and build/ios/ipa/*.ipa
 #    Run step 4's drift rule again if the working tree changed.
 
-# 6. Fix the artifact: hash it now; retention is section 12 ("Temporary retention").
+# 6. The comparison baseline is the application inside THIS archive, the one the export signed. No second compile.
+#    (Automatic signing signs the archive for development; the export re-signs it for distribution. Only the signature
+#    and the embedded profile may differ, which is what V8 checks.)
+mkdir -p "$WORK/evidence" && ditto build/ios/archive/Runner.xcarchive/Products/Applications/Runner.app "$WORK/archive-app/Runner.app"
+(cd "$WORK/archive-app/Runner.app" && find . -type f | sort | xargs shasum -a 256) > "$WORK/evidence/archive-app.sha256"
+
+# 7. Fix the artifact: hash it now; retention is section 12 ("Temporary retention").
 IPA=$(ls build/ios/ipa/*.ipa); shasum -a 256 "$IPA"
 ```
+
+**Manual 1.0.4 and Stage 3 are different procedures.** For the initial manual release the operator makes **one** controlled
+archive from the approved source and everything after it (export, verification, upload) refers to that archive. For Stage 3
+automation ([RELEASE_SIGNING_ARCHITECTURE.md](RELEASE_SIGNING_ARCHITECTURE.md)) signing consumes the **retained, verified
+`.xcarchive` of Stage 2** without recompiling, and its baseline is that retained archive's `Runner.app`. Neither procedure
+compiles a second time to obtain a baseline, and in both the file that is verified is the file that is uploaded.
 
 Never commit, attach, e-mail or upload the IPA, the archive, a profile, a certificate or a
 keychain export to GitHub (Actions artifacts, issues, pull requests, Releases) or any chat.
@@ -403,20 +425,26 @@ All checks run on the **IPA that will be uploaded**, not on the build directory.
 to `$WORK/evidence/` (section 12). Any failure stops the procedure; report it, do not work around it.
 
 ```bash
-mkdir -p "$WORK/x" "$WORK/evidence" && unzip -q "$IPA" -d "$WORK/x" && APP="$WORK/x/Payload/Runner.app"
-FINGERPRINT=<certificate SHA-256 recorded before the build, hex without colons>
+mkdir -p "$WORK/x" "$WORK/evidence" "$WORK/certs" && unzip -q "$IPA" -d "$WORK/x" && APP="$WORK/x/Payload/Runner.app"
+# The verifier is NOT part of the approved source (the production commit predates `certificate` and `--forbid-entitlement`).
+# Take it from a SEPARATE checkout of `development` at the commit the release record names as TOOLS_SHA (it must contain
+# PR #107). It only reads the IPA and builds nothing; the application is still built from the approved checkout, and
+# `--repo` below makes the verifier judge the IPA against that checkout's pubspec and configuration.
+git clone https://github.com/CadenaBitcoin/signer_app.git "$WORK/cadena-tools" && git -C "$WORK/cadena-tools" checkout --detach "$TOOLS_SHA"
+TOOLS="$WORK/cadena-tools"; APPROVED_REPO="$PWD"      # $PWD: the approved-source checkout of section 5
+FINGERPRINT=<certificate SHA-256 as RECORDED in the release record by the coordinator, hex without colons; see V3>
 ```
 
 | # | Check | Required result |
 |---|---|---|
 | V1 | Identity and version read from the IPA's `Info.plist` | Bundle ID `com.app.cadenabitcoin`, version `1.0.4`, build `1000035`, display name `Cadena Bitcoin`, exactly as the record |
 | V2 | Signature seals | `codesign --verify` exits 0 |
-| V3 | Signing identity | Authority `Apple Distribution: ...`, TeamIdentifier `D65458CPDP`, certificate fingerprint **equal to the one recorded before the build** (section 6, item 6) |
+| V3 | Signing identity | Authority `Apple Distribution: ...`, TeamIdentifier `D65458CPDP`; **one** certificate signs every executable and the embedded profile lists it; its SHA-256 fingerprint is read from the IPA (`certificate`, below), cross-checked with `codesign` and `openssl`, **recorded in the release record by the coordinator before the upload**, and only then pinned in V7. A certificate known beforehand (section 6, item 6) keeps its pre-recorded value, which must be equal |
 | V4 | Embedded profile | App Store profile: no `ProvisionedDevices`, no `get-task-allow`, team `D65458CPDP`, application-identifier `D65458CPDP.com.app.cadenabitcoin`, not expired |
-| V5 | Entitlements | `get-task-allow` absent or false; application identifier and team as V4; every key granted by the profile. Record the full list; `aps-environment` appears only if the coordinator decided the push capability |
+| V5 | Entitlements | `get-task-allow` absent or false; application identifier and team as V4; every key granted by the profile. Record the full list (`verify_ipa.py` writes it to the evidence). `aps-environment` appears only if the release record decided the push capability; when the record decides **no push capability** (proposed for 1.0.4), V7 runs with `--forbid-entitlement aps-environment` and its presence fails |
 | V6 | Environment inside the app | The production URL occurs at least once; `staging.purabitcoin.com` occurs **0** times |
 | V7 | This repository's IPA verifier | Every check passes |
-| V8 | Only signatures were added | The signed bundle is the unsigned one plus signatures |
+| V8 | Only signatures were added | The signed bundle is the application of **the archive that was exported** (`$WORK/archive-app`, section 8 step 6) plus signatures; only the embedded profile may be replaced. A separate `flutter build ios` is not a valid baseline |
 | V9 | Native library | Library SHA-256 as in section 8, and the symbol inspection below |
 
 ```bash
@@ -426,7 +454,11 @@ for k in CFBundleIdentifier CFBundleShortVersionString CFBundleVersion CFBundleD
 # V2, V3
 codesign --verify --deep --strict --verbose=2 "$APP"
 codesign -dvv "$APP" 2>&1 | grep -e Authority -e TeamIdentifier
-security find-certificate -c "Apple Distribution" -Z        # SHA-256 of each matching certificate
+#   (`security find-certificate` lists only certificates in a LOCAL keychain; a cloud-managed one is not there.)
+python3 -I "$TOOLS/tool/verify_ipa.py" certificate "$IPA" --team-id D65458CPDP \
+  --pem "$WORK/evidence/signer.pem" --evidence "$WORK/evidence/certificate.txt"   # public data only; no private key exists in an IPA
+codesign -d --extract-certificates="$WORK/certs/codesign" "$APP"                # writes the leaf as codesign0 (DER)
+openssl x509 -inform DER -in "$WORK/certs/codesign0" -noout -fingerprint -sha256  # must equal the fingerprint `certificate` printed
 # V4, V5 (the profile is read, never copied out of $WORK)
 security cms -D -i "$APP/embedded.mobileprovision" > "$WORK/profile.plist"
 codesign -d --entitlements :- "$APP"
@@ -434,11 +466,21 @@ codesign -d --entitlements :- "$APP"
 strings -a "$APP/Frameworks/App.framework/App" | grep -c 'https://cadenabitcoin.com/app'     # >= 1
 strings -a "$APP/Frameworks/App.framework/App" | grep -c 'staging.purabitcoin.com'           # 0
 # V7, V8
-python3 -I tool/verify_ipa.py verify production "$IPA" --team-id D65458CPDP \
-  --expect-cert-sha256 "$FINGERPRINT" --unsigned-app "$WORK/unsigned/Runner.app" \
-  --evidence "$WORK/evidence/ipa-verify.txt"
-python3 -I tool/verify_ipa.py compare "$WORK/unsigned/Runner.app" "$APP"
+python3 -I "$TOOLS/tool/verify_ipa.py" verify production "$IPA" --team-id D65458CPDP --repo "$APPROVED_REPO" \
+  --expect-cert-sha256 "$FINGERPRINT" --unsigned-app "$WORK/archive-app/Runner.app" \
+  --forbid-entitlement aps-environment \
+  --evidence "$WORK/evidence/ipa-verify.txt"          # --forbid-entitlement only when the record decides "no push"
+python3 -I "$TOOLS/tool/verify_ipa.py" compare "$WORK/archive-app/Runner.app" "$APP"
 ```
+
+**V3 is discovery, then approval; they are different acts.** `certificate` reads who signed and checks that every executable
+agrees and that the embedded profile (signed by Apple) lists the same certificate. It **pins and approves nothing**: a
+fingerprint read from the artifact it will later judge is circular on its own. The operator sends the fingerprint and
+`certificate.txt` to the coordinator; the coordinator records the value in the release record (section 7); only that
+recorded value is used as `FINGERPRINT`. The tool shows a chain to Apple only when `--trust-anchors` is supplied and **never
+checks revocation**; an independent source (the certificate list of the Apple account, if it displays a SHA-256 for a
+cloud-managed certificate, which is **Unconfirmed**) strengthens the record but is not required by this procedure.
+If the fingerprint is not recorded, or later differs from the record: stop.
 
 **V7 and V8 have never seen a real Apple-signed IPA** ([IOS_SIGNING.md](IOS_SIGNING.md)
 section 3.1): the first run may reject a legitimate detail of real Apple output (an entitlement
@@ -447,6 +489,39 @@ and the build is not uploaded. A reviewed pull request may then add a documented
 an ad hoc override, an edited verifier or a skipped check is never acceptable. `--trust-anchors`
 (Apple's root and intermediate certificates, supplied and reviewed by the operator) is optional;
 without it the issuer is compared by name and the leaf is pinned by fingerprint only.
+
+### Required-reason API imports (privacy manifest, evidence only)
+
+Run on the preflight build of section 8 step 3 **before G2 is requested**, and again on `$APP`. This is **evidence for the
+coordinator's privacy-manifest decision (section 13), not a stop condition.**
+
+```bash
+SCAN_ROOT=build/ios/iphoneos/Runner.app          # then: "$APP"
+find "$SCAN_ROOT" -type f -perm -u+x | while read -r f; do
+  file "$f" | grep -q 'Mach-O' || continue
+  echo "== ${f#$SCAN_ROOT/}"
+  nm -u "$f" 2>/dev/null | grep -E ' _(stat|fstat|lstat|fstatat|statfs|fstatfs|statvfs|getattrlist|fgetattrlist|getattrlistbulk|mach_absolute_time|clock_gettime|clock_gettime_nsec_np|sysctlbyname|sysctl)$|NSUserDefaults|systemUptime|fileModificationDate|creationDate|NSURLVolume'
+done > "$WORK/evidence/required-reason-imports.txt"
+find "$SCAN_ROOT" -name PrivacyInfo.xcprivacy > "$WORK/evidence/privacy-manifests.txt"
+```
+
+Expected from the repository analysis (read from the committed library's arm64 slice, 2026-11-16; **not yet seen in a linked
+app**): the undefined imports of Rust `std` are `_stat _fstat _lstat _opendir _fdopendir _readdir_r _fsetattrlist _clock_gettime`
+and `_sysctlbyname` comes from `std_detect` and `compiler_builtins`. **Only `_stat`, `_fstat` and `_lstat` are in a category of
+Apple's required-reason list (file timestamp).** `_clock_gettime`, `_fsetattrlist`, `_opendir`, `_fdopendir`, `_readdir_r` and
+`_sysctlbyname` are not on the list, and `_mach_absolute_time`, the `getattrlist` family and the disk-space calls are not imported.
+The pod is a **dynamic framework** (`use_frameworks!`) that force-loads the whole library, so the expected place for these
+imports is `Frameworks/dlc_wallet.framework/dlc_wallet`; Apple's text says the bundle of each executable or dynamic library that
+uses a covered API needs its own manifest. `_fstat` is expected to survive linking whatever the dead-code setting, because the
+exported `init_from_file_c` reaches `std::fs::read_to_string`; that function has no caller in the app. The framework carries no
+manifest. Report the file as it is; do not edit anything because of it.
+
+**What this scan decides and what it does not.** The decisive technical evidence is the list of covered imports in the final linked
+`dlc_wallet.framework` against the manifests found in the same bundle. Until it exists, no statement that the app complies with
+Apple's required-reason rules, or that Apple will accept the upload, may be made; equally none that it will be refused. The
+classification above rests on the part of Apple's list that could be read (the full category pages were not readable when this
+was written), so a symbol absent from the scan's pattern can still be covered: report the whole `nm -u` output of the framework,
+not only the matches. No privacy declaration is added to the source or to any answer on the strength of this scan.
 
 ### Native symbol-table inspection (Issue #22)
 
@@ -512,9 +587,15 @@ this check.
 **Only after G2 is recorded** (section 1) **and every check of section 9 has passed.** Nothing in this
 procedure submits for review.
 
-1. Upload with **Apple's Transporter app** (the method Flutter's own output names), or Xcode Organizer
-   → *Distribute App* → *App Store Connect* → **TestFlight & App Store** → *Upload*. **Never** *TestFlight
-   Internal Only*. Sign in with your own Apple ID; no credential goes into a repository, script, chat or log.
+1. Upload **the exact IPA that passed section 9** with **Apple's Transporter app** (the method Flutter's own output names).
+   Record its SHA-256 immediately before the upload and again from the file Transporter used; they must be equal. **Do not
+   use Xcode Organizer's integrated *Upload*:** it signs and uploads in one step, so the file that was verified would not be
+   the file that was uploaded. **Never** *TestFlight Internal Only*. Sign in with your own Apple ID; no credential goes into
+   a repository, script, chat or log.
+   *Fallback if `flutter build ipa` cannot sign the export:* open the **same** archive
+   (`build/ios/archive/Runner.xcarchive`) in Organizer → *Distribute App* → *App Store Connect* → **TestFlight & App Store**
+   → **Export** (never *Upload*), then run all of section 9 on that export and upload that file with Transporter. No rebuild,
+   no second archive.
 2. `xcrun altool` is not used: it needs an App Store Connect API key (API access is reported disabled,
    [IOS_SIGNING.md](IOS_SIGNING.md) section 4) or an app-specific password
    ([IOS_SIGNING.md](IOS_SIGNING.md) section 5, option D, rejected).
@@ -610,8 +691,9 @@ profiles, keychain contents, passwords, recovery phrases, tokens, device logs wi
 | Toolchain | Outputs of section 7 (Flutter, Dart, Xcode build, SDK, CocoaPods), macOS version |
 | Static checks | `verify_version.sh`, `verify_build_config.sh verify`, library SHA-256, `gate` output, `verify_artifact.sh ios` output |
 | Drift | `Podfile.lock.drift.diff` and the statement that the only differences were checksum lines |
-| Artifact | IPA SHA-256 and size; the export options file (contains no secret) |
-| Verification | Outputs of V1 to V9; `ipa-verify.txt`; the entitlement and profile summaries **without** profile contents |
+| Artifact | IPA SHA-256 before and after the Transporter upload, and size; the export options file (contains no secret); `DistributionSummary.plist`; `archive-app.sha256` (the baseline) |
+| Verification | Outputs of V1 to V9; `certificate.txt` and the `codesign`/`openssl` fingerprint (public values); `ipa-verify.txt` (it lists every signed entitlement); the entitlement and profile summaries **without** profile contents; the profile's name, type and expiry |
+| Privacy | `required-reason-imports.txt` and `privacy-manifests.txt` for the preflight build and for `$APP` |
 | Symbols | `lib-arm64.nm.txt` result lines of (a) to (c), the nine exported names |
 | Signing | Certificate SHA-256 fingerprint, expiry, signing route (A or B), who created the certificate |
 | Upload | Time, tool used, App Store Connect messages (verbatim), processed build status, version and build as shown |
@@ -653,7 +735,7 @@ Connect.
 | `verify_artifact.sh`/`verify_ipa.py` fail | See the note after the table in section 9; report, never bypass |
 | Apple rejects the build number | Already used; do not edit it. Report; the coordinator decides through a reviewed `pubspec.yaml` change |
 | `ITMS-90078` (missing push entitlement) | Documented ([IOS_SIGNING.md](IOS_SIGNING.md) section 3.2); record and report |
-| A privacy-manifest message (for example `ITMS-91053`) | Possible (the app has no `PrivacyInfo.xcprivacy`; Apple's current enforcement is **Unconfirmed**); record and report |
+| A privacy-manifest message (for example `ITMS-91053`) | Credible concern (not established, not excluded): the app has no `PrivacyInfo.xcprivacy`; the pinned Rust library imports file-timestamp-category symbols from `std` and `dlc_wallet` ships no manifest; Sumsub's `IdensicMobileSDK` 1.42.0 ships none but imports none of the covered symbols (checked 2026-11-16 on the vendor zip, SHA-256 `83bc02bc…5c9f`). Apple's documentation says such apps "aren't accepted by App Store Connect"; forum reports describe an e-mail only (**Unconfirmed**). Record the message verbatim and report; do not edit the source or choose another build number before the coordinator decides |
 | Missing export-compliance answer | Needs the owner's decision (section 6, item 9) |
 | Expired profile or certificate | An administrator renews it in the portal; the verifier checks expiry |
 | Certificate fingerprint differs from the record | Different identity from the one authorized. Stop |
