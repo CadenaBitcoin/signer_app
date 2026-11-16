@@ -613,6 +613,8 @@ def sign_app(app_in, out_ipa, certdir, team, mutations):
         ents["com.apple.developer.associated-domains"] = ["applinks:example.org"]
     if "aps-development" in mut:
         ents["aps-environment"] = "development"
+    if "no-push" in mut:  # the App ID has Push enabled (the profile lists it) but the app does not claim it
+        del ents["aps-environment"]
     ents_xml = plistlib.dumps(ents, fmt=plistlib.FMT_XML)
     with open(os.path.join(app, "Info.plist"), "rb") as f:
         info_b = f.read()

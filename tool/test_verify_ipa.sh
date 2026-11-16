@@ -323,6 +323,56 @@ if [ "$crc" -eq 1 ] && grep -F "executable content differs" "$tmp/cmp.txt" >/dev
 mk cmpextra staging add-file
 python3 -I "$verify" compare "$tmp/staging/Runner.app" "$tmp/cmpextra.ipa" >"$tmp/cmp.txt" 2>&1; crc=$?
 if [ "$crc" -eq 1 ] && grep -F "files added to the IPA" "$tmp/cmp.txt" >/dev/null; then ok "compare rejects an IPA with an injected file"; else bad "compare rejects an IPA with an injected file" "rc=$crc"; fi
+
+cflags=(--leaf-prefix "Synthetic Distribution:" --allow-synthetic)
+# ---- Apple cloud-managed signing support (Issue #54/#71): certificate collection, forbidden entitlements,
+# ---- and a baseline taken from a signed archive. All synthetic; none of this proves Apple acceptance.
+python3 -I "$verify" certificate "${cflags[@]}" "$tmp/good.ipa" --team-id "$TEAM" --pem "$tmp/collected.pem" --evidence "$tmp/cert-evidence.txt" >"$tmp/cert.txt" 2>&1; crc=$?
+GOTPIN="$(python3 -I "$fixture" fingerprint "$tmp/collected.pem" 2>/dev/null)"
+if [ "$crc" -eq 0 ] && [ "$GOTPIN" = "$PIN" ] && grep -F "RECORD (a public value; the pin for \`verify --expect-cert-sha256\`): $PIN" "$tmp/cert.txt" >/dev/null; then
+  ok "certificate reports the signer's SHA-256 fingerprint and writes the same public certificate (no keychain needed)"
+else bad "certificate reports the signer's SHA-256 fingerprint and writes the same public certificate" "rc=$crc got=$GOTPIN"; fi
+if grep -F "signer_sha256=$PIN" "$tmp/cert-evidence.txt" >/dev/null && grep -F "embedded profile lists this certificate" "$tmp/cert.txt" >/dev/null; then ok "certificate records the fingerprint as evidence and compares it with the profile"; else bad "certificate records the fingerprint as evidence and compares it with the profile"; fi
+if grep -E 'PRIVATE KEY' "$tmp/collected.pem" "$tmp/cert.txt" "$tmp/cert-evidence.txt" >/dev/null; then bad "certificate output holds no private key"; else ok "certificate output holds no private key"; fi
+python3 -I "$verify" certificate "$tmp/good.ipa" --leaf-prefix "Synthetic Distribution:" >"$tmp/cert.txt" 2>&1; crc=$?
+if [ "$crc" -eq 1 ] && grep -F "synthetic identity, not a genuine Apple-issued one" "$tmp/cert.txt" >/dev/null && ! grep -F "RECORD (" "$tmp/cert.txt" >/dev/null; then ok "certificate refuses a synthetic identity unless told it is a test, and offers nothing to record"; else bad "certificate refuses a synthetic identity by default" "rc=$crc"; fi
+python3 -I "$verify" certificate "${cflags[@]}" "$tmp/good.ipa" --team-id OTHER12345 >"$tmp/cert.txt" 2>&1; crc=$?
+if [ "$crc" -eq 1 ] && grep -F "is not Team ID OTHER12345" "$tmp/cert.txt" >/dev/null; then ok "certificate refuses an expected Team ID the certificate does not belong to"; else bad "certificate refuses a wrong Team ID" "rc=$crc"; fi
+python3 -I "$verify" certificate "${cflags[@]}" "$tmp/adhoc.ipa" >"$tmp/cert.txt" 2>&1; crc=$?
+if [ "$crc" -eq 1 ] && grep -F "FAIL" "$tmp/cert.txt" >/dev/null; then ok "certificate refuses an ad-hoc signed IPA"; else bad "certificate refuses an ad-hoc signed IPA" "rc=$crc"; fi
+python3 -I "$verify" certificate "${cflags[@]}" "$tmp/fwother.ipa" >"$tmp/cert.txt" 2>&1; crc=$?
+if [ "$crc" -eq 1 ] && grep -F "different certificates" "$tmp/cert.txt" >/dev/null; then ok "certificate refuses a bundle signed by more than one certificate"; else bad "certificate refuses a bundle signed by more than one certificate" "rc=$crc"; fi
+python3 -I "$verify" certificate "${cflags[@]}" "$tmp/tampercms.ipa" >"$tmp/cert.txt" 2>&1; crc=$?
+if [ "$crc" -eq 1 ] && grep -F "CMS signature is not valid" "$tmp/cert.txt" >/dev/null && ! grep -F "RECORD (" "$tmp/cert.txt" >/dev/null; then ok "certificate refuses a signature whose CMS is not valid and offers no fingerprint to record"; else bad "certificate refuses an invalid CMS signature" "rc=$crc"; fi
+python3 -I "$verify" certificate "${cflags[@]}" "$tmp/notzip.ipa" >"$tmp/cert.txt" 2>&1; crc=$?
+if [ "$crc" -eq 1 ] && grep -F "FAIL" "$tmp/cert.txt" >/dev/null; then ok "certificate refuses an archive that is not a zip"; else bad "certificate refuses an archive that is not a zip" "rc=$crc"; fi
+python3 -I "$verify" certificate "${cflags[@]}" "$tmp/staging/Runner.app" >"$tmp/cert.txt" 2>&1; crc=$?
+if [ "$crc" -eq 1 ] && ! grep -F "RECORD (" "$tmp/cert.txt" >/dev/null; then ok "certificate refuses an unsigned app and offers no fingerprint to record"; else bad "certificate refuses an unsigned app" "rc=$crc"; fi
+python3 -I "$verify" certificate "${cflags[@]}" "$tmp/good.ipa" --trust-anchors "$tmp/certs/leaf2.crt" >"$tmp/cert.txt" 2>&1; crc=$?
+if [ "$crc" -eq 1 ] && grep -F "does not chain to the supplied trust anchors" "$tmp/cert.txt" >/dev/null; then ok "certificate checks the chain against supplied trust anchors when given"; else bad "certificate checks the chain against supplied trust anchors" "rc=$crc"; fi
+python3 -I "$verify" certificate "${cflags[@]}" "$tmp/good.ipa" >"$tmp/cert.txt" 2>&1
+if grep -F "no --trust-anchors" "$tmp/cert.txt" >/dev/null && grep -F "pins and approves nothing" "$tmp/cert.txt" >/dev/null; then ok "certificate says plainly that it pins nothing and verified no chain to Apple"; else bad "certificate says plainly that it pins nothing"; fi
+if grep -F "WARN  revocation is never checked" "$tmp/cert.txt" >/dev/null; then ok "certificate says plainly (as a warning) that revocation is never checked"; else bad "certificate says plainly that revocation is never checked"; fi
+python3 -I "$verify" certificate "${cflags[@]}" "$tmp/profnocert.ipa" >"$tmp/cert.txt" 2>&1; crc=$?
+if [ "$crc" -eq 1 ] && grep -F "the profile does not list this certificate" "$tmp/cert.txt" >/dev/null && ! grep -F "RECORD (" "$tmp/cert.txt" >/dev/null; then ok "certificate refuses a signer the embedded profile does not list, and offers nothing to record"; else bad "certificate refuses a signer the embedded profile does not list" "rc=$crc"; fi
+
+# --forbid-entitlement: the release record's "no push capability" decision, enforced on the signed entitlements
+expect_fail "--forbid-entitlement aps-environment refuses an IPA that carries it" "entitlement aps-environment is present" staging "$tmp/good.ipa" --expect-cert-sha256 "$PIN" --forbid-entitlement aps-environment
+mk nopush staging no-push
+expect_ok "an IPA without aps-environment passes with --forbid-entitlement aps-environment (the profile may still list it)" staging "$tmp/nopush.ipa" --expect-cert-sha256 "$PIN" --forbid-entitlement aps-environment
+expect_ok "without the option, aps-environment stays optional (behaviour unchanged)" staging "$tmp/nopush.ipa" --expect-cert-sha256 "$PIN"
+expect_fail "--forbid-entitlement refuses any named key, not only the push one" "entitlement beta-reports-active is present" staging "$tmp/nopush.ipa" --expect-cert-sha256 "$PIN" --forbid-entitlement beta-reports-active
+run staging "$tmp/nopush.ipa" "${common[@]}" --expect-cert-sha256 "$PIN" --evidence "$tmp/ev-nopush.txt"
+if grep -F "entitlement.application-identifier=" "$tmp/ev-nopush.txt" >/dev/null && ! grep -F "entitlement.aps-environment" "$tmp/ev-nopush.txt" >/dev/null; then ok "the evidence lists every signed entitlement with its value (and no aps-environment here)"; else bad "the evidence lists every signed entitlement"; fi
+
+# a baseline taken from a SIGNED archive: its development profile is replaced at export, the code is not
+rm -rf "$tmp/archbase" && cp -R "$tmp/staging" "$tmp/archbase"
+printf 'development-profile-placeholder' >"$tmp/archbase/Runner.app/embedded.mobileprovision"
+python3 -I "$verify" compare "$tmp/archbase/Runner.app" "$tmp/good.ipa" >"$tmp/cmp.txt" 2>&1; crc=$?
+if [ "$crc" -eq 0 ]; then ok "compare accepts a baseline whose embedded profile differs (an archive signed for development)"; else bad "compare accepts a baseline whose embedded profile differs" "rc=$crc $(grep -E 'FAIL' "$tmp/cmp.txt" | head -2 | tr '\n' '|')"; fi
+printf 'x' >>"$tmp/archbase/Runner.app/PkgInfo"
+python3 -I "$verify" compare "$tmp/archbase/Runner.app" "$tmp/good.ipa" >"$tmp/cmp.txt" 2>&1; crc=$?
+if [ "$crc" -eq 1 ] && grep -F "files that differ from the unsigned build" "$tmp/cmp.txt" >/dev/null; then ok "...but any other changed file is still refused"; else bad "...but any other changed file is still refused" "rc=$crc"; fi
 spike="$root/tool/spike_resign_unsigned_ios.sh"
 if bash -n "$spike"; then ok "the macOS spike script is syntactically valid"; else bad "the macOS spike script is syntactically valid"; fi
 if [ "$(uname -s)" != "Darwin" ]; then
