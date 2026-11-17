@@ -21,16 +21,20 @@ one person may eventually hold several.
 | **Organization ownership / administration** | `CadenaBitcoin` Organization Owners | Organization and repository administration, access management and governance settings |
 | **Authorized maintainers (merge authority)** | `CadenaBitcoin/Maintainers`: `CadenaWizard`, `sziller` | Review and merge accepted changes according to the branch rules; perform promotions |
 | **Authorized contributors** | `CadenaBitcoin/Contributors` | Work directly on normal repository work branches and submit pull requests; no protected-branch merge authority |
-| **Release authority** | Authorized release maintainers (not yet named) | Decide that a build is an official release and authorize its publication |
-| **Signing authority** | Authorized signing custodians (not yet named) | Hold and use application-signing credentials |
+| **Release authority** | The authorized merge into `staging` or `production` ([docs/RELEASE_POLICY.md](docs/RELEASE_POLICY.md) principle 9 and section 2.3), made through the CTO-controlled account `CadenaWizard` after `sziller` prepared the pull request | The merge authorizes that branch's complete pipeline; there is no further manual authorization |
+| **Signing authority** | Signing credentials live in protected, branch-restricted environments, not in a person's account. Continuity custodians are not yet named | Hold and recover application-signing credentials |
 | **Public contributor** | Anyone | Fork, open issues, submit pull requests from forks |
 
-No individual release maintainers or signing custodians are named yet; they
-must be designated explicitly and are not implied by any other role.
+No continuity signing custodians are named yet; they must be designated explicitly and are
+not implied by any other role. They hold and recover credentials; they are not an approval step.
 
-Several accounts controlled by one individual are one person for approval purposes.
-Production signing and production delivery require approval by a genuinely independent
-person ([docs/RELEASE_POLICY.md](docs/RELEASE_POLICY.md) principle 9); none is designated yet.
+**The authorized merge is the single human authorization boundary**
+([docs/RELEASE_POLICY.md](docs/RELEASE_POLICY.md) principle 9 and section 2.3). `sziller`
+(development and pull-request preparation) and `CadenaWizard` (CTO-controlled review and merge
+authorization) are **the same person**. GitHub does not let an author approve their own pull
+request, which is why there are two accounts. This repository neither requires nor pretends that
+they are independent human reviewers, and no document, release record or workflow may say so.
+Mandatory automated checks, not a second human, protect a release.
 
 No contribution, review approval or AI assistance transfers merge, promotion,
 release, signing, secret or administrative authority.
@@ -71,8 +75,8 @@ production
 | Branch | Role |
 |---|---|
 | `development` | GitHub default branch and normal pull-request target. The active integration branch and normal issue completion point. Ordinary issues are **Done** when accepted into it, unless the issue explicitly carries staging or production scope. It does **not** automatically produce or deploy distributable application builds. Automatic CI verification (analyze, tests) may be added later and is distinct from application builds. |
-| `staging` | Signet promotion branch. Promotion target from `development`; not a place for ordinary feature development. It is protected now. The intended design is that a merge triggers the staging build pipeline, which builds and signs the staging artifacts (Android and iOS, a separate staging application on Signet) for restricted internal testing. A merge builds; it does not publish. See [docs/RELEASE_POLICY.md](docs/RELEASE_POLICY.md). Today only unsigned, compile-only workflows run on `staging`: the CI validation workflows and the two-build `build-variants` workflow ([docs/RELEASE_TRIGGERS.md](docs/RELEASE_TRIGGERS.md)). |
-| `production` | Mainnet release branch and promotion target from `staging`. It exists and is protected. It was created at the adopted initial baseline `7b63c97` (Issue #68), the best-supported historical commit and not an exact reconstruction of the published application. A merge into it triggers the production build pipeline (Android APK, Android AAB, iOS). Today only unsigned, compile-only workflows run on `production` ([docs/RELEASE_TRIGGERS.md](docs/RELEASE_TRIGGERS.md)); the intended design is that a merge builds and signs; publication to the website, Google Play or the App Store remains a separately authorized release action. Creation requirements and the promotion procedure: [docs/RELEASE_POLICY.md](docs/RELEASE_POLICY.md) section 2. |
+| `staging` | Signet promotion branch. Promotion target from `development`; not a place for ordinary feature development. It is protected now. The intended design is that a merge triggers the staging build pipeline, which builds and signs the staging artifacts (Android and iOS, a separate staging application on Signet) for restricted internal testing. The merge is the authorization to run the complete staging pipeline: advance the build version, build, verify, sign, deliver to the internal testing destinations and record. See [docs/RELEASE_POLICY.md](docs/RELEASE_POLICY.md) section 2.3. Today only unsigned, compile-only workflows run on `staging`: the CI validation workflows and the two-build `build-variants` workflow ([docs/RELEASE_TRIGGERS.md](docs/RELEASE_TRIGGERS.md)). |
+| `production` | Mainnet release branch and promotion target from `staging`. It exists and is protected. It was created at the adopted initial baseline `7b63c97` (Issue #68), the best-supported historical commit and not an exact reconstruction of the published application. A merge into it triggers the production build pipeline (Android APK, Android AAB, iOS). Today only unsigned, compile-only workflows run on `production` ([docs/RELEASE_TRIGGERS.md](docs/RELEASE_TRIGGERS.md)); the intended design is that a merge is the authorization to run the complete production pipeline (build, retain, verify, sign, verify again, upload to the configured non-public destinations, record; [docs/RELEASE_POLICY.md](docs/RELEASE_POLICY.md) section 2.3), with no further manual authorization. Automatic App Review submission and public publication are outside the configured scope; Apple's and Google's own review and acceptance still apply. Creation requirements and the promotion procedure: [docs/RELEASE_POLICY.md](docs/RELEASE_POLICY.md) section 2. |
 
 Rules for all work:
 
@@ -240,7 +244,7 @@ the published Google Play package in Issue #72; the signing lineage is still ope
   (Issue #68), but its pipeline is compile-only and signing and publication are
   not established.
 - Decide what to do with the legacy `main` branch.
-- Designate release maintainers and signing custodians.
+- Designate continuity signing custodians (no approval role).
 - Build the staging and production release pipelines (five signed artifacts), the
   explicit pipeline-controlled build configuration, the separate staging
   application identities and the signing infrastructure, in the order of

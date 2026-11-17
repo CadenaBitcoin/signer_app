@@ -48,7 +48,7 @@ Every statement below carries one of three labels:
 |---|---|
 | The repository is **public**. Run logs and artifacts are readable by any GitHub account. | GitHub API |
 | No GitHub environment exists (`total_count` 0). | GitHub API |
-| `CadenaBitcoin/Maintainers` has two accounts. **They are controlled by one individual** (statement of the project owner, 2026-10-21), so they are **one** approver, not two. | owner statement; [GOVERNANCE.md](../GOVERNANCE.md) |
+| `CadenaBitcoin/Maintainers` has two accounts. **They are controlled by one individual** (statement of the project owner, 2026-10-21; restated by the CTO 2026-11-17), so they are **one** person. The merge by that person is the authorization (section 6). | owner statement; [GOVERNANCE.md](../GOVERNANCE.md) |
 | No release maintainers or signing custodians are named. | [GOVERNANCE.md](../GOVERNANCE.md) |
 
 ### Apple (documentation read 2026-10-21)
@@ -77,15 +77,19 @@ production contexts and the five-artifact target are in [RELEASE_POLICY.md](RELE
    external tester group, no public link, no Beta App Review, no App Store submission.
 2. **Separate GitHub environments** for staging and production, each deployable from one
    protected branch only.
-3. **No public App Store submission or publication** by any pipeline, ever; production
-   signing and production upload each need **separate authorization**.
+3. **No public App Store submission or publication** by any pipeline: approved 2026-10-21 and
+   confirmed by the CTO on 2026-11-17: automatic App Review submission and public publication are outside the
+   configured automated delivery, and may be added only by an explicit architectural extension of
+   RELEASE_POLICY.md 2.3.
+   Production signing and production upload are authorized by the merge into `production`
+   (RELEASE_POLICY.md 2.3), not by a separate approval.
 4. **Controlled signed testing is permitted** to establish runtime compatibility. The
    effective minimum supported iOS version remains an **open release-readiness
    requirement** ([IOS_CI.md](IOS_CI.md)); a production release needs verified runtime
    compatibility, and this issue does not change a deployment target.
-5. **Independent approval of production** (section 6).
-6. **Assigning a processed build to internal testers needs explicit approval** at first.
-   Automatic distribution may be considered only after the pipeline has been verified.
+5. **The authorized merge is the authorization** (section 6); no second human is required or claimed.
+6. **Internal tester delivery** runs on the staging merge (RELEASE_POLICY.md 8.1). Until a pipeline
+   exists, assigning a processed build to internal testers is a manual operation the CTO authorizes in writing.
 7. **Least-privilege Apple authentication**, with app-restricted individual API
    credentials as the preferred direction. The model is **not final** (section 5).
 8. Signed IPAs are never stored as GitHub artifacts, Releases or log content.
@@ -389,9 +393,9 @@ No application code was changed for any of these.
 | 6 | Capabilities and entitlements the app really needs (`remote-notification`, background tasks) | Apple account owner, maintainers |
 | 7 | Export-compliance answer and App Privacy answers; then `ITSAppUsesNonExemptEncryption` in `Info.plist` (a native-config change, separate approval) | Apple account owner, legal |
 | 8 | Internal tester list and who administers the tester group | Apple account owner |
-| 9 | Release authority, signing custodians, and a second, independent approver (section 6) | project owners |
+| 9 | Continuity signing custodians (no approval role; the release authority is the authorized merge, section 6) | project owners |
 | 10 | Release identifier scheme, in-app staging identifier, Signet XPUB/address validation (prerequisites of [RELEASE_POLICY.md](RELEASE_POLICY.md) 8.1) | maintainers; separate issues |
-| 11 | Whether the staging environment needs reviewers beyond the protected-branch merge (staging should require approval at first) | project owners |
+| 11 | **Resolved (RELEASE_POLICY.md 2.3):** no reviewers; the merge is the authorization | CTO |
 | 12 | The effective minimum iOS version and its device testing | product decision; [IOS_CI.md](IOS_CI.md) |
 | 13 | **App Store Connect API access is disabled** for the Apple Developer organization (reported by Noah, 2026-11-08; not checked here). The Account Holder (Kevin) has been asked to enable it. Until it is on, no API key of any kind (team or individual, section 5) can be created, so the upload and status-reading half of the pipeline cannot be configured. An earlier note on #71 said the account might be held under a personal Apple ID, so item 1 (account type and ownership) is still open. | Account Holder |
 
@@ -446,22 +450,27 @@ and compensated by reviewer approval on the staging environment.
 The `.p8` is shown once; it is handed to the custodians through a secure channel, never through
 chat, email, issues or the repository.
 
-## 6. Independent approval of production signing and delivery
+## 6. Authorization of production signing and delivery
 
-The two `Maintainers` accounts are controlled by one individual. **Accounts controlled by the same
-individual are one approver, however many accounts exist.** Therefore:
+**The authorized merge into `production` is the authorization** to run the production pipeline,
+including signing and the configured delivery operations; the merge into `staging` is the same
+for staging (RELEASE_POLICY.md principle 9 and section 2.3). Nothing follows the merge.
 
-- A GitHub environment's "required reviewers" and "prevent self-review" settings **cannot** by
-  themselves provide independent approval while every eligible reviewer is the same person.
-- **Production signing and production delivery must be approved by a person who is not the
-  person who prepared, merged or triggered the run.** At least one such second human must be
-  named (release authority or signing custodian) and added as a reviewer of `production-ios`
-  **before** any production signing is authorized. Until then production signing stays
-  disabled, and the production environment is not created.
-- The same custodian separation applies to secrets: nobody is the only holder of a credential
-  that can ship the production app (see [RELEASE_SIGNING_ARCHITECTURE.md](RELEASE_SIGNING_ARCHITECTURE.md) section 7).
-- Staging can start with one human, but should still use a required reviewer so that a run is
-  an explicit act. Independence is not claimed for it.
+- The two `Maintainers` accounts (`sziller` prepares, `CadenaWizard` reviews and merges) are
+  **the same person**. They are not, and the repository does not pretend they are, independent
+  reviewers. A GitHub environment's "required reviewers" setting would therefore add no
+  independence and is **not used**.
+- What protects the release is automated and mandatory: protected, branch-restricted
+  environments; GitHub-hosted ephemeral runners only; the two-job split; no recompilation while
+  signing; `tool/verify_ipa.py` after signing; a failed verification stops delivery
+  (RELEASE_POLICY.md section 2.3).
+- The same custodian separation applies to secrets: nobody should be the only holder of a
+  credential that can ship the production app (see
+  [RELEASE_SIGNING_ARCHITECTURE.md](RELEASE_SIGNING_ARCHITECTURE.md) section 7). That is
+  continuity, not approval.
+- **Before the pipeline can sign**, a person signs by hand (iOS 1.0.4, [IOS_RELEASE.md](IOS_RELEASE.md)).
+  That is an operational exception to the future automation, **not** an exception to this
+  authorization rule, and it needs the CTO's written authorization of that operation.
 
 ## 7. Public-repository security model
 
@@ -481,14 +490,15 @@ no signing workflow, environment or secret exists.
 | Tokens | A short-lived (20 minutes or less) JWT is derived per run from the `.p8`. |
 | Accidental commits | Ask the Organization Owners to enable secret scanning and push protection. |
 | Concurrency and duplicates | One upload at a time per environment; a build number already present is refused before upload. |
-| Public publication | The credential cannot submit for review (section 5), the workflows contain no such call (tested), and production upload needs independent approval (section 6). |
+| Public publication | The credential cannot submit for review (section 5), the workflows contain no such call (tested), and production upload is authorized by the merge into `production` and is limited to the configured operations (section 6). |
 
 ## 8. Operating procedure (skeleton; every step is planned, none exists yet)
 
 | Who | What |
 |---|---|
 | **Automated (after the pipeline exists and is approved)** | Build, sign, verify, record evidence, upload to the staging record, report processing state. |
-| **Needs explicit authorization** | Starting a staging run (reviewer), assigning a processed build to internal testers (initially), any production signing, any production upload (independent approver). |
+| **Authorized by the merge** | A pipeline run on `staging` or `production`, including signing and the configured delivery. |
+| **Manual operations before automation exists** | Each needs the CTO's written authorization of that specific operation (RELEASE_POLICY.md 2.3): for example the iOS 1.0.4 signing, upload and tester assignment. |
 | **Apple account administrator (Noah)** | App IDs, App Store Connect records, certificates, profiles, service users and their keys, tester group, agreements and renewal, export-compliance and privacy answers. Not required to build or sign locally. |
 | **Cadena maintainers** | Review and merge, workflow changes, environment settings (Owners), custody register (no secrets in the repository). |
 
