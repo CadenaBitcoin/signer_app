@@ -23,7 +23,9 @@ Workflow: `.github/workflows/build-variants.yml`. The mapping lives in one place
 | The push that **creates** `staging` or `production` | none (every job is skipped) | 0 |
 | Manual run (Actions → *Build variants* → *Run workflow*) | `all`, or exactly one variant | 5, or 1 |
 
-The branch decides **which variants run**. It does not decide what a variant *is*: the
+**Every** push to `staging` or `production` runs its branch's builds, whatever it changes: the
+planner has no path filter, no change classification and no release-intent input, and the
+policy forbids adding any (RELEASE_POLICY.md 2.3). The branch decides **which variants run**. It does not decide what a variant *is*: the
 application identity and environment of every build still come from its explicit `--flavor`
 and `config/build/<env>.json`, and the build fails if the two disagree
 ([BUILD_CONFIGURATION.md](BUILD_CONFIGURATION.md)). A push to `staging` cannot build a
@@ -135,7 +137,9 @@ the identity matrix and version wiring, and the release-signing rules in real Gr
 `docs/ANDROID_RELEASE.md` section 7). It builds no application, produces no artifact, has read-only
 permissions and no secret, and uses `pull_request`, never `pull_request_target`. It is therefore not a
 release trigger and does not touch the policy above; `tool/test_android_release.sh` pins its shape and
-that `build-variants.yml` still has no `pull_request` trigger.
+that `build-variants.yml` still has no `pull_request` trigger. That workflow deliberately has **no path filter**, because a
+filter would leave a required check "skipped". The version-advancement check required by RELEASE_POLICY.md 7.3
+(not implemented) must follow the same rule: it runs on every pull request into a release branch.
 
 ## Concurrency
 
@@ -174,7 +178,12 @@ and no secret or environment is involved.
   nothing is published. Read the failed job's log, fix forward on `development`, and promote
   again through the normal pull request. Do not push to the release branch to "repair" it.
 - *Re-run failed jobs* on the same commit is acceptable (the evidence is keyed by run
-  attempt). Re-running does not change which variants are required.
+  attempt). Re-running does not change which variants are required. This is the repair of an
+  infrastructure failure of a **compile-only** build. The eventual signed pipeline retries a
+  failed delivery with the same retained, verified artifact, with no recompilation and no new
+  version, and records each attempt (RELEASE_POLICY.md 2.4, not implemented).
+- A defective application or an artifact that fails verification is repaired through source
+  control and gets a new version and build number (RELEASE_POLICY.md 2.4).
 - A red `plan` job (for example "not a merge commit") means the push was not a promotion in
   the sense above: find out how it reached the branch.
 - A red `verdict` with green builds means a job was skipped, missing or unselected-but-run;
@@ -184,7 +193,7 @@ and no secret or environment is involved.
 
 | | This workflow | Release distribution (not implemented) |
 |---|---|---|
-| Starts on | promotion merge, or manual | promotion merge, then a separate authorized step |
+| Starts on | promotion merge, or manual | promotion merge (the merge is the authorization; no separate step, RELEASE_POLICY.md 2.3) |
 | Signing | none (Android temporary debug key, iOS unsigned) | official keys in protected environments |
 | Output | text evidence | signed artifacts, TestFlight / Play / website |
 | Authority | `contents: read`, no secrets | maintainers; see the signing architecture |

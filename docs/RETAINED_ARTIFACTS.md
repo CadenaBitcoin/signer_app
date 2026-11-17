@@ -144,7 +144,7 @@ today (section 8). What a signing job must do, and what is already provided:
 
 **Common.** The job runs on the commit of the retained manifest (`source.commit`), unpacks the
 bundle with a key that is a recipient (`unpack`), and refuses to continue unless `verify` with that
-key passes and the retained manifest's commit is the one the release authority approved.
+key passes and the retained manifest's commit is the one whose merge authorized this run.
 
 **Android AAB (for Google Play): implemented offline by `tool/resign_android_aab.py` (Stage 3B).**
 
@@ -229,7 +229,7 @@ none of it is created by Stage 2.
 | # | Prerequisite | Kind | Notes |
 |---|---|---|---|
 | 1 | **Recipient keys**: the custodians' and a dedicated key for the signing job | Decision, then a reviewed PR | The signing job's **private** key becomes a protected-environment secret. Decide who holds the custodian keys and whether the signing job decrypts or instead builds and signs in one job |
-| 2 | **Protected GitHub environments** (`staging-android`, `staging-ios`, `production-android`, `production-ios`) with branch restriction and required reviewers | GitHub administration | None exist ([RELEASE_SIGNING_ARCHITECTURE.md](RELEASE_SIGNING_ARCHITECTURE.md) section 4). The two Maintainers accounts are one individual, so a second human reviewer is needed for independent approval of production signing |
+| 2 | **Protected GitHub environments** (`staging-android`, `staging-ios`, `production-android`, `production-ios`) with branch restriction (no required reviewers: the merge is the authorization) | GitHub administration | None exist ([RELEASE_SIGNING_ARCHITECTURE.md](RELEASE_SIGNING_ARCHITECTURE.md) section 4). The two Maintainers accounts are one individual; no second reviewer is required or claimed (RELEASE_POLICY.md principle 9) |
 | 3 | **Android upload key** in `production-android` (and a staging key) | Credential | Today held by the CFO and used locally; moving it to CI is a custody decision. Needs `CADENA_EXPECTED_CERT_SHA256` of the upload key (public) |
 | 4 | **Google Play delivery**: a service account with the Play Developer API and a track decision (internal, then production) | Credential and decision | The AAB version code must be above the published floor |
 | 5 | **Apple distribution certificate and App Store profile** (or an App Store Connect API key for automatic signing) in `production-ios` / `staging-ios` | Credential | Cadena-held, not individual; [IOS_SIGNING.md](IOS_SIGNING.md) section 2 |
@@ -255,7 +255,7 @@ none of it is created by Stage 2.
 - Encryption protects the content from readers without a key. It does not hide that an artifact
   exists, its size, its checksums or its manifest, which are public by design.
 - Anyone who holds a recipient private key can read every artifact encrypted to it; key custody is
-  the release authority's responsibility. A lost key means the artifact is unrecoverable (rebuild
+  the responsibility of the continuity custodians. A lost key means the artifact is unrecoverable (rebuild
   it from the commit).
 - Nothing in this stage changes the application, a build variant, a version, a signing
   configuration or any promotion. The release `production` branch and the published 1.0.4 are untouched.

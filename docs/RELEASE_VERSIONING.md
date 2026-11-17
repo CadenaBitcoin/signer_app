@@ -33,7 +33,11 @@ The **CI build identifier is not a version.** Many executions can build one appl
 version; each is unique without anyone raising the build number. The application version
 changes only when a person changes `pubspec.yaml` in a reviewed commit; no workflow writes
 it, passes `--build-name`/`--build-number`, or derives a version from a branch name, a
-date or a run number (checked by `tool/verify_version.sh` and by the tests).
+date or a run number (checked by `tool/verify_version.sh` and by the tests). Every merge into `staging` must advance
+the build number, documentation-only merges included (RELEASE_POLICY.md 7.3, option A): the advance is a
+reviewed edit of `pubspec.yaml` that is part of the pull request, validated **before** the merge by a required
+check (an implementation requirement, not active today), and **never** written by a workflow afterwards.
+Consumed numbers are never reused; skipped numbers are acceptable.
 
 ### Platform mapping (checked in source and in every built artifact)
 
@@ -238,13 +242,15 @@ Under the policy (7.1, 7.4), and unchanged by this document:
   the production build needs a different build number, that is a new reviewed commit and
   therefore a new candidate, not an edit of the old one.
 - **A failed or withdrawn candidate** keeps its identifier and its build number; both are
-  consumed. The next candidate is `-rc.N+1` with a higher build number. Nothing is renamed
-  or deleted; a withdrawal is recorded in the release record.
+  consumed. The next candidate is `-rc.N+1` with a higher build number (numbers may be skipped).
+  Nothing is renamed or deleted; a withdrawal is recorded in the release record.
 - **Rebuilding an existing release:** a build of the same commit is a new CI execution with
   a new CI build identifier and a new artifact digest, never a new version. Flutter AOT
   output is not reproducible bit for bit across machines, so equality of two builds is
   decided by the commit, the configuration digest and the toolchain in the manifest, not
-  by the artifact digest.
+  by the artifact digest. This is the repair of a failure **before** a verified artifact is
+  retained. After one exists, a transient delivery failure is retried with **that same artifact**,
+  without recompiling and without a new version (RELEASE_POLICY.md 2.4); every attempt is recorded.
 - The tooling accepts a release identifier (`--release-id`) and checks its form against the
   version and the environment. Where the identifier is stored and who creates the tag are
   open decisions 5 and 6; until they are decided, compile-validation manifests carry
@@ -313,8 +319,10 @@ separate, written authorization** of the following (a new issue, not part of #69
 
 1. a manually started (`workflow_dispatch`) workflow, one Android variant only, on a ref the
    maintainer chooses; never on a push, never on a promotion;
-2. a protected GitHub environment with a required reviewer (none exists today), so a person
-   approves each retained binary;
+2. access to the retained binary controlled by encryption to custodian keys
+   ([RETAINED_ARTIFACTS.md](RETAINED_ARTIFACTS.md)), not by a per-run approval step (RELEASE_POLICY.md
+   principle 9 and 2.3 add no reviewer); a later development-only APK capability (RELEASE_POLICY.md
+   7.6) would be designed on that basis;
 3. the labelled file name above, the manifest next to it, a retention of days (not weeks),
    no tag, no release, no copy outside the run;
 4. the maintainers' decision that retaining it in this public repository is acceptable
@@ -366,9 +374,8 @@ after a separate authorization of the exercise (and after the corrective tests a
 5. The branch is deleted afterwards. `staging` and `production` are not touched; no tag,
    release, signing or retained binary is involved.
 
-Raising the version on `development` and promoting it to `staging` is a separate decision
-that depends on open decision 3 (where the build number is raised); it is not needed for
-this test.
+Raising the version and promoting it to `staging` follows RELEASE_POLICY.md 7.3 (option A: the
+advance is a reviewed edit in the pull request); it is not needed for this test.
 
 ## Open decisions
 
@@ -378,8 +385,8 @@ These need a maintainer decision (policy section 11); this change does not take 
    `RELEASE_IDENTIFIER` in the staging configuration). Release-candidate identity is an
    **open requirement** until decisions 1–3 are taken.
 2. **Who creates tags and with which identity** (decision 5), and when.
-3. **Where the build number is raised for each promotion** (decision 4; proposal: in the
-   promotion pull request, checked by the pipeline).
+3. **Resolved (RELEASE_POLICY.md 7.3, option A, CTO 2026-11-17):** the build number is raised in the
+   reviewed pull request and validated before the merge by a required check (not yet implemented).
 4. **Whether Android and iOS build numbers may differ** in practice (permitted, not built).
 5. **The iOS published build number**, so an iOS floor can be recorded. Waiting for the
    Apple account answers (Issue #71, [APPLE_ACCOUNT_QUESTIONNAIRE.md](APPLE_ACCOUNT_QUESTIONNAIRE.md)

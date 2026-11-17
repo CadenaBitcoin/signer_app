@@ -22,7 +22,7 @@
 | Android production is `com.cadenabitcoin.mobile.signer`, the package published on Google Play (settled in #72), staging `com.cadenabitcoin.mobile.signer.staging` (not registered). iOS production is `com.app.cadenabitcoin`, staging `com.app.cadenabitcoin.staging`; what Apple has registered is unconfirmed | Gradle, Xcode project, `config/release/published_versions.json`, [IOS_SIGNING.md](IOS_SIGNING.md) |
 | The signing identities of the already released app are undocumented | `GOVERNANCE.md` |
 | The iOS CI toolchain is Xcode 26.3 with an iOS 26 SDK (Issue #70; status in [IOS_CI.md](IOS_CI.md)); App Store Connect uploads require Xcode 26 and the iOS 26 SDK since 2026-04-28 | [IOS_CI.md](IOS_CI.md); [Apple](https://developer.apple.com/news/upcoming-requirements/) |
-| No GitHub environments and no tags. The `production` branch exists (Issue #68). The two `Maintainers` accounts are controlled by one individual, so they are one approver (section 6) | GitHub, checked 2026-10-21 |
+| No GitHub environments and no tags. The `production` branch exists (Issue #68). The two `Maintainers` accounts are controlled by one individual; the merge by that person is the one authorization (section 6) | GitHub, checked 2026-10-21 |
 | Validation workflows: `contents: read`, no secrets, SHA-pinned actions | [ANDROID_CI.md](ANDROID_CI.md), [IOS_CI.md](IOS_CI.md) |
 
 **Prerequisite.** If the production app is already published, its Android key and
@@ -130,13 +130,10 @@ For every environment:
 
 - **Deployment branch restriction** to the one branch above, so the credentials
   are unreachable from other branches, pull requests and forks.
-- **Required reviewers** from the release authority, with the person who triggered
-  the run unable to approve it. Mandatory for the production environments. **Genuinely
-  independent approval is required for production signing and delivery:** accounts
-  controlled by the same individual are one approver, so at least one other human must be
-  a reviewer of `production-ios` before production signing is authorized (section 6).
-  Whether the staging environments need reviewers beyond the protected-branch merge
-  is open (**DECISION**).
+- **No required reviewers and no manual approval step.** The authorized merge into the
+  branch is the authorization (RELEASE_POLICY.md principle 9 and section 2.3). A required
+  reviewer would add nothing: the eligible accounts are one person (section 6). The branch
+  restriction above, the protected branch and the automated verification are the controls.
 - Secrets only at environment level; none at repository or organization level.
 - Administration limited to Organization Owners; secret changes are logged.
 
@@ -158,11 +155,14 @@ Workflow rules (checked in each workflow's pull request):
   section 8). Digests and the release record may be public.
 - Changes to release workflows go through protected pull requests reviewed by the
   Maintainers.
-- **A merge triggers building and signing. It never publishes publicly.** Uploading
-  to the website, Google Play, App Store review or any public channel is a separate
-  job or action behind its own approval (RELEASE_POLICY.md section 8). The one
-  delivery that belongs to the staging pipeline itself is the mandatory restricted
-  TestFlight delivery of the iOS staging build (RELEASE_POLICY.md section 8.1).
+- **A merge triggers the complete pipeline**: build, retention, verification, signing, verification
+  again, delivery to the destinations configured for that branch, and the record
+  (RELEASE_POLICY.md section 2.3). Delivery is limited to those configured non-public destinations
+  (the mandatory restricted TestFlight delivery of the iOS staging build, RELEASE_POLICY.md section
+  8.1; for production, upload only: automatic App Review submission and public publication are outside
+  the configured scope). Nothing is ever stored as a public Actions artifact. A transient delivery
+  failure is retried with the same retained, verified artifact, never a recompilation
+  (RELEASE_POLICY.md section 2.4).
 
 ## 5. iOS in CI: no local signing, no individual dependency
 
@@ -194,45 +194,57 @@ automated pipeline to operate.
 
 ## 6. Operators and authorization
 
-Roles (GOVERNANCE.md section 1): **Maintainers** review and merge; the **release
-authority** decides what is published; **signing custodians** hold and recover
-credentials. Today only the first exists; no person is implicitly any other role.
-The Apple administrator and the Google Play account owners are account roles to
-assign, not implied by any of the above.
+Roles (GOVERNANCE.md section 1): the **release authority** is the authorized merge
+(RELEASE_POLICY.md principle 9); **Maintainers** review and merge; **signing custodians**
+hold and recover credentials (continuity, not approval). The Apple administrator and the
+Google Play account owners are account roles to assign, not implied by any of the above.
 
-Intended flow:
+Flow (RELEASE_POLICY.md section 2.3):
 
-1. A change reaches `development`, then `staging` by approved pull request. The
-   merge triggers the **staging pipeline**: verification, build, sign, release
-   record; iOS goes to restricted TestFlight (mandatory; whether the upload needs an
-   extra approval is a DECISION); the Android staging APK goes to an internal,
-   non-public mechanism that is still to be chosen.
-2. After testing, a pull request `staging → production` is approved and merged. The
-   **production pipeline** starts, waits at the production environments for the
-   release authority's reviewer (not the person who merged), then builds and signs
-   the APK, AAB and iOS build.
-3. Publication (website, Google Play track, App Store submission) is authorized
-   separately by the release authority, per channel, and recorded.
+1. A change reaches `development`, then `staging` by approved pull request, which carries the
+   validated version advance (RELEASE_POLICY.md 7.3). The merge is the authorization and triggers
+   the **staging pipeline**: build, retention, verification, signing, verification again, delivery
+   to the internal destinations (iOS: restricted TestFlight, mandatory; Android: an internal,
+   non-public mechanism still to be chosen), record.
+2. After testing, a pull request `staging → production` is approved and merged. The merge is
+   the authorization and triggers the **production pipeline**: build, retention, verification,
+   signing of the APK, AAB and iOS IPA, verification again, upload to the configured non-public
+   destinations, record. There is no waiting state and no second approval; automatic App Review
+   submission and public publication are outside the configured scope.
 
-Nobody can both trigger and approve a production signing run, and no single
-person's account or device is required for a release. **A person with several accounts
-is one person**: while every eligible reviewer is the same individual, a production
-environment's "prevent self-review" setting does not give independent approval, and
-production signing and delivery stay unauthorized until a second, independent human is
-named and added as a reviewer. Staging may start with one human, with a required reviewer so
-that each run is an explicit act. Assigning a processed iOS build to internal testers needs
-explicit approval at first; automatic distribution may be considered after the pipeline is
-verified.
+`sziller` and `CadenaWizard` are one person; GitHub's rule that an author cannot approve their
+own pull request is why two accounts exist. **A person with several accounts is one person**, so
+the design neither requires nor pretends that a second human reviews a release. What protects a
+release is automated: protected branches, branch-restricted environments, isolated credentials,
+signed commits and required checks (activation preconditions, RELEASE_POLICY.md section 2.3),
+no recompilation while signing, and verification that stops delivery on failure.
+A person's account or device is still not required for a release to be possible: credentials sit
+in environments, and continuity custodians exist so that no credential has a single holder.
 
 ## 7. Custody and recovery
 
-For every irreplaceable credential (above all an Android app-signing key under
+The purpose is **business continuity and recovery from credential loss**. Custodians are **not
+release authorizers**: the release authority is the authorized merge (RELEASE_POLICY.md principle
+9), and **no second-person approval is required for routine signing or deployment**. The
+two-custodian rules below apply only to creating and restoring backups of irreplaceable
+credentials, which is rare and is never a step of a release.
+
+Three kinds of credential are kept apart:
+
+| Kind | Examples | Custody and recovery |
+|---|---|---|
+| **1. Cadena-controlled signing credentials** | Android app-signing key (option A), the Android upload key (held by the CFO today), an App Store Connect API key (`.p8`) | The rules below: controlled generation, two independent encrypted offline backups, a private custody register, recovery drills |
+| **2. Apple cloud-managed signing certificates** | The Apple distribution certificate when Apple manages it (iOS 1.0.4 route A) | Apple holds the private key; **there is nothing for Cadena to back up and no key on any Mac**. Continuity depends on the Apple account: more than one administrator, and access recoverable through the account holder. A lost or revoked certificate is re-created in the Apple account |
+| **3. Credentials in protected CI/CD environments** | GitHub environment secrets (none exist yet) | Working copies of kind 1 credentials, re-creatable from the backups; environment-level only, deployable from their one branch; never the only copy |
+
+For every irreplaceable credential of kind 1 (above all an Android app-signing key under
 option A):
 
 - generated once, in a controlled environment, by two custodians, never on a
   shared CI runner;
 - stored in at least two independent encrypted offline backups in separate places,
-  unlockable only with the cooperation of two custodians;
+  unlockable only with the cooperation of two custodians (a recovery safeguard, not a release
+  approval);
 - the GitHub environment secret is only a working copy that can be re-created from
   the backups; its passphrase differs from the backup passphrases;
 - a private custody register (outside the public repository) records holders,
@@ -243,12 +255,14 @@ option A):
 - custodians are replaced before leaving; credentials are rotated after an unclean
   departure.
 
+This document creates and transfers no credential.
+
 | Credential | If lost | If leaked |
 |---|---|---|
 | Android production app-signing key | Existing installs cannot be updated by Cadena unless Play can upgrade the key; otherwise users must reinstall | Anyone can ship updates devices accept as official; rotate through Play where possible |
 | Android staging key | Re-create; testers reinstall | Re-create; low impact (staging only) |
 | Play upload key | Reset through Play support | Rotate via Play |
-| Apple distribution certificate | Revoke and re-create | Revoke; re-sign and re-upload |
+| Apple distribution certificate (own or cloud-managed) | Revoke and re-create in the Apple account | Revoke; re-sign and re-upload |
 | App Store Connect API key | Create a new one | Revoke immediately |
 
 ## 8. Provenance of signed artifacts
@@ -287,27 +301,25 @@ approved by whom, and sent to which channel.
 
 ## 10. Decisions needed
 
-1. Name release maintainers, the release authority, at least two signing
-   custodians and a second Apple account administrator.
+1. Name at least two continuity signing custodians and a second Apple account
+   administrator (the release authority is the authorized merge; nothing to name).
 2. Inventory the existing signing identities and account ownership (Apple team
    `D65458CPDP`, Play Console, any Android keystore), confirming they belong to the
    Cadena organization.
 3. Android: option A (recommended) or B.
 4. Apple: shared or per-context distribution certificate; API key scope; whether
    the pipeline may create certificates through the API.
-5. Whether staging environments need approvers (Issue #71 proposal: yes at first);
-   whether the staging TestFlight upload (itself mandatory) is automatic on merge or needs
-   an extra approval. **Decided (Issue #71):** assigning a processed build to internal
-   testers needs explicit approval at first. Also the internal, non-public mechanism for the
-   Android staging APK.
+5. **Resolved (RELEASE_POLICY.md 2.3):** no approvers on environments; the staging TestFlight
+   upload and delivery to the internal group run on the merge. Still open: the internal,
+   non-public mechanism for the Android staging APK.
 6. Who creates tags and with which identity.
 7. Whether secrets live as GitHub environment secrets, or the keys stay in an
    external key service reached with short-lived OIDC credentials (later
    hardening).
 8. Whether iOS signing uses manually managed secrets or a tool such as fastlane
    `match`, which adds a private repository to protect.
-9. **The second, independent approver** for production signing and delivery (section 6),
-   and who holds each signing role. A prerequisite of any production signing.
+9. **Withdrawn:** no second, independent approver is required (RELEASE_POLICY.md principle 9).
+   Who holds each continuity signing role is still to be named.
 10. **The Apple authentication model** (individual key of an app-restricted service user,
     preferred, or the lowest-role team key), after the account owner has confirmed the
     permissions ([IOS_SIGNING.md](IOS_SIGNING.md) section 5).
