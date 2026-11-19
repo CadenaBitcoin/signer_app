@@ -280,8 +280,20 @@ jobs:
         run: |
           set -uo pipefail
           set +e
-          REASON_RE=' _(stat|fstat|lstat|fstatat|statfs|fstatfs|statvfs|getattrlist|fgetattrlist|getattrlistbulk|mach_absolute_time|clock_gettime|clock_gettime_nsec_np|sysctlbyname|sysctl)$|NSUserDefaults|systemUptime|fileModificationDate|creationDate|NSURLVolume'
           problems=0
+          # The scan is tool/scan_required_reason.sh of the commit of THIS workflow file (not of the approved commit, which
+          # predates it): read from the history that the checkout fetched, outside the working tree so that the tree stays
+          # clean for the drift check. It reads every layout of `nm -u` (llvm-nm of Xcode 26.3 prints bare names, cctools nm
+          # prints a "U" column) and is tested by tool/test_required_reason_scan.sh.
+          REASON_SCAN="$RUNNER_TEMP/scan_required_reason.sh"
+          if git show "$GITHUB_SHA:tool/scan_required_reason.sh" > "$REASON_SCAN" 2> "$RUNNER_TEMP/scan_required_reason.err" && [ -s "$REASON_SCAN" ]; then
+            echo "scan_required_reason.sh sha256=$(shasum -a 256 "$REASON_SCAN" | awk '{print $1}') (from workflow commit $GITHUB_SHA)" > diagnostics/scan-tool.txt
+            echo "nm=$(nm --version 2>&1 | head -n1)" >> diagnostics/scan-tool.txt
+          else
+            echo "::error::tool/scan_required_reason.sh is not in workflow commit $GITHUB_SHA; the required-reason scan cannot run (X2 evidence incomplete)."
+            cat "$RUNNER_TEMP/scan_required_reason.err"
+            exit 1
+          fi
           for pair in "preflight:$PRE_APP" "archive:$ARCHIVE_APP"; do
             label="${pair%%:*}"; root="${pair#*:}"
             out="diagnostics/$label"
@@ -299,7 +311,8 @@ jobs:
               nm -u "$f" > "$out/nm-u/$flat.txt" 2> "$out/nm-u/$flat.err"
               [ -s "$out/nm-u/$flat.err" ] || rm -f "$out/nm-u/$flat.err"
               echo "== $rel" >> "$out/required-reason-imports.txt"
-              grep -E "$REASON_RE" "$out/nm-u/$flat.txt" >> "$out/required-reason-imports.txt" || true
+              # The complete output was written above and is never filtered; this adds only the matching lines.
+              bash "$REASON_SCAN" "$out/nm-u/$flat.txt" >> "$out/required-reason-imports.txt" || { echo "::error::$label: the required-reason scan failed on $rel."; problems=1; }
             done < <(find "$root" -type f | sort)
             echo "$label: $count Mach-O files scanned under $root"
             if [ "$count" -eq 0 ]; then echo "::error::$label: no Mach-O file found, so no scan is possible (X2 evidence incomplete)."; problems=1; fi

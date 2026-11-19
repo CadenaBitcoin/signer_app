@@ -147,6 +147,11 @@ jobs:
       - name: Test the iOS toolchain checks
         run: tool/test_ios_toolchain.sh
 
+      # The required-reason scan of docs/IOS_RELEASE.md section 9 against both layouts of `nm -u` (Issue #71; the
+      # diagnostics workflow runs the same script), with recorded Xcode 26.3 output as fixtures.
+      - name: Test the required-reason scan (both nm -u layouts)
+        run: tool/test_required_reason_scan.sh
+
       # The Android release signing and verification (Issue #72), credential-free: the static
       # checks of android/app/build.gradle.kts and the ledgers, the verifier's ELF and fingerprint
       # code, the release driver's refusals and the credential-free state of the workflows. No
