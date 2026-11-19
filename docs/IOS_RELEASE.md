@@ -502,13 +502,28 @@ coordinator's privacy-manifest decision (section 13), not a stop condition.**
 
 ```bash
 SCAN_ROOT=build/ios/iphoneos/Runner.app          # then: "$APP"
+mkdir -p "$WORK/evidence/nm-u"
 find "$SCAN_ROOT" -type f -perm -u+x | while read -r f; do
   file "$f" | grep -q 'Mach-O' || continue
-  echo "== ${f#$SCAN_ROOT/}"
-  nm -u "$f" 2>/dev/null | grep -E ' _(stat|fstat|lstat|fstatat|statfs|fstatfs|statvfs|getattrlist|fgetattrlist|getattrlistbulk|mach_absolute_time|clock_gettime|clock_gettime_nsec_np|sysctlbyname|sysctl)$|NSUserDefaults|systemUptime|fileModificationDate|creationDate|NSURLVolume'
+  rel="${f#$SCAN_ROOT/}"; flat="$(printf '%s' "$rel" | sed 's|/|__|g')"
+  nm -u "$f" > "$WORK/evidence/nm-u/$flat.txt" 2> "$WORK/evidence/nm-u/$flat.err"   # the COMPLETE output, never filtered
+  echo "== $rel"
+  tool/scan_required_reason.sh "$WORK/evidence/nm-u/$flat.txt"                      # only adds the matching lines
 done > "$WORK/evidence/required-reason-imports.txt"
 find "$SCAN_ROOT" -name PrivacyInfo.xcprivacy > "$WORK/evidence/privacy-manifests.txt"
 ```
+
+`tool/scan_required_reason.sh` holds the list of covered names (the one this section used before: `stat fstat lstat fstatat statfs
+fstatfs statvfs getattrlist fgetattrlist getattrlistbulk mach_absolute_time clock_gettime clock_gettime_nsec_np sysctlbyname sysctl`
+as whole C names, and `NSUserDefaults`, `systemUptime`, `fileModificationDate`, `creationDate`, `NSURLVolume` anywhere in a line).
+It takes the symbol name from the **last field** of each line, so it reads every layout of `nm -u`: the bare names of the `llvm-nm`
+that Xcode 26.3 provides (`_stat`), the `U` column of Apple's cctools `nm` (`                 U _stat`) and the BSD/GNU variants.
+**Do not copy the list into a `grep` pattern that expects a space before the name:** the first version of this scan did that
+(`' _(stat|...)$'`), matched nothing in the Xcode 26.3 output and therefore omitted `_stat`, `_fstat`, `_lstat` and the other
+covered C imports of `dlc_wallet.framework` (found in diagnostics run 44619876867). The `required-reason-imports.txt` of that run
+and of any earlier run that used the first pattern on an Xcode 26.x runner is **incomplete for the C symbols**; read the `nm-u/`
+files of that run, or repeat the diagnostics with the corrected scan. `tool/test_required_reason_scan.sh` tests the scan against
+both layouts; it is not a substitute for keeping the whole `nm -u` output.
 
 Expected from the repository analysis (read from the committed library's arm64 slice, 2026-11-16; **not yet seen in a linked
 app**): the undefined imports of Rust `std` are `_stat _fstat _lstat _opendir _fdopendir _readdir_r _fsetattrlist _clock_gettime`
