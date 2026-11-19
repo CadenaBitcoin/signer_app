@@ -347,6 +347,34 @@ bundle identity, the resolved environment values with the file that selected the
 and the result of the built-app check. The run summary and a workflow annotation
 repeat the environment.
 
+## Release diagnostics workflow (Issue #71, Phase 1; credential-free)
+
+`.github/workflows/ios-release-diagnostics.yml` ("iOS release diagnostics") is a **manual** workflow
+(`workflow_dispatch` only; offered once the file is on `development`). It builds the **approved release commit** unsigned and
+produces the pre-signing evidence of [IOS_RELEASE.md](IOS_RELEASE.md) section 9 on a hosted runner, so that evidence does not
+depend on someone's Mac. **It is not a release and not a signing or upload workflow, and it authorizes nothing**: it has no secret,
+environment, signing material or Apple access, the token is `contents: read`, and it never exports an archive.
+
+- **Inputs** (defaults are the iOS 1.0.4 values of the release record): `approved_sha`, `content_ref`, `expected_version`. The run
+  fails before any build unless HEAD equals `approved_sha`, it is an ancestor of `origin/production`, the application content equals
+  `content_ref` (the diff of IOS_RELEASE.md section 5 is empty), the tree is clean and `pubspec.yaml` has `expected_version`.
+- **Toolchain and checks**: the pins of the two workflows above (Xcode 26.3, Flutter 3.35.3, CocoaPods 1.17.0), then the repository's
+  own tools from the approved commit (`verify_build_config.sh`, `verify_version.sh`, `verify_artifact.sh`, `check_build_drift.sh`) and
+  the pinned Rust library SHA-256 check. The library is never rebuilt. `tool/verify_ios_toolchain.sh` compares the two older workflows
+  only; a changed pin must be copied to this file by hand.
+- **Two unsigned builds**: `flutter build ios --release --no-codesign` (the established CI command, the section 9 scan input) and
+  `flutter build ipa --release --no-codesign` (the unsigned archive that route B of [IOS_SIGNING.md](IOS_SIGNING.md) 3.2 would export).
+- **Evidence** (text only; never an app, an archive or a library; 30 days; SHA-256 sums included): the full `nm -u` of every Mach-O file
+  of both applications, `required-reason-imports.txt`, `privacy-manifests.txt` (plus each manifest's declared entries), the inspection
+  of `Frameworks/dlc_wallet.framework`, the Issue #22 symbol checks of the pinned library and the built framework, the structure of
+  the unsigned archive (`Info.plist`, `dSYMs`, `SwiftSupport`, signature and entitlement state), what Xcode offers for
+  `-exportArchive` (its `-help` text and the export-options keys it names), whether `altool` and Transporter command lines exist, the
+  toolchain versions and the source verification.
+- **What it does not show**: that the app complies with Apple's required-reason rules, that Apple accepts the build, that an export
+  signs an unsigned archive, or anything about runtime. It is **not** the V8 comparison baseline of IOS_RELEASE.md section 9, which
+  stays the application of the archive that the signing run exports. It does not change the procedure of IOS_RELEASE.md, and the
+  hosted runner's toolchain is not the operator's Mac.
+
 ## Known limitations
 
 - **Unsigned and unrun.** Compilation and linking only; nothing has launched this
