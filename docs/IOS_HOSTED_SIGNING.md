@@ -81,12 +81,31 @@ item 8). Only text is kept: hashes, the fingerprint, the checks, redacted tool o
 
 The unsigned archive comes from a job that ran third-party code. The signing job therefore (1) takes it only from **this run** (the
 artifact name carries the run ID and attempt; no `run-id`, token or pattern), (2) compares its SHA-256 with the digest the build job
-reported, (3) lets `tool/validate_handover_archive.py list` read the **member list before extraction**, refusing absolute or `..`
-names, names outside the single top-level `Runner.xcarchive`, control characters, duplicates, members that are not regular files,
-directories or links, set-id or sticky bits, symbolic links that are absolute or leave the archive, hard links to anything but an
-earlier regular file inside it, paths that run through an earlier link, and archives beyond the member and size limits, (4) extracts
-once, (5) lets `... tree` check the **extracted tree** (no special file, no set-id bit, every link resolving inside it), and (6) reads it
-only with Apple's tools. **Residual:** the digest is the build job's own claim, so a build job compromised through a dependency could
+reported, (3) lets `tool/validate_handover_archive.py list` check the **member list before extraction**, (4) extracts once, (5) lets
+`... tree` check the **extracted tree**, and (6) reads it only with Apple's tools.
+
+What the validator guarantees (and what it does not):
+- **Before extraction (`list`)** it *simulates* the tree that extraction would create, the way macOS creates it: names are compared
+  **ignoring case and Unicode normalization** (APFS treats `a` and `A`, or a precomposed and a decomposed accent, as one file). It
+  refuses an absolute or `..` name, a name outside the single top-level `Runner.xcarchive`, control characters, NUL or backslashes;
+  a name that equals an earlier one under that comparison; a member whose path runs **through** a symbolic link (so extraction never
+  writes through a link, including by a case or normalization alias); a symbolic link that is absolute, or that, **resolved
+  physically in the final simulated tree** (following every other link, `..` included), leaves the archive or loops (a purely lexical
+  check misses `d -> .` plus `E -> d/..`, where each link looks contained and `E` is the parent of the archive); a hard link to
+  anything but an earlier regular file inside it; every member type except regular file, directory, symbolic link and hard link (no
+  device, FIFO, sparse or contiguous member); set-id and sticky bits; and archives beyond the member and size limits.
+- **Symbolic links that stay inside the archive are accepted.** The diagnostics of run `44625655320` recorded the archive's tree but
+  not which entries are links, so nothing proves that a genuine archive has none, and rejecting them could stop a genuine run. The
+  tests include a genuine-structure archive (names from that run: 14 frameworks, the privacy bundle, `dSYMs`, `SwiftSupport`), with
+  and without contained links of the `Versions/Current` kind, and it is accepted before and after extraction.
+- **After extraction (`tree`)** the real filesystem is the judge: no special file, no set-id bit, and every link must resolve inside
+  the extracted directory. This is the backstop for what the simulation cannot foresee, and the tests show that it also refuses the
+  reviewer's chain.
+- **Not guaranteed:** that the system `tar` and Python's `tarfile` read a crafted archive identically (a parser difference would make
+  the simulation judge a different tree than the one extracted; the post-extraction check and the system tar's own refusal to write
+  through links are the backstops, and the second is unverified on a macOS runner until the first run); and provenance (below).
+
+**Residual:** the digest is the build job's own claim, so a build job compromised through a dependency could
 deliver a malicious but well-formed archive; nothing in this pull request can prove provenance beyond the pinned lockfiles and the
 checks of the build job. **One part is now enforced:** the pre-signature binary `Frameworks/dlc_wallet.framework/dlc_wallet` (the
 framework that carries the pinned Rust library) must equal the SHA-256 in the record's `G2S-DLC-WALLET-SHA256` line, compared by a
@@ -261,11 +280,11 @@ Issue #71, that is record bookkeeping, not verified here), G2 (upload), G3 to G5
 | F2 authorization not bound to the implementation | **Fixed**: `G2S-WORKFLOW-BLOB`, `G2S-GATE-BLOB`, `G2S-TOOL-BLOBS` (now including the modules `verify_ipa.py` imports and the script it runs), checked from both sides | gate; section 5 |
 | F3 G2S had no prerequisites | **Fixed**: nine decision rows must be `Decided`; upload-time rows named and excluded; nothing is decided here | gate; section 5 |
 | F4 archive checked by name only | **Fixed**: member-list check before and tree check after extraction, once-only extraction, digest first; provenance residual documented | `tool/validate_handover_archive.py`; section 2.1 |
-| F5 tests missed six dangerous edits | **Fixed**: `tool/test_ios_hosted_signing_behavior.sh` runs the real steps with stubs and synthetic credentials, parses the YAML, and applies 33 mutations (the audit's six and more); all are caught. They run on every pull request in the job `ios-signing-security` of `android-release-tests.yml` (PyYAML pinned and hash-checked) | tests; CI |
+| F5 tests missed six dangerous edits | **Fixed**: `tool/test_ios_hosted_signing_behavior.sh` runs the real steps with stubs and synthetic credentials, parses the YAML, and applies 34 mutations (the audit's six and more); all are caught. They run on every pull request in the job `ios-signing-security` of `android-release-tests.yml` (PyYAML pinned and hash-checked) | tests; CI |
 | F6 JWT-shaped tokens not redacted | **Fixed**: redaction filter and evidence scan, tested with a synthetic token | workflow; tests |
 | F7 line-based validation | **Fixed**: whole-string matching in the workflow and the gate; two-line values refused | workflow, gate; tests |
 | F8 re-run outlives a withdrawal | **Fixed**: the revision must be the tip of `development`, in the gate, twice | gate, workflow |
-| F9 gate looseness | **Fixed** for the `APPROVED_SHA` row (exactly one table row) and for lines hidden in code blocks or comments; **not fixed**: the comment URL is not verified against GitHub | gate |
+| F9 gate looseness | **Fixed** for the `APPROVED_SHA` row (exactly one table row) and for lines hidden in code blocks (CommonMark fences: closed only by the same character, at least as long, nothing after it) or comments; **not fixed**: the comment URL is not verified against GitHub | gate |
 | F10 approved-commit scripts in the signing job | **Fixed**: none runs; the verifier's repository view is assembled from this commit's script and the approved pubspec as data | workflow |
 | F11 public evidence, environment restriction | **Documented** (section 4, section 6 item 8); the environment must be restricted to `development` by hand | document |
 
@@ -276,3 +295,9 @@ its base); the specific Apple key ID is no longer in this document; D14 describe
 no-application-isolation fact and keeps rotation and revocation available instead of mandating revocation. The structure of the G2S
 prerequisite list (D3 D6 D7 D8 D9 D10 D11 D12 D14) was accepted in that review; **no row is decided by that acceptance and G2S is not
 authorized.**
+
+**Final-review corrections (three findings of the last security review of commit `638c87d`):** (1) the archive validator now simulates
+the extracted tree, ignoring case and Unicode normalization, and resolves symbolic links physically in the final state (section 2.1);
+(2) the gate's Markdown fence parsing follows CommonMark, so a marker hidden behind a `~~~` line inside a backtick block, or behind a
+shorter fence inside a longer one, is no longer live; (3) the key text is unset right after it is written, before `chmod` or any other
+process starts, and a test wraps the programs the step runs and fails if any of them has the key text in its environment.

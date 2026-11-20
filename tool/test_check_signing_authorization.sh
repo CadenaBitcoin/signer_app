@@ -140,6 +140,36 @@ sed 's/$/\r/' "$good" > "$tmp/m.md"; pf G2S-DLC-WALLET-SHA256 "$tmp/m.md" >/dev/
 bash "$tgate" --print-field "bogus; rm" --record "$good" --tools-root "$tools" >/dev/null 2>&1; [ $? -eq 2 ] && ok "--print-field refuses a key that is not G2S-..." || bad "--print-field refuses a key that is not G2S-..."
 bash "$tgate" --print-field G2S-DLC-WALLET-SHA256 --record "$tmp/none.md" --tools-root "$tools" >/dev/null 2>&1; [ $? -eq 2 ] && ok "--print-field with an unreadable record is a usage error" || bad "--print-field with an unreadable record is a usage error"
 
+# --- Markdown fences follow CommonMark: a fence is closed only by the same character, at least as long, with nothing after it ---
+L="G2S-DLC-WALLET-SHA256: $DLC"
+fence() { # NAME EXPECTED_RC LINES...   (the lines are a record; --print-field reads $L through the effective text)
+  local name="$1" want="$2"; shift 2; printf '%s\n' "$@" > "$tmp/f.md"; pf G2S-DLC-WALLET-SHA256 "$tmp/f.md" >/dev/null; local rc=$?
+  [ "$rc" -eq "$want" ] && ok "fence: $name" || bad "fence: $name" "rc=$rc, wanted $want"
+}
+fence "REVIEWER BYPASS 1: a ~~~ line inside a backtick block does not close it (the marker stays hidden)" 1 '```text' '~~~' "$L" '```'
+fence "REVIEWER BYPASS 2: a shorter backtick fence inside a longer one does not close it" 1 '````text' '```' "$L" '````'
+fence "a tilde block is not closed by backticks" 1 '~~~' '```' "$L" '~~~'
+fence "a closing fence shorter than the opening one does not close it" 1 '~~~~~' '~~~' "$L" '~~~~~'
+fence "a closing fence with text after it does not close it" 1 '```' '``` trailing' "$L" '```'
+fence "a backtick fence is not closed by a tilde fence even of equal length" 1 '```' '~~~' "$L" '```'
+fence "an unclosed fence hides everything after it (the record is refused)" 1 '```text' "$L"
+fence "an unclosed tilde fence hides everything after it" 1 'text' '~~~' "$L"
+fence "a block closed by a longer fence of the same character is closed; the next line is live" 0 '```text' 'example' '`````' "$L"
+fence "a block closed by an equal fence is closed; the next line is live" 0 '~~~' 'example' '~~~' "$L"
+fence "a closing fence may be followed by spaces" 0 '```' 'example' '```   ' "$L"
+fence "a fence indented by three spaces is a fence" 1 '   ```' "$L" '   ```'
+fence "four spaces make an indented code line, not a fence: the marker after it is live" 0 '    ```' "$L"
+fence "a backtick opener with a backtick in its info string is not a fence: the marker is live" 0 '``` a`b' "$L"
+fence "a tilde opener may have backticks in its info string: it is a fence, the marker stays hidden" 1 '~~~ a`b' "$L" '~~~'
+fence "two fences in a row: the marker between them is live" 0 '```' 'a' '```' "$L" '~~~' 'b' '~~~'
+fence "two fences in a row: the marker inside the second is hidden" 1 '```' 'a' '```' '~~~' "$L" '~~~'
+fence "a live marker before an unclosed fence stays live" 0 "$L" '```text' 'example'
+# the whole gate, not only --print-field: every G2S line inside a block that a reader sees as code never authorizes
+awk '/^G2S-/ { next } { print }' "$good" > "$tmp/stripped.md"
+{ cat "$tmp/stripped.md"; echo '```text'; echo '~~~'; markers; echo '```'; } > "$tmp/m.md"; expect_rc "the full authorization hidden behind a ~~~ line inside a backtick block does NOT authorize (exit 1)" 1 "$tmp/m.md"
+{ cat "$tmp/stripped.md"; echo '````text'; echo '```'; markers; echo '````'; } > "$tmp/m.md"; expect_rc "the full authorization hidden behind a shorter fence inside a longer one does NOT authorize (exit 1)" 1 "$tmp/m.md"
+{ cat "$tmp/stripped.md"; echo '```text'; echo 'example'; echo '```'; markers; } > "$tmp/m.md"; expect_rc "the same lines after a properly closed block authorize (exit 0)" 0 "$tmp/m.md"
+
 # --- the decisions G2S needs (and the ones it does not) ---
 for id in $DECISIONS; do
   awk -v id="$id" 'index($0, "| " id " | ") == 1 { sub(/\| Decided \| CTO \| 2026-11-21 \|[ ]*$/, "| Proposed, not decided | TBD | TBD |") } { print }' "$good" > "$tmp/m.md"

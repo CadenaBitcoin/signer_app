@@ -87,6 +87,8 @@ ss '<key>manageAppVersionAndBuildNumber</key><false/>' && ss '<key>testFlightInt
 ! ss 'signingCertificate|provisioningProfiles|signingStyle</key><string>manual'; chk "no manual certificate or profile is named in the export options" $?
 ss 'redact\.py' && ss '\[REDACTED\]'; chk "everything kept from the step passes through the redaction filter" $?
 ss '^          unset APPLE_API_KEY_P8$' && ss 'env -u APPLE_API_KEY_P8 -u APPLE_API_KEY_ID -u APPLE_API_ISSUER_ID'; chk "the key text leaves the environment before xcodebuild, and no secret is in xcodebuild's environment (behaviour: test_ios_hosted_signing_behavior.sh)" $?
+l_unset="$(printf '%s\n' "$secret_step" | grep -n '^          unset APPLE_API_KEY_P8$' | head -1 | cut -d: -f1)"; l_chmod="$(printf '%s\n' "$secret_step" | grep -n '^          chmod 600 "\$KEYFILE"$' | head -1 | cut -d: -f1)"; l_print="$(printf '%s\n' "$secret_step" | grep -n 'printf .%s.n. "\$APPLE_API_KEY_P8"' | head -1 | cut -d: -f1)"
+[ -n "$l_unset" ] && [ -n "$l_chmod" ] && [ -n "$l_print" ] && [ "$l_print" -lt "$l_unset" ] && [ "$l_unset" -lt "$l_chmod" ]; chk "the key text is unset right after it is written and BEFORE any other process starts (chmod included)" $?
 ss 'eyJ' && ss '\(bearer\|authorization'; chk "the redaction filter knows JWT-shaped and bearer tokens (behaviour: test_ios_hosted_signing_behavior.sh)" $?
 ss '^          set \+e$'; chk "the credential step does not run under errexit (a failing xcodebuild must still leave redacted evidence)" $?
 ! ss 'xcodebuild .*\| *tee|echo .*APPLE_API|printf .*APPLE_API_KEY_ID|set -x|set -[a-z]*x'; chk "the step prints neither the secrets nor an unredacted xcodebuild log, and does not trace" $?

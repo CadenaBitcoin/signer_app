@@ -592,10 +592,11 @@ jobs:
           cleanup() { rm -P -f "$KEYFILE" 2>/dev/null || rm -f "$KEYFILE"; }
           trap cleanup EXIT
           printf '%s\n' "$APPLE_API_KEY_P8" > "$KEYFILE"
-          chmod 600 "$KEYFILE"
-          # The key text now lives ONLY in the mode-600 file. It leaves the environment before Xcode (and every process Xcode
-          # starts) exists: xcodebuild reads the file by path, so the environment variable is not needed and is not inherited.
+          # The key text now lives ONLY in the file (created mode 600 by the umask above). It leaves the environment BEFORE any
+          # other process starts, chmod included, and long before Xcode: xcodebuild reads the file by path, so the environment
+          # variable is not needed and no child ever inherits it.
           unset APPLE_API_KEY_P8
+          chmod 600 "$KEYFILE"
           [ "$(head -n 1 "$KEYFILE")" = "-----BEGIN PRIVATE KEY-----" ] || { echo "::error::The stored key is not a PEM PKCS#8 file (.p8)."; exit 1; }
 
           OPTS="$RUNNER_TEMP/ExportOptions.plist"

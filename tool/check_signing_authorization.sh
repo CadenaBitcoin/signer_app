@@ -105,17 +105,36 @@ want_workflow_blob() { blob "$tools/$WORKFLOW_FILE"; }
 want_gate_blob() { blob "$self"; }
 
 # What a reader of the record sees: without fenced code blocks and HTML comments (a line that opens or closes one is
-# dropped too). Nothing in those regions can authorize, withdraw or decide anything.
+# dropped too). Nothing in those regions can authorize, withdraw or decide anything. Fences follow CommonMark: an opening
+# fence is three or more backticks or tildes after at most three spaces (a backtick fence's info string has no backtick); it
+# is closed ONLY by a fence of the same character, at least as long as the opening one, with nothing but spaces after it;
+# an unclosed fence runs to the end of the record (so everything after it is hidden and the gate refuses).
 eff=""
 make_eff() {
   eff="$(mktemp "${TMPDIR:-/tmp}/g2s-record.XXXXXX")"; trap 'rm -f "$eff"' EXIT
   awk '
-    BEGIN { fence = 0; cmt = 0 }
+    # sets PCH (the fence character), PLEN (its run length) and PREST (the rest of the line); returns 1 for a fence line
+    function fenceline(l,    sp, c, n) {
+      sp = 0
+      while (sp < 4 && substr(l, sp + 1, 1) == " ") sp++
+      if (sp > 3) return 0
+      c = substr(l, sp + 1, 1)
+      if (c != "`" && c != "~") return 0
+      n = 0
+      while (substr(l, sp + 1 + n, 1) == c) n++
+      if (n < 3) return 0
+      PCH = c; PLEN = n; PREST = substr(l, sp + 1 + n)
+      return 1
+    }
+    BEGIN { fence = 0; cmt = 0; fch = ""; flen = 0 }
     {
       line = $0
-      if (fence) { if (line ~ /^ *(```|~~~)/) fence = 0; next }
-      if (cmt)   { if (index(line, "-->") > 0) cmt = 0; next }
-      if (line ~ /^ *(```|~~~)/) { fence = 1; next }
+      if (fence) {
+        if (fenceline(line) && PCH == fch && PLEN >= flen && PREST ~ /^[ \t]*$/) fence = 0
+        next
+      }
+      if (cmt) { if (index(line, "-->") > 0) cmt = 0; next }
+      if (fenceline(line) && !(PCH == "`" && index(PREST, "`") > 0)) { fence = 1; fch = PCH; flen = PLEN; next }
       if (index(line, "<!--") > 0) { if (index(line, "-->") == 0) cmt = 1; next }
       print line
     }' "$record" > "$eff"

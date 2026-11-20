@@ -351,9 +351,16 @@ echo "-----BEGIN PRIVATE KEY-----"
 exp=""; while [ $# -gt 0 ]; do [ "$1" = "-exportPath" ] && exp="$2"; shift; done; : > "$exp/Runner.ipa"; exit 0
 EOF
   printf '#!/bin/bash\nexit 0\n' > "$SEC/stub/plutil"; chmod +x "$SEC/stub/xcodebuild" "$SEC/stub/plutil"
+  # Every other program the step starts is wrapped: it logs its name when the key text is in ITS environment, then runs the real one.
+  ENVBIN="$(type -P env)"; GREPBIN="$(type -P grep)"   # type -P: a path, never a shell function or alias
+  # (python3 is not wrapped: on some machines it is itself a launcher script that finds `python3` on PATH again and would loop; it starts only after the key text is gone.)
+  for tool in chmod head rm cat mkdir tail grep find wc shasum stat awk ls env; do
+    real="$(type -P "$tool" 2>/dev/null)" && [ -x "$real" ] || continue
+    printf '#!/bin/bash\necho %s >> "$LEAKLOG.calls"\nif %s | %s -q TESTONLYFAKEKEY; then echo %s >> "$LEAKLOG"; fi\nexec %s "$@"\n' "$tool" "$ENVBIN" "$GREPBIN" "$tool" "$real" > "$SEC/stub/$tool"; chmod +x "$SEC/stub/$tool"
+  done
   : > "$SEC/report.txt"
   ( cd "$SEC" && env -i PATH="$SEC/stub:$PATH" HOME="$HOME" RUNNER_TEMP="$SEC/tmp" GITHUB_ENV="$SEC/env" TEAM_ID="$TEAM" ARCHIVE="$SEC/tmp/a.xcarchive" \
-      STUB_REPORT="$SEC/report.txt" STUB_FAIL="$1" STUB_JWT="$FAKEJWT" APPLE_API_KEY_P8="$FAKEKEY" APPLE_API_KEY_ID=FAKEKEYID99 APPLE_API_ISSUER_ID=fake-issuer-0000-aaaa \
+      LEAKLOG="$SEC/leak.log" STUB_REPORT="$SEC/report.txt" STUB_FAIL="$1" STUB_JWT="$FAKEJWT" APPLE_API_KEY_P8="$FAKEKEY" APPLE_API_KEY_ID=FAKEKEYID99 APPLE_API_ISSUER_ID=fake-issuer-0000-aaaa \
       bash -e "$STEP_secret" > "$SEC/stdout" 2>&1 ); SEC_RC=$?
 }
 leaks() { # counts of synthetic secret material in everything the step kept or printed
@@ -368,6 +375,8 @@ for mode in 0 1; do
   grep -q 'key file readable: yes mode: 600' "$SEC/report.txt"; chk "credential step ($label): the key file is readable by xcodebuild and mode 600 while it runs" $?
   grep -q 'key file argument matches: yes' "$SEC/report.txt" && grep -q -- '-exportArchive' "$SEC/report.txt" && grep -q -- '-allowProvisioningUpdates' "$SEC/report.txt" && grep -q -- '-authenticationKeyID' "$SEC/report.txt"; chk "credential step ($label): xcodebuild still gets the key by path with -authenticationKey* arguments (Apple authentication preserved)" $?
   [ -z "$(find "$SEC/tmp" -maxdepth 1 -name '*.p8')" ]; chk "credential step ($label): the key file is removed afterwards" $?
+  [ -f "$SEC/leak.log" ] || : > "$SEC/leak.log"; [ ! -s "$SEC/leak.log" ]; chk "credential step ($label): no program the step starts (chmod, rm, head, cat, env, ...) ever has the key text in its environment" $? "saw it: $(sort -u "$SEC/leak.log" | tr '\n' ' ')"
+  grep -qx chmod "$SEC/leak.log.calls" && grep -qx rm "$SEC/leak.log.calls" && grep -qx head "$SEC/leak.log.calls"; chk "credential step ($label): the wrappers saw chmod, rm and head run (the check above is not vacuous)" $?
   [ "$(leaks)" = 0 ]; chk "credential step ($label): no key ID, issuer ID, key line, JWT or bearer token in the job log or the kept evidence" $? "$(grep -rhE 'FAKEKEYID99|fake-issuer-0000|TESTONLYFAKEKEY|eyJhbGciOi|abcdefgh12345678' "$SEC/stdout" "$SEC/evidence" 2>/dev/null | head -n 3 | cut -c1-120 | tr '\n' '|')"
   grep -q 'REDACTED' "$SEC/evidence/export.log"; chk "credential step ($label): the evidence shows where material was redacted" $?
   if [ "$mode" = 1 ]; then [ -f "$SEC/evidence/export-diagnosis.txt" ]; chk "credential step (failure): the diagnosis evidence is written" $?; fi
@@ -457,6 +466,80 @@ mkdir -p "$tmp/xt/chain/Runner.xcarchive"; ln -s ../one "$tmp/xt/chain/Runner.xc
 python3 -I "$V" tree "$tmp/xt/chain/Runner.xcarchive" >"$tmp/v.out" 2>&1; [ $? -eq 1 ]; chk "validator (after extraction): a link chain that resolves outside is refused" $?
 before="$(find "$av" -type f | sort | xargs shasum | shasum)"; python3 -I "$V" list "$av/good.tar" >/dev/null; after="$(find "$av" -type f | sort | xargs shasum | shasum)"; [ "$before" = "$after" ]; chk "validator: reads only (extracts and writes nothing)" $?
 
+# --- the reviewer's exact attacks, case-insensitive and Unicode aliases, link chains in the FINAL state ---
+python3 -I - "$av" <<'PYX'
+import io, os, sys, tarfile
+d = sys.argv[1]
+T = "Runner.xcarchive"
+def mk(name, members, fmt=tarfile.PAX_FORMAT):
+    with tarfile.open(os.path.join(d, name + ".tar"), "w", format=fmt) as t:
+        for ti, data in members:
+            t.addfile(ti, io.BytesIO(data) if data is not None else None)
+def reg(n, data=b"x", mode=0o644):
+    ti = tarfile.TarInfo(n); ti.size = len(data); ti.mode = mode; return (ti, data)
+def dir_(n):
+    ti = tarfile.TarInfo(n); ti.type = tarfile.DIRTYPE; ti.mode = 0o755; return (ti, None)
+def sym(n, target):
+    ti = tarfile.TarInfo(n); ti.type = tarfile.SYMTYPE; ti.linkname = target; ti.mode = 0o755; return (ti, None)
+def hard(n, target):
+    ti = tarfile.TarInfo(n); ti.type = tarfile.LNKTYPE; ti.linkname = target; ti.mode = 0o644; return (ti, None)
+base = [dir_(T), dir_(T + "/Products"), dir_(T + "/Products/Frameworks"), reg(T + "/Info.plist"), reg(T + "/Products/Frameworks/x")]
+# 1. the reviewer's chain: each link looks contained, but E is physically the PARENT of the archive and G two levels up
+mk("rv_chain", base + [sym(T + "/d", "."), sym(T + "/E", "d/.."), sym(T + "/G", "E/..")])
+# 2. the same, with a member that differs from the link E only by case (one directory on macOS' default APFS)
+mk("rv_chain_case_payload", base + [sym(T + "/d", "."), sym(T + "/E", "d/.."), reg(T + "/e/payload")])
+# 3. other aliases and orders
+mk("case_alias_through_link", base + [sym(T + "/Products/A", "Frameworks"), reg(T + "/Products/a/evil")])
+mk("case_alias_dir_link", base + [sym(T + "/Products/Frameworks2", "Frameworks"), reg(T + "/Products/frameworks2/evil")])
+mk("case_dup_file", base + [reg(T + "/info.plist", b"second")])
+mk("case_dup_dir_vs_file", base + [reg(T + "/PRODUCTS", b"second")])
+mk("unicode_dup", base + [reg(T + "/Café"), reg(T + "/Café")])
+mk("unicode_alias_through_link", base + [sym(T + "/Café", "Products"), reg(T + "/Café/evil")])
+mk("forward_ref_escape", base + [sym(T + "/a", "b/.."), sym(T + "/b", ".")])        # `a` looked harmless when it was read
+mk("link_loop", base + [sym(T + "/a", "b"), sym(T + "/b", "a")])
+mk("link_self", base + [sym(T + "/a", "a")])
+mk("link_to_parent_of_top", base + [sym(T + "/up", "..")])
+mk("link_dotdot_via_dir", base + [sym(T + "/Products/up", "../../x")])
+def cont(n):
+    ti = tarfile.TarInfo(n); ti.type = tarfile.CONTTYPE; ti.size = 1; ti.mode = 0o644; return (ti, b"x")
+mk("contiguous_member", base + [cont(T + "/c")])
+# 4. a hard link whose target is only an alias of a link
+mk("hard_to_link_alias", base + [sym(T + "/Products/L", "Frameworks"), hard(T + "/hl", T + "/products/l/x")])
+# 5. legitimate archives: the structure the diagnostics of run 44625655320 recorded (names from its tree and Mach-O list)
+fws = ["App", "dlc_wallet", "FingerprintPro", "Flutter", "flutter_idensic_mobile_sdk_plugin", "flutter_local_notifications", "flutter_secure_storage",
+       "fluttertoast", "IdensicMobileSDK_Fisherman", "IdensicMobileSDK", "mobile_scanner", "path_provider_foundation", "shared_preferences_foundation", "workmanager_apple"]
+def genuine(links=False):
+    m = [dir_(T), reg(T + "/Info.plist", b"<plist/>"), dir_(T + "/Products"), dir_(T + "/Products/Applications"), dir_(T + "/Products/Applications/Runner.app")]
+    app = T + "/Products/Applications/Runner.app"
+    m += [reg(app + "/Runner", b"\xcf\xfa\xed\xfe", 0o755), reg(app + "/Info.plist", b"<plist/>"), reg(app + "/PkgInfo", b"APPL????"), dir_(app + "/Frameworks"), dir_(app + "/flutter_assets"), reg(app + "/flutter_assets/AssetManifest.json", b"{}")]
+    for f in fws:
+        m += [dir_(app + "/Frameworks/%s.framework" % f), reg(app + "/Frameworks/%s.framework/%s" % (f, f), b"\xcf\xfa\xed\xfe", 0o755), reg(app + "/Frameworks/%s.framework/Info.plist" % f, b"<plist/>")]
+        m += [dir_(T + "/dSYMs/%s.framework.dSYM/Contents" % f), reg(T + "/dSYMs/%s.framework.dSYM/Contents/Info.plist" % f)]
+    m += [dir_(app + "/Frameworks/flutter_local_notifications.framework/flutter_local_notifications_privacy.bundle"), reg(app + "/Frameworks/flutter_local_notifications.framework/flutter_local_notifications_privacy.bundle/PrivacyInfo.xcprivacy", b"<plist/>")]
+    m += [dir_(T + "/SwiftSupport"), dir_(T + "/SwiftSupport/iphoneos"), reg(T + "/SwiftSupport/iphoneos/libswift_Concurrency.dylib", b"\xcf\xfa\xed\xfe", 0o755)]
+    if links:   # contained links of the kind a macOS-style bundle has: they must stay acceptable
+        fw = app + "/Frameworks/Flutter.framework"
+        m += [dir_(fw + "/Versions"), dir_(fw + "/Versions/A"), reg(fw + "/Versions/A/Flutter", b"\xcf\xfa\xed\xfe", 0o755), sym(fw + "/Versions/Current", "A"), sym(fw + "/Resources", "Versions/Current/Resources"), sym(fw + "/Flutter2", "Versions/Current/Flutter")]
+    return m
+mk("genuine_pax", genuine(), tarfile.PAX_FORMAT)
+mk("genuine_gnu", genuine(), tarfile.GNU_FORMAT)
+mk("genuine_ustar_links", [x for x in genuine(True) if len(x[0].name) < 100], tarfile.USTAR_FORMAT)
+mk("genuine_pax_links", genuine(True), tarfile.PAX_FORMAT)
+PYX
+for n in rv_chain rv_chain_case_payload case_alias_through_link case_alias_dir_link case_dup_file case_dup_dir_vs_file unicode_dup unicode_alias_through_link forward_ref_escape link_loop link_self link_to_parent_of_top link_dotdot_via_dir hard_to_link_alias contiguous_member; do
+  vl "$n"; [ $? -eq 1 ] && grep -q REFUSED "$tmp/v.out"; chk "validator (before extraction): $n is refused" $? "$(head -n 2 "$tmp/v.out")"
+done
+vl rv_chain; grep -q "leaves the top-level directory" "$tmp/v.out"; chk "validator: the reviewer's symlink chain is refused for the right reason (E and G leave the archive physically)" $? "$(head -n 3 "$tmp/v.out")"
+vl rv_chain_case_payload; grep -q "runs through the symbolic link" "$tmp/v.out"; chk "validator: a member that differs from a link only by case is recognized as running through it" $? "$(head -n 3 "$tmp/v.out")"
+vl unicode_dup; grep -q "Unicode normalization" "$tmp/v.out"; chk "validator: NFC and NFD spellings of one name are one name" $? "$(head -n 3 "$tmp/v.out")"
+for n in genuine_pax genuine_gnu genuine_ustar_links genuine_pax_links; do
+  vl "$n"; chk "validator: a genuine iOS archive (structure of run 44625655320) stays acceptable: $n" $? "$(head -n 3 "$tmp/v.out")"
+  rm -rf "$tmp/xg"; mkdir -p "$tmp/xg"; tar -xf "$av/$n.tar" -C "$tmp/xg" && python3 -I "$V" tree "$tmp/xg/Runner.xcarchive" >"$tmp/v.out" 2>&1; chk "validator: and its extracted tree passes: $n" $? "$(head -n 3 "$tmp/v.out")"
+done
+vl genuine_pax_links; grep -q '3 symbolic links' "$tmp/v.out"; chk "validator: contained symbolic links (Versions/Current style, a chain through Current) are accepted and counted" $?
+# the reviewer's chain as the filesystem makes it: the post-extraction check refuses it as well
+rm -rf "$tmp/xr"; mkdir -p "$tmp/xr"; tar -xf "$av/rv_chain.tar" -C "$tmp/xr" 2>/dev/null; python3 -I "$V" tree "$tmp/xr/Runner.xcarchive" >"$tmp/v.out" 2>&1; [ $? -eq 1 ]; chk "validator (after extraction): the reviewer's chain is refused by the real filesystem's resolution too" $?
+
 fi
 
 # ============================================================================================================================
@@ -486,6 +569,7 @@ m("F_raw_log_printed", "the raw xcodebuild log is printed", '          echo "---
 m("G_jwt_not_redacted", "JWT-shaped tokens are not redacted", 'data = re.sub(r"eyJ[A-Za-z0-9_-]{4,}\\.[A-Za-z0-9_-]{4,}(\\.[A-Za-z0-9_-]*)?", "[REDACTED]", data)', 'pass')
 m("G2_bearer_not_redacted", "bearer tokens are not redacted", 'data = re.sub(r"(?i)(bearer|authorization:?)\\s+[A-Za-z0-9._~+/=-]{8,}", r"\\1 [REDACTED]", data)', 'pass')
 m("G3_seal_ignores_jwt", "the seal step ignores JWT-shaped tokens", "PRIVATE KEY|BEGIN PKCS7|eyJ[A-Za-z0-9_-]{10,}\\.[A-Za-z0-9_-]{10,}", "PRIVATE KEY|BEGIN PKCS7")
+m("E3_chmod_before_unset", "chmod runs while the key text is still in the environment", '          unset APPLE_API_KEY_P8\n          chmod 600 "$KEYFILE"\n', '          chmod 600 "$KEYFILE"\n          unset APPLE_API_KEY_P8\n')
 m("H_key_file_open_mode", "the key file is not mode 600", '          chmod 600 "$KEYFILE"\n', '          chmod 644 "$KEYFILE"\n')
 m("H2_no_umask", "no umask before the key file", '          umask 077\n          unset BASH_ENV', '          unset BASH_ENV')
 m("I2_no_trap", "no trap and no cleanup", "          trap cleanup EXIT\n", "")
