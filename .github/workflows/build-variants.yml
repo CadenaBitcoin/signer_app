@@ -152,6 +152,13 @@ jobs:
       - name: Test the required-reason scan (both nm -u layouts)
         run: tool/test_required_reason_scan.sh
 
+      # The hosted iOS signing workflow (Issue #71, docs/IOS_HOSTED_SIGNING.md): its authorization gate and its static
+      # invariants (manual, development-only, no upload, one secret-holding step). Nothing here signs or contacts Apple.
+      - name: Test the hosted signing authorization gate and workflow invariants
+        run: |
+          tool/test_check_signing_authorization.sh
+          tool/test_ios_hosted_signing.sh
+
       # The Android release signing and verification (Issue #72), credential-free: the static
       # checks of android/app/build.gradle.kts and the ledgers, the verifier's ELF and fingerprint
       # code, the release driver's refusals and the credential-free state of the workflows. No
