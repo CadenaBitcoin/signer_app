@@ -11,7 +11,7 @@
 set -uo pipefail
 
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-wf="$root/.github/workflows/ios-hosted-signing.yml"
+wf="${HOSTED_SIGNING_WORKFLOW:-$root/.github/workflows/ios-hosted-signing.yml}"
 pass=0; failed=0
 ok() { pass=$((pass + 1)); echo "ok   $1"; }
 bad() { failed=$((failed + 1)); echo "FAIL $1"; [ -z "${2:-}" ] || echo "     $2"; }
@@ -86,6 +86,9 @@ ss '<key>destination</key><string>export</string>' && ! ss '<string>upload</stri
 ss '<key>manageAppVersionAndBuildNumber</key><false/>' && ss '<key>testFlightInternalTestingOnly</key><false/>'; chk "Xcode may not manage the build number, and the build is not 'TestFlight Internal Only' (D9)" $?
 ! ss 'signingCertificate|provisioningProfiles|signingStyle</key><string>manual'; chk "no manual certificate or profile is named in the export options" $?
 ss 'redact\.py' && ss '\[REDACTED\]'; chk "everything kept from the step passes through the redaction filter" $?
+ss '^          unset APPLE_API_KEY_P8$' && ss 'env -u APPLE_API_KEY_P8 -u APPLE_API_KEY_ID -u APPLE_API_ISSUER_ID'; chk "the key text leaves the environment before xcodebuild, and no secret is in xcodebuild's environment (behaviour: test_ios_hosted_signing_behavior.sh)" $?
+ss 'eyJ' && ss '\(bearer\|authorization'; chk "the redaction filter knows JWT-shaped and bearer tokens (behaviour: test_ios_hosted_signing_behavior.sh)" $?
+ss '^          set \+e$'; chk "the credential step does not run under errexit (a failing xcodebuild must still leave redacted evidence)" $?
 ! ss 'xcodebuild .*\| *tee|echo .*APPLE_API|printf .*APPLE_API_KEY_ID|set -x|set -[a-z]*x'; chk "the step prints neither the secrets nor an unredacted xcodebuild log, and does not trace" $?
 [ "$(printf '%s\n' "$sign" | grep -cE '^[[:space:]]+xcodebuild -exportArchive')" -eq 1 ] && [ "$(printf '%s\n' "$secret_step" | grep -cE '^[[:space:]]+xcodebuild -exportArchive')" -eq 1 ]; chk "xcodebuild -exportArchive runs once, in the secret step only" $?
 ! printf '%s\n' "$code" | grep -E 'set -[a-z]*x|xtrace|ACTIONS_STEP_DEBUG|ACTIONS_RUNNER_DEBUG' >/dev/null; chk "nothing traces (no set -x, xtrace or debug logging)" $?
@@ -103,6 +106,13 @@ printf '%s\n' "$sign" | grep -E 'verify_ipa\.py.* verify production' >/dev/null 
 printf '%s\n' "$sign" | grep -F -- '--unsigned-app "$BASELINE_APP"' >/dev/null; chk "V8 compares against the app of the archive that was exported (no second compile)" $?
 printf '%s\n' "$sign" | grep -E 'sha256|shasum' >/dev/null && printf '%s\n' "$sign" | grep -F 'ipa_sha256_after_verification' >/dev/null; chk "the IPA digest is recorded after export and again after verification" $?
 
+# ---- the hand-over from the build job is validated before and after extraction, and no code of it runs ----
+printf '%s\n' "$sign" | grep -F 'validate_handover_archive.py list' >/dev/null && printf '%s\n' "$sign" | grep -F 'validate_handover_archive.py tree' >/dev/null; chk "the archive is validated before and after extraction by tool/validate_handover_archive.py" $?
+! printf '%s\n' "$sign" | grep -E 'approved/tool|bash approved|python3? .*approved/|cd approved' >/dev/null; chk "no script of the approved commit is executed in the signing job" $?
+printf '%s\n' "$sign" | grep -F 'name: Enforce the authorized dlc_wallet framework hash (no secret yet)' >/dev/null && printf '%s\n' "$sign" | grep -F -- '--print-field G2S-DLC-WALLET-SHA256' >/dev/null && printf '%s\n' "$sign" | grep -F '[ "$actual" != "$authorized" ]' >/dev/null; chk "the archive's dlc_wallet binary is compared with the authorized hash before the secret step (behaviour: test_ios_hosted_signing_behavior.sh)" $?
+printf '%s\n' "$sign" | grep -F -- '--repo "$VERIFIER_REPO"' >/dev/null; chk "the verifier's repository view is the assembled one (script of this commit, pubspec of the approved commit as data)" $?
+printf '%s\n' "$code" | grep -F 'git ls-remote' >/dev/null && ! printf '%s\n' "$code" | grep -E 'git ls-remote .*(push|--heads .*://[^e])' >/dev/null; chk "the current tip of development is read with git ls-remote (stale-run check)" $?
+
 # ---- nothing is uploaded, nothing is released ----
 ! printf '%s\n' "$code" | grep -iE 'altool|iTMSTransporter|Transporter\.app|--upload|upload-app|upload-package|validate-app|api\.appstoreconnect|appstoreconnect\.apple|reviewSubmissions|betaAppReview|submitForReview|fastlane|pilot|deliver' >/dev/null; chk "no upload, validation, review, TestFlight or App Store Connect call of any kind" $?
 ! printf '%s\n' "$code" | grep -E 'gh (release|api|pr|issue)|curl |wget |git (push|commit|tag)|actions/create-release|softprops' >/dev/null; chk "no release, tag, push, API or network download command" $?
@@ -111,7 +121,7 @@ bad_paths="$(printf '%s\n' "$code" | grep -E '^[[:space:]]+path: ' | sed 's/^[[:
 ! printf '%s\n' "$code" | grep -E '^[[:space:]]+path:.*(\.ipa|export|RUNNER_TEMP|\.p8|\.p12|mobileprovision|keychain)' >/dev/null; chk "no artifact path can reach the IPA, the export directory, a key, a profile or a keychain" $?
 [ "$(printf '%s\n' "$code" | grep -c 'uses: actions/upload-artifact@')" -eq 3 ] && ! printf '%s\n' "$sign" | grep -E 'path: .*(handover|Runner)' | grep -A0 upload >/dev/null; chk "three artifacts only: the unsigned tar (1 day), the build evidence and the signing evidence" $?
 printf '%s\n' "$build" | grep -B1 -A4 'name: ios-hosted-unsigned-archive_' | grep -F 'retention-days: 1' >/dev/null; chk "the unsigned archive is kept one day" $?
-printf '%s\n' "$sign" | grep -F 'grep -rlE '"'"'PRIVATE KEY|BEGIN PKCS7'"'"' evidence' >/dev/null && printf '%s\n' "$sign" | grep -F 'refusing to keep them' >/dev/null; chk "the signing evidence is scanned for key material and kept as text only" $?
+printf '%s\n' "$sign" | grep -F 'PRIVATE KEY|BEGIN PKCS7|eyJ' >/dev/null && printf '%s\n' "$sign" | grep -F 'refusing to keep them' >/dev/null; chk "the signing evidence is scanned for key material and JWT-shaped tokens and kept as text only" $?
 ustep="$(step_of "$sign" 'Upload the text evidence')"
 printf '%s\n' "$ustep" | grep -E '^        if: always\(\)$' >/dev/null && printf '%s\n' "$ustep" | grep -F 'name: ios-hosted-signing-evidence_' >/dev/null; chk "the evidence is uploaded even after a failed step" $?
 

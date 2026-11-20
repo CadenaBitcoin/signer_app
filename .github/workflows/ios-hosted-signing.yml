@@ -2,19 +2,24 @@
 # Design, manual configuration, authorization and open questions: docs/IOS_HOSTED_SIGNING.md.
 #
 # WHAT IT DOES (three jobs, started by hand only):
-#   authorize  no secret, no environment. Reads the release record of THIS commit (which must be on `development`) and runs
-#              tool/check_signing_authorization.sh. Without the G2S lines that the CTO's written decision and a merged, reviewed
-#              record pull request add, the answer is "not authorized" and the signing job does not start.
+#   authorize  no secret, no environment. Reads the release record of THIS commit, which must be the CURRENT tip of `development`
+#              (a re-run of an old run is refused), and runs tool/check_signing_authorization.sh. Without the G2S lines and the
+#              decided release rows that the CTO's written decision and a merged, reviewed record pull request add, and bound
+#              to the blobs of this workflow, that gate and the tools, the answer is "not authorized" and the signing job does
+#              not start.
 #   build      no secret, no environment. Everything that downloads or runs third-party code (Flutter, CocoaPods, Xcode build):
 #              checks out EXACTLY the approved commit, verifies it, builds ONE unsigned archive
 #              (`flutter build ipa --release --no-codesign`), verifies the unsigned app, and hands the archive over as a
 #              one-day tar with its SHA-256. The unsigned archive is the open-source app, as docs/IOS_SIGNING.md section 3 says.
-#   sign       protected environment `ios-hosted-signing`, only when `authorize` said yes. Runs only scripts of this repository
-#              and Apple's own tools; it compiles nothing and installs no dependency. It
-#                1. re-checks the authorization, the archive digest and the unsigned state of the archive (no secret yet);
+#   sign       protected environment `ios-hosted-signing`, only when `authorize` said yes. Runs only scripts of THIS workflow's
+#              commit (`tools/`, bound by the authorization) and Apple's own tools: no script of the approved commit and none
+#              from the build artifact is ever executed; it compiles nothing and installs no dependency. It
+#                1. re-checks the authorization, the archive digest, the archive's member list BEFORE and its tree AFTER
+#                   extraction (no unsafe link, path or file type) and the unsigned state of the archive (no secret yet);
 #                2. exports the archive with `xcodebuild -exportArchive`, automatic signing, `-allowProvisioningUpdates` and the
 #                   team API key, so that Apple's CLOUD-MANAGED Distribution certificate signs (the only step that holds a
-#                   secret; the key file exists for that one command and is removed by a trap);
+#                   secret; the key file exists for that one command, the key text is removed from the environment before
+#                   Xcode starts, and a trap removes the file);
 #                3. verifies the exported IPA (docs/IOS_RELEASE.md section 9, V1 to V9, tool/verify_ipa.py) with no secret present;
 #                4. keeps TEXT evidence only: the certificate fingerprint to record before any later upload, the checks, hashes.
 #
@@ -92,10 +97,13 @@ jobs:
           EXPECTED_CERT_SHA256: ${{ inputs.expected_cert_sha256 }}
         run: |
           fail=0
-          printf '%s' "$APPROVED_SHA" | grep -Eq '^[0-9a-f]{40}$' || { echo "::error::approved_sha must be 40 lower-case hex characters."; fail=1; }
-          printf '%s' "$CONTENT_REF" | grep -Eq '^[0-9a-f]{40}$' || { echo "::error::content_ref must be 40 lower-case hex characters."; fail=1; }
-          printf '%s' "$EXPECTED_VERSION" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+\+[0-9]+$' || { echo "::error::expected_version must look like 1.0.4+1000035."; fail=1; }
-          if [ -n "$EXPECTED_CERT_SHA256" ]; then printf '%s' "$EXPECTED_CERT_SHA256" | grep -Eq '^[0-9a-f]{64}$' || { echo "::error::expected_cert_sha256 must be empty or 64 lower-case hex characters."; fail=1; }; fi
+          # Whole-string match: grep -E matches per line, so a value with an extra line could satisfy it.
+          isexact() { case "$1" in *$'\n'*|*$'\r'*) return 1 ;; esac; [[ "$1" =~ $2 ]]; }
+          re_sha='^[0-9a-f]{40}$'; re_version='^[0-9]+\.[0-9]+\.[0-9]+\+[0-9]+$'; re_hex64='^[0-9a-f]{64}$'
+          isexact "$APPROVED_SHA" "$re_sha" || { echo "::error::approved_sha must be 40 lower-case hex characters."; fail=1; }
+          isexact "$CONTENT_REF" "$re_sha" || { echo "::error::content_ref must be 40 lower-case hex characters."; fail=1; }
+          isexact "$EXPECTED_VERSION" "$re_version" || { echo "::error::expected_version must look like 1.0.4+1000035."; fail=1; }
+          if [ -n "$EXPECTED_CERT_SHA256" ]; then isexact "$EXPECTED_CERT_SHA256" "$re_hex64" || { echo "::error::expected_cert_sha256 must be empty or 64 lower-case hex characters."; fail=1; }; fi
           [ "$fail" -eq 0 ] || exit 1
 
       # The commit of THIS workflow file: its record, its tools. Not the approved commit.
@@ -123,9 +131,22 @@ jobs:
             echo "$msg" > "$RUNNER_TEMP/gate.txt"
           else
             record="docs/release-records/ios-${EXPECTED_VERSION%%+*}-${EXPECTED_VERSION##*+}.md"
-            bash tool/check_signing_authorization.sh --record "$record" --approved-sha "$APPROVED_SHA" --version "$EXPECTED_VERSION" \
-              --bundle-id "$BUNDLE_ID" --team-id "$TEAM_ID" --tools-root . > "$RUNNER_TEMP/gate.txt" 2>&1
-            rc=$?
+            # The CURRENT tip of development, read now: a re-run of an old run keeps its old commit, so it would otherwise
+            # read the old record and could outlive a later withdrawal. The gate refuses unless GITHUB_SHA equals this tip.
+            tip="$(git ls-remote "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY.git" refs/heads/development 2>/dev/null | awk '$2 == "refs/heads/development" { print $1 }')"
+            # A second, independent check of the gate's own identity (the gate also checks the workflow's): changing the gate
+            # needs a matching change here, and changing this workflow breaks the gate's check of G2S-WORKFLOW-BLOB.
+            gate_line="$(grep '^G2S-GATE-BLOB: ' "$record" || true)"
+            have_line="G2S-GATE-BLOB: $(git hash-object tool/check_signing_authorization.sh)"
+            if [ -z "$tip" ]; then
+              echo "NOT AUTHORIZED: the current tip of development could not be read; signing stays refused." > "$RUNNER_TEMP/gate.txt"; rc=1
+            elif [ "$gate_line" != "$have_line" ]; then
+              echo "NOT AUTHORIZED: the record has no single G2S-GATE-BLOB line naming this commit's tool/check_signing_authorization.sh; signing stays refused." > "$RUNNER_TEMP/gate.txt"; rc=1
+            else
+              bash tool/check_signing_authorization.sh --record "$record" --approved-sha "$APPROVED_SHA" --version "$EXPECTED_VERSION" \
+                --bundle-id "$BUNDLE_ID" --team-id "$TEAM_ID" --tools-root . --workflow-sha "$GITHUB_SHA" --development-tip "$tip" > "$RUNNER_TEMP/gate.txt" 2>&1
+              rc=$?
+            fi
             if [ "$rc" -eq 0 ]; then authorized=true
             elif [ "$rc" -ne 1 ]; then cat "$RUNNER_TEMP/gate.txt"; echo "::error::The authorization check could not run (exit $rc)."; exit 1; fi
           fi
@@ -157,9 +178,11 @@ jobs:
           EXPECTED_VERSION: ${{ inputs.expected_version }}
         run: |
           fail=0
-          printf '%s' "$APPROVED_SHA" | grep -Eq '^[0-9a-f]{40}$' || { echo "::error::approved_sha must be 40 lower-case hex characters."; fail=1; }
-          printf '%s' "$CONTENT_REF" | grep -Eq '^[0-9a-f]{40}$' || { echo "::error::content_ref must be 40 lower-case hex characters."; fail=1; }
-          printf '%s' "$EXPECTED_VERSION" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+\+[0-9]+$' || { echo "::error::expected_version must look like 1.0.4+1000035."; fail=1; }
+          isexact() { case "$1" in *$'\n'*|*$'\r'*) return 1 ;; esac; [[ "$1" =~ $2 ]]; }
+          re_sha='^[0-9a-f]{40}$'; re_version='^[0-9]+\.[0-9]+\.[0-9]+\+[0-9]+$'
+          isexact "$APPROVED_SHA" "$re_sha" || { echo "::error::approved_sha must be 40 lower-case hex characters."; fail=1; }
+          isexact "$CONTENT_REF" "$re_sha" || { echo "::error::content_ref must be 40 lower-case hex characters."; fail=1; }
+          isexact "$EXPECTED_VERSION" "$re_version" || { echo "::error::expected_version must look like 1.0.4+1000035."; fail=1; }
           [ "$fail" -eq 0 ] || exit 1
 
       - name: Checkout the approved commit
@@ -373,9 +396,11 @@ jobs:
           EXPECTED_CERT_SHA256: ${{ inputs.expected_cert_sha256 }}
         run: |
           fail=0
-          printf '%s' "$APPROVED_SHA" | grep -Eq '^[0-9a-f]{40}$' || { echo "::error::approved_sha must be 40 lower-case hex characters."; fail=1; }
-          printf '%s' "$EXPECTED_VERSION" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+\+[0-9]+$' || { echo "::error::expected_version must look like 1.0.4+1000035."; fail=1; }
-          if [ -n "$EXPECTED_CERT_SHA256" ]; then printf '%s' "$EXPECTED_CERT_SHA256" | grep -Eq '^[0-9a-f]{64}$' || { echo "::error::expected_cert_sha256 must be empty or 64 lower-case hex characters."; fail=1; }; fi
+          isexact() { case "$1" in *$'\n'*|*$'\r'*) return 1 ;; esac; [[ "$1" =~ $2 ]]; }
+          re_sha='^[0-9a-f]{40}$'; re_version='^[0-9]+\.[0-9]+\.[0-9]+\+[0-9]+$'; re_hex64='^[0-9a-f]{64}$'
+          isexact "$APPROVED_SHA" "$re_sha" || { echo "::error::approved_sha must be 40 lower-case hex characters."; fail=1; }
+          isexact "$EXPECTED_VERSION" "$re_version" || { echo "::error::expected_version must look like 1.0.4+1000035."; fail=1; }
+          if [ -n "$EXPECTED_CERT_SHA256" ]; then isexact "$EXPECTED_CERT_SHA256" "$re_hex64" || { echo "::error::expected_cert_sha256 must be empty or 64 lower-case hex characters."; fail=1; }; fi
           [ "$GITHUB_REF" = "refs/heads/development" ] || { echo "::error::Hosted signing runs only from refs/heads/development."; fail=1; }
           [ "$fail" -eq 0 ] || exit 1
 
@@ -392,12 +417,21 @@ jobs:
           APPROVED_SHA: ${{ inputs.approved_sha }}
           EXPECTED_VERSION: ${{ inputs.expected_version }}
         run: |
+          set -uo pipefail
           record="tools/docs/release-records/ios-${EXPECTED_VERSION%%+*}-${EXPECTED_VERSION##*+}.md"
+          # Read again, now: a withdrawal or any later commit to development since the authorize job stops this run here.
+          tip="$(git ls-remote "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY.git" refs/heads/development 2>/dev/null | awk '$2 == "refs/heads/development" { print $1 }')"
+          [ -n "$tip" ] || { echo "::error::The current tip of development could not be read. Stopping before any secret is used."; exit 1; }
+          gate_line="$(grep '^G2S-GATE-BLOB: ' "$record" || true)"
+          have_line="G2S-GATE-BLOB: $(git hash-object tools/tool/check_signing_authorization.sh)"
+          [ "$gate_line" = "$have_line" ] || { echo "::error::The record has no single G2S-GATE-BLOB line naming this gate. Stopping before any secret is used."; exit 1; }
           bash tools/tool/check_signing_authorization.sh --record "$record" --approved-sha "$APPROVED_SHA" --version "$EXPECTED_VERSION" \
-            --bundle-id "$BUNDLE_ID" --team-id "$TEAM_ID" --tools-root tools || { echo "::error::Signing is not authorized by the release record. Stopping before any secret is used."; exit 1; }
+            --bundle-id "$BUNDLE_ID" --team-id "$TEAM_ID" --tools-root tools --workflow-sha "$GITHUB_SHA" --development-tip "$tip" \
+            || { echo "::error::Signing is not authorized by the release record. Stopping before any secret is used."; exit 1; }
 
-      # Read-only inputs of the verifier (pubspec, identity matrix, configuration). Its scripts run in the verification steps
-      # below, which have no secret; the one step that has the key runs only Apple's xcodebuild and a redaction filter.
+      # DATA ONLY: the approved commit supplies pubspec.yaml to the verifier. No script of it is executed anywhere in this job
+      # (the verifier's identity matrix comes from tools/tool/verify_artifact.sh, see "Assemble the verifier's view" below),
+      # and the one step that has the key runs only Apple's xcodebuild and a redaction filter.
       - name: Checkout the approved commit (what the verifier judges against)
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
@@ -415,7 +449,24 @@ jobs:
           version="$(sed -n 's/^version:[[:space:]]*//p' approved/pubspec.yaml | head -n1 | tr -d '[:space:]')"
           [ "$version" = "$EXPECTED_VERSION" ] || { echo "::error::approved pubspec.yaml has '$version', expected '$EXPECTED_VERSION'."; exit 1; }
           mkdir -p evidence
-          { echo "approved_sha=$head"; echo "tools_commit=$GITHUB_SHA"; echo "tools_verify_ipa_blob=$(git hash-object tools/tool/verify_ipa.py)"; echo "tools_ipa_inspect_blob=$(git hash-object tools/tool/ipa_inspect.py)"; echo "run=$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID (attempt $GITHUB_RUN_ATTEMPT)"; } > evidence/source.txt
+          {
+            echo "approved_sha=$head"; echo "tools_commit=$GITHUB_SHA"
+            echo "workflow_blob=$(git hash-object tools/.github/workflows/ios-hosted-signing.yml)"
+            bash tools/tool/check_signing_authorization.sh --print-expected --tools-root tools
+            echo "run=$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID (attempt $GITHUB_RUN_ATTEMPT)"
+          } > evidence/source.txt
+
+      # The verifier asks a "repository" for two things: the identity matrix (tool/verify_artifact.sh matrix, which RUNS that
+      # script) and pubspec.yaml (read). Build that view here: the script from this workflow's commit (bound by the G2S
+      # authorization), the pubspec as plain data from the approved commit. Nothing of the approved commit is executed.
+      - name: Assemble the verifier's view (script of this commit, pubspec of the approved commit as data)
+        run: |
+          set -uo pipefail
+          [ -f approved/pubspec.yaml ] && [ ! -L approved/pubspec.yaml ] || { echo "::error::approved/pubspec.yaml is missing or a link."; exit 1; }
+          mkdir -p "$RUNNER_TEMP/verifier-repo/tool"
+          cp tools/tool/verify_artifact.sh "$RUNNER_TEMP/verifier-repo/tool/verify_artifact.sh"
+          cp approved/pubspec.yaml "$RUNNER_TEMP/verifier-repo/pubspec.yaml"
+          echo "VERIFIER_REPO=$RUNNER_TEMP/verifier-repo" >> "$GITHUB_ENV"
 
       - name: Download the unsigned archive of the build job
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
@@ -423,38 +474,81 @@ jobs:
           name: ios-hosted-unsigned-archive_${{ github.run_id }}-${{ github.run_attempt }}
           path: handover
 
-      - name: Check the archive digest, unpack it and re-verify the unsigned app (no secret yet)
+      # The archive comes from a job that ran third-party code, so it is data to be checked, never trusted: its digest must be
+      # the build job's, its member list is checked BEFORE it is extracted and its tree AFTER (tool/validate_handover_archive.py,
+      # from this workflow's commit: absolute or `..` names, unsafe links, special files, set-id bits are refused), and only
+      # trusted Apple tools read it. No script of the archive, of the approved commit or of the build job is executed here.
+      - name: Check the archive digest, validate it before and after extraction, and read the unsigned app (no secret yet)
         env:
           ARCHIVE_SHA256: ${{ needs.build.outputs.archive_sha256 }}
           RUST_LIB_SHA256: ${{ needs.build.outputs.rust_lib_sha256 }}
+          EXPECTED_VERSION: ${{ inputs.expected_version }}
         run: |
           set -uo pipefail
-          [ "$(ls handover | wc -l | tr -d ' ')" = "1" ] && [ -f handover/Runner.xcarchive.tar ] || { echo "::error::The hand-over holds something other than Runner.xcarchive.tar."; ls -la handover; exit 1; }
+          isexact() { case "$1" in *$'\n'*|*$'\r'*) return 1 ;; esac; [[ "$1" =~ $2 ]]; }
+          re_hex64='^[0-9a-f]{64}$'
+          [ "$(ls handover | wc -l | tr -d ' ')" = "1" ] && [ -f handover/Runner.xcarchive.tar ] && [ ! -L handover/Runner.xcarchive.tar ] || { echo "::error::The hand-over holds something other than the regular file Runner.xcarchive.tar."; ls -la handover; exit 1; }
           actual="$(shasum -a 256 handover/Runner.xcarchive.tar | awk '{print $1}')"
           echo "archive_tar_sha256=$actual (build job reported $ARCHIVE_SHA256)"
-          [ "$actual" = "$ARCHIVE_SHA256" ] && printf '%s' "$ARCHIVE_SHA256" | grep -Eq '^[0-9a-f]{64}$' || { echo "::error::The archive does not match the digest of the build job."; exit 1; }
+          isexact "$ARCHIVE_SHA256" "$re_hex64" && [ "$actual" = "$ARCHIVE_SHA256" ] || { echo "::error::The archive does not match the digest of the build job."; exit 1; }
           [ "$RUST_LIB_SHA256" = "$EXPECTED_RUST_LIB_SHA256" ] || { echo "::error::The build job reported Rust library $RUST_LIB_SHA256, not the audited $EXPECTED_RUST_LIB_SHA256."; exit 1; }
-          # An archive that tries to leave its directory is refused before it is unpacked.
-          if tar -tf handover/Runner.xcarchive.tar | grep -E '(^/|(^|/)\.\.(/|$))' >/dev/null; then echo "::error::The archive has an unsafe member name."; exit 1; fi
+          # BEFORE extraction: the member list (names, types, links, modes, limits).
+          python3 -I tools/tool/validate_handover_archive.py list handover/Runner.xcarchive.tar --top Runner.xcarchive | tee evidence/archive-validate-list.txt
+          [ "${PIPESTATUS[0]}" -eq 0 ] || { echo "::error::The archive's member list is refused. Nothing was extracted."; exit 1; }
           mkdir -p "$RUNNER_TEMP/archive"
-          tar -xf handover/Runner.xcarchive.tar -C "$RUNNER_TEMP/archive"
+          tar -xf handover/Runner.xcarchive.tar -C "$RUNNER_TEMP/archive" || { echo "::error::The archive could not be extracted."; exit 1; }
+          # AFTER extraction: the tree that really exists (no escaping link, no special file, no set-id bit).
+          python3 -I tools/tool/validate_handover_archive.py tree "$RUNNER_TEMP/archive" | tee evidence/archive-validate-tree.txt
+          [ "${PIPESTATUS[0]}" -eq 0 ] || { echo "::error::The extracted archive is refused."; exit 1; }
+          [ "$(ls -A "$RUNNER_TEMP/archive")" = "Runner.xcarchive" ] || { echo "::error::The extraction holds more than Runner.xcarchive."; exit 1; }
           ARCHIVE="$RUNNER_TEMP/archive/Runner.xcarchive"
           APP="$ARCHIVE/Products/Applications/Runner.app"
-          [ -d "$APP" ] || { echo "::error::No Runner.app in the archive."; exit 1; }
+          [ -d "$APP" ] && [ ! -L "$APP" ] || { echo "::error::No Runner.app in the archive."; exit 1; }
           [ "$(find "$ARCHIVE/Products/Applications" -maxdepth 1 -name '*.app' | wc -l | tr -d ' ')" = "1" ] || { echo "::error::The archive holds more than one app."; exit 1; }
           codesign -dv "$APP" 2>&1 | head -n 3 | grep -q 'not signed at all' || { echo "::error::The archived app is not unsigned."; exit 1; }
           [ ! -e "$APP/embedded.mobileprovision" ] && [ ! -e "$APP/_CodeSignature" ] || { echo "::error::The archived app carries a profile or a signature folder."; exit 1; }
-          # The repository's own artifact check, from the approved commit, with no secret in this step.
-          (cd approved && /bin/bash tool/verify_artifact.sh ios "$BUILD_ENV" "$APP" --min-sdk "$EXPECTED_MIN_SDK_MAJOR" --evidence "$GITHUB_WORKSPACE/evidence/verify_artifact_unsigned.txt")
+          # Identity and version, read by Apple's PlistBuddy (the build job's repository checks already judged this very app).
+          pbid="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$APP/Info.plist")"
+          pbver="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$APP/Info.plist")"
+          pbbld="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' "$APP/Info.plist")"
+          [ "$pbid" = "$BUNDLE_ID" ] && [ "$pbver+$pbbld" = "$EXPECTED_VERSION" ] || { echo "::error::The archived app says $pbid $pbver+$pbbld, expected $BUNDLE_ID $EXPECTED_VERSION."; exit 1; }
           # The comparison baseline of V8 is THIS archive's app (docs/IOS_RELEASE.md section 8, step 6); keep a copy and its hashes.
           mkdir -p "$RUNNER_TEMP/archive-app"
           ditto "$APP" "$RUNNER_TEMP/archive-app/Runner.app"
-          (cd "$RUNNER_TEMP/archive-app/Runner.app" && find . -type f | sort | xargs shasum -a 256) > evidence/archive-app.sha256
+          (cd "$RUNNER_TEMP/archive-app/Runner.app" && find . -type f -print0 | xargs -0 shasum -a 256 | sort -k2) > evidence/archive-app.sha256
           { echo "archive_tar_sha256=$actual"; echo "rust_lib_sha256=$RUST_LIB_SHA256"; echo "archive_app_files=$(wc -l < evidence/archive-app.sha256 | tr -d ' ')"; plutil -p "$ARCHIVE/Info.plist" | grep -E 'CFBundleIdentifier|CFBundleShortVersionString|CFBundleVersion|SigningIdentity|"Team"'; } > evidence/archive.txt
           cat evidence/archive.txt
           echo "ARCHIVE=$ARCHIVE" >> "$GITHUB_ENV"
           echo "BASELINE_APP=$RUNNER_TEMP/archive-app/Runner.app" >> "$GITHUB_ENV"
           echo "RUST_LIB_SHA256=$RUST_LIB_SHA256" >> "$GITHUB_ENV"
+
+      # The native crypto library's framework must be byte-for-byte the one the CTO authorized (G2S-DLC-WALLET-SHA256 of the release
+      # record, read by the gate script so that the record is parsed in one place). Strict equality, no fallback, no input, no
+      # tolerance: a difference stops the run HERE, before Xcode is selected and before any secret exists. The two diagnostics runs
+      # of 2026-11-19 both produced 9a2d1d98ee4cf7aa608a161cff3d57aa380fec227876ab9c4b2b93f3f381fc13 for the archive build; a new
+      # build is not assumed to reproduce it, and a legitimate difference is resolved by a reviewed record pull request, never here.
+      - name: Enforce the authorized dlc_wallet framework hash (no secret yet)
+        env:
+          EXPECTED_VERSION: ${{ inputs.expected_version }}
+        run: |
+          set -uo pipefail
+          set +e
+          isexact() { case "$1" in *$'\n'*|*$'\r'*) return 1 ;; esac; [[ "$1" =~ $2 ]]; }
+          re_hex64='^[0-9a-f]{64}$'
+          mkdir -p evidence
+          record="tools/docs/release-records/ios-${EXPECTED_VERSION%%+*}-${EXPECTED_VERSION##*+}.md"
+          fw="$ARCHIVE/Products/Applications/Runner.app/Frameworks/dlc_wallet.framework/dlc_wallet"
+          authorized="$(bash tools/tool/check_signing_authorization.sh --print-field G2S-DLC-WALLET-SHA256 --record "$record" --tools-root tools)"; rc=$?
+          if [ "$rc" -ne 0 ] || ! isexact "$authorized" "$re_hex64"; then echo "::error::The release record carries no single, valid G2S-DLC-WALLET-SHA256 line. Stopping before any secret exists."; exit 1; fi
+          if [ ! -f "$fw" ] || [ -L "$fw" ]; then echo "::error::The archive has no regular file Frameworks/dlc_wallet.framework/dlc_wallet. Stopping before any secret exists."; exit 1; fi
+          actual="$(shasum -a 256 "$fw" | awk '{print $1}')"
+          { echo "dlc_wallet_archive_binary_sha256=$actual"; echo "dlc_wallet_authorized_sha256=$authorized"; echo "pinned_rust_library_sha256=$RUST_LIB_SHA256"; } > evidence/dlc-wallet-hash.txt
+          cat evidence/dlc-wallet-hash.txt
+          if [ "$actual" != "$authorized" ]; then
+            echo "::error::The dlc_wallet framework of this archive ($actual) is not the one the CTO authorized ($authorized). Nothing was signed and no secret was used. Find out why it differs; only a reviewed record pull request can authorize another binary."
+            exit 1
+          fi
+          echo "dlc_wallet framework hash equals the authorized value."
 
       - name: Select Xcode 26.3
         run: |
@@ -487,14 +581,21 @@ jobs:
           APPLE_API_ISSUER_ID: ${{ secrets.APPLE_API_ISSUER_ID }}
         run: |
           set -uo pipefail
+          # No errexit: the runner starts steps with `bash -e`, which would stop at a failing xcodebuild BEFORE the redacted
+          # evidence is written. Every failure below is handled explicitly, and the trap removes the key file on every exit.
+          set +e
           set +x
           umask 077
+          unset BASH_ENV ENV DYLD_INSERT_LIBRARIES DYLD_LIBRARY_PATH DYLD_FRAMEWORK_PATH
           [ -n "$APPLE_API_KEY_P8" ] && [ -n "$APPLE_API_KEY_ID" ] && [ -n "$APPLE_API_ISSUER_ID" ] || { echo "::error::A secret of the environment ios-hosted-signing is missing (docs/IOS_HOSTED_SIGNING.md section 4)."; exit 1; }
           export KEYFILE="$RUNNER_TEMP/apple-api-key.p8"
           cleanup() { rm -P -f "$KEYFILE" 2>/dev/null || rm -f "$KEYFILE"; }
           trap cleanup EXIT
           printf '%s\n' "$APPLE_API_KEY_P8" > "$KEYFILE"
           chmod 600 "$KEYFILE"
+          # The key text now lives ONLY in the mode-600 file. It leaves the environment before Xcode (and every process Xcode
+          # starts) exists: xcodebuild reads the file by path, so the environment variable is not needed and is not inherited.
+          unset APPLE_API_KEY_P8
           [ "$(head -n 1 "$KEYFILE")" = "-----BEGIN PRIVATE KEY-----" ] || { echo "::error::The stored key is not a PEM PKCS#8 file (.p8)."; exit 1; }
 
           OPTS="$RUNNER_TEMP/ExportOptions.plist"
@@ -517,7 +618,10 @@ jobs:
           EOF
           plutil -lint "$OPTS" || { echo "::error::The export options are not a valid plist."; exit 1; }
 
-          xcodebuild -exportArchive \
+          # The key ID and issuer ID are command-line arguments (xcodebuild has no other way to take them); `env -u` makes sure
+          # that no secret is also in the environment of xcodebuild and its children. Output goes to a raw log, never the job log.
+          env -u APPLE_API_KEY_P8 -u APPLE_API_KEY_ID -u APPLE_API_ISSUER_ID \
+            xcodebuild -exportArchive \
             -archivePath "$ARCHIVE" \
             -exportPath "$EXPORT_DIR" \
             -exportOptionsPlist "$OPTS" \
@@ -526,26 +630,37 @@ jobs:
             -authenticationKeyID "$APPLE_API_KEY_ID" \
             -authenticationKeyIssuerID "$APPLE_API_ISSUER_ID" > "$RUNNER_TEMP/export.raw.log" 2>&1
           rc=$?
-          cleanup
 
-          # A text filter that removes the exact secret values (and the key path) from everything that is kept as evidence.
+          # A text filter that removes the secret values from everything kept as evidence. It runs while the key file still
+          # exists (the key lines are read from it, not from the environment) and then the file is removed. It removes the exact
+          # key ID, issuer ID, key lines and key path, PEM markers, JWT-shaped tokens and bearer tokens, and it FAILS (nothing
+          # is kept) if any of the exact values is still present afterwards.
           cat > "$RUNNER_TEMP/redact.py" <<'PY'
-          import os, sys
+          import os, re, sys
           vals = [os.environ.get("APPLE_API_KEY_ID", ""), os.environ.get("APPLE_API_ISSUER_ID", ""), os.environ.get("KEYFILE", "")]
-          vals += [l.strip() for l in os.environ.get("APPLE_API_KEY_P8", "").splitlines()]
+          vals += [l.strip() for l in open(os.environ["KEYFILE"], encoding="utf-8", errors="replace").read().splitlines()]
           vals = sorted({v for v in vals if len(v) >= 6}, key=len, reverse=True)
           data = open(sys.argv[1], "rb").read(4000000).decode("utf-8", "replace")
           for v in vals:
               data = data.replace(v, "[REDACTED]")
+          data = re.sub(r"eyJ[A-Za-z0-9_-]{4,}\.[A-Za-z0-9_-]{4,}(\.[A-Za-z0-9_-]*)?", "[REDACTED]", data)
+          data = re.sub(r"(?i)(bearer|authorization:?)\s+[A-Za-z0-9._~+/=-]{8,}", r"\1 [REDACTED]", data)
+          data = re.sub(r"-----(BEGIN|END)[A-Z ]*PRIVATE KEY-----", "[REDACTED]", data)
           if "PRIVATE KEY" in data:
               data = data.replace("PRIVATE KEY", "[REDACTED]")
+          if any(v in data for v in vals):
+              sys.exit(3)
           open(sys.argv[2], "w").write(data)
           PY
-          python3 -I "$RUNNER_TEMP/redact.py" "$RUNNER_TEMP/export.raw.log" evidence/export.log
+          redact() { python3 -I "$RUNNER_TEMP/redact.py" "$1" "$2" || { echo "::error::The redaction of $1 failed; nothing of it is kept."; rm -f "$2"; return 1; }; }
+          red=0
+          redact "$RUNNER_TEMP/export.raw.log" evidence/export.log || red=1
           echo "xcodebuild_exportArchive_exit=$rc" > evidence/export-result.txt
-          [ -f "$EXPORT_DIR/DistributionSummary.plist" ] && plutil -p "$EXPORT_DIR/DistributionSummary.plist" > "$RUNNER_TEMP/distsum.txt" 2>&1 && python3 -I "$RUNNER_TEMP/redact.py" "$RUNNER_TEMP/distsum.txt" evidence/DistributionSummary.txt
-          [ -f "$EXPORT_DIR/ExportOptions.plist" ] && plutil -p "$EXPORT_DIR/ExportOptions.plist" > "$RUNNER_TEMP/expopts.txt" 2>&1 && python3 -I "$RUNNER_TEMP/redact.py" "$RUNNER_TEMP/expopts.txt" evidence/ExportOptions-used.txt
-          [ -f "$EXPORT_DIR/Packaging.log" ] && python3 -I "$RUNNER_TEMP/redact.py" "$EXPORT_DIR/Packaging.log" evidence/Packaging.log
+          [ -f "$EXPORT_DIR/DistributionSummary.plist" ] && plutil -p "$EXPORT_DIR/DistributionSummary.plist" > "$RUNNER_TEMP/distsum.txt" 2>&1 && { redact "$RUNNER_TEMP/distsum.txt" evidence/DistributionSummary.txt || red=1; }
+          [ -f "$EXPORT_DIR/ExportOptions.plist" ] && plutil -p "$EXPORT_DIR/ExportOptions.plist" > "$RUNNER_TEMP/expopts.txt" 2>&1 && { redact "$RUNNER_TEMP/expopts.txt" evidence/ExportOptions-used.txt || red=1; }
+          [ -f "$EXPORT_DIR/Packaging.log" ] && { redact "$EXPORT_DIR/Packaging.log" evidence/Packaging.log || red=1; }
+          cleanup
+          [ "$red" -eq 0 ] || { echo "::error::A redaction failed. Evidence of this step is withheld; nothing was uploaded."; exit 1; }
           echo "---- xcodebuild -exportArchive (redacted), last 60 lines ----"
           tail -n 60 evidence/export.log
           if [ "$rc" -ne 0 ]; then
@@ -673,7 +788,7 @@ jobs:
         run: |
           set -uo pipefail
           pin="${EXPECTED_CERT_SHA256:-$FINGERPRINT}"
-          python3 -I tools/tool/verify_ipa.py verify production "$IPA" --team-id "$TEAM_ID" --repo approved \
+          python3 -I tools/tool/verify_ipa.py verify production "$IPA" --team-id "$TEAM_ID" --repo "$VERIFIER_REPO" \
             --expect-cert-sha256 "$pin" --unsigned-app "$BASELINE_APP" --forbid-entitlement aps-environment \
             --evidence evidence/v7-ipa-verify.txt | tee evidence/v7-ipa-verify-output.txt
           rc=${PIPESTATUS[0]}
@@ -718,8 +833,8 @@ jobs:
           [ -d evidence ] || { echo "no evidence directory"; exit 0; }
           bad="$(find evidence -type f | while IFS= read -r f; do [ -s "$f" ] || continue; enc="$(file -b --mime-encoding "$f")"; [ "$enc" = "binary" ] && echo "$f"; done)"
           if [ -n "$bad" ]; then echo "::error::Binary file(s) in the evidence; refusing to keep them:"; echo "$bad"; rm -f $bad; fi
-          if grep -rlE 'PRIVATE KEY|BEGIN PKCS7' evidence >/dev/null; then
-            echo "::error::A private-key or profile marker is in the evidence; refusing to upload it."; grep -rlE 'PRIVATE KEY|BEGIN PKCS7' evidence | head -n 5; rm -rf evidence; exit 1
+          if grep -rlE 'PRIVATE KEY|BEGIN PKCS7|eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}' evidence >/dev/null; then
+            echo "::error::A private-key, profile or token-shaped marker is in the evidence; refusing to upload it."; grep -rlE 'PRIVATE KEY|BEGIN PKCS7|eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}' evidence | head -n 5; rm -rf evidence; exit 1
           fi
           # The PUBLIC leaf certificate is kept (public data); it must not hold a private key.
           if [ -f evidence/signer.pem ] && grep -q 'PRIVATE' evidence/signer.pem; then echo "::error::signer.pem holds a private key."; rm -rf evidence; exit 1; fi
