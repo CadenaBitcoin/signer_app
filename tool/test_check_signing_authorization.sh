@@ -11,8 +11,16 @@ set -uo pipefail
 
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 gate="$root/tool/check_signing_authorization.sh"
-real_record="$root/docs/release-records/ios-1.0.4-1000035.md"
+committed_record="$root/docs/release-records/ios-1.0.4-1000035.md"
 tmp="$(mktemp -d)"; trap 'rm -rf "$tmp"' EXIT
+# The record as it was BEFORE any G2S authorization: no G2S line, no D14 row, the nine G2S rows back to "Proposed". The tests build their
+# fixtures from this, so they hold whether or not the committed record already carries the authorization (and stay valid after it is withdrawn).
+neutral_record() { # IN OUT
+  awk '/^G2S-/ { next } /^\| D14 \| / { next } { print }' "$1" | awk '
+    BEGIN { n = split("D3 D6 D7 D8 D9 D10 D11 D12", a, " "); for (i = 1; i <= n; i++) want[i] = "| " a[i] " | " }
+    { for (i = 1; i <= n; i++) if (index($0, want[i]) == 1) sub(/\| Decided \| [^|]*\| [0-9-]+ \|[ ]*$/, "| Proposed, not decided | TBD | TBD |"); print }' > "$2"
+}
+real_record="$tmp/neutral-record.md"; neutral_record "$committed_record" "$real_record"
 pass=0; failed=0
 ok() { pass=$((pass + 1)); echo "ok   $1"; }
 bad() { failed=$((failed + 1)); echo "FAIL $1"; [ -z "${2:-}" ] || echo "     $2"; }
@@ -64,17 +72,24 @@ markers() {
 d14() { awk '{ print } index($0, "| D13 | ") == 1 { print "| D14 | **Credential decision (test fixture)** | Decided | CTO | 2026-11-21 |" }' "$1" > "$1.n" && mv "$1.n" "$1"; }
 good="$tmp/good.md"
 cp "$real_record" "$good"; decide "$good" $DECISIONS; d14 "$good"; { echo; markers; } >> "$good"
-if grep -q '^G2S-' "$real_record"; then G2S_PRESENT=1; else G2S_PRESENT=0; fi
-
-# --- the committed record (what the workflow reads when nothing else has been merged) ---
-if [ "$G2S_PRESENT" -eq 0 ]; then
-  expect_rc "committed record: it carries no G2S line, so G1 alone does NOT authorize signing (exit 1)" 1 "$real_record"
-  out="$(run_gate "$real_record")"
-  printf '%s' "$out" | grep -q 'G2S-STATUS must appear exactly once' && ok "committed record: the refusal names the missing G2S-STATUS line" || bad "committed record: the refusal names the missing G2S-STATUS line" "$out"
-  printf '%s' "$out" | grep -q 'decision D7 is not decided' && ok "committed record: the refusal names the undecided release rows" || bad "committed record: the refusal names the undecided release rows" "$out"
-else
-  ok "committed record: G2S lines are present (a later authorization PR); the fixtures below are what is tested"
-fi
+# --- the actual release record of this checkout: REAL assertions on the gate's exit code, whatever state the record is in ---
+committed_status="$(grep -E '^G2S-STATUS: ' "$committed_record" || true)"
+case "$committed_status" in
+  'G2S-STATUS: AUTHORIZED')
+    expect_rc "the committed record carries a complete G2S authorization: the gate ACCEPTS it with this checkout's workflow, gate and tools (exit 0)" 0 "$committed_record"
+    sed 's/^G2S-STATUS: AUTHORIZED$/G2S-STATUS: WITHDRAWN/' "$committed_record" > "$tmp/committed-withdrawn.md"
+    expect_rc "the committed record with G2S-STATUS: WITHDRAWN fails closed (exit 1)" 1 "$tmp/committed-withdrawn.md" ;;
+  'G2S-STATUS: WITHDRAWN')
+    expect_rc "the committed record's G2S authorization is withdrawn: the gate fails closed (exit 1)" 1 "$committed_record" ;;
+  '')
+    expect_rc "the committed record carries no G2S authorization: the gate fails closed (exit 1)" 1 "$committed_record" ;;
+  *)
+    bad "the committed record has an unrecognized G2S status line: $committed_status" ;;
+esac
+expect_rc "a record without any G2S authorization (the committed record before it, neutral copy) fails closed: G1 alone does NOT authorize signing (exit 1)" 1 "$real_record"
+out="$(run_gate "$real_record")"
+printf '%s' "$out" | grep -q 'G2S-STATUS must appear exactly once' && ok "that refusal names the missing G2S-STATUS line" || bad "that refusal names the missing G2S-STATUS line" "$out"
+printf '%s' "$out" | grep -q 'decision D7 is not decided' && ok "that refusal names the undecided release rows" || bad "that refusal names the undecided release rows" "$out"
 cp "$real_record" "$tmp/lines_only.md"; { echo; markers; } >> "$tmp/lines_only.md"
 expect_rc "G2S lines WITHOUT the decided rows are refused (G1 plus lines is not enough)" 1 "$tmp/lines_only.md"
 cp "$real_record" "$tmp/rows_only.md"; decide "$tmp/rows_only.md" $DECISIONS; d14 "$tmp/rows_only.md"
@@ -94,6 +109,7 @@ mut "status NOT AUTHORIZED is refused" 's/^G2S-STATUS: AUTHORIZED$/G2S-STATUS: N
 mut "status in lower case is refused" 's/^G2S-STATUS: AUTHORIZED$/G2S-STATUS: authorized/'
 mut "status with a trailing space is refused" 's/^G2S-STATUS: AUTHORIZED$/G2S-STATUS: AUTHORIZED /'
 mut "status PENDING is refused" 's/^G2S-STATUS: AUTHORIZED$/G2S-STATUS: PENDING/'
+mut "status WITHDRAWN is refused (fails closed)" 's/^G2S-STATUS: AUTHORIZED$/G2S-STATUS: WITHDRAWN/'
 mut "an operation that includes upload is refused" 's/^G2S-OPERATION: sign-and-verify-only$/G2S-OPERATION: sign-and-upload/'
 mut "a different approved SHA is refused" "s/^G2S-APPROVED-SHA: .*/G2S-APPROVED-SHA: 0000000000000000000000000000000000000001/"
 mut "a different version is refused" 's/^G2S-VERSION: .*/G2S-VERSION: 1.0.5+1000036/'

@@ -1,9 +1,12 @@
 # iOS hosted signing: sign and verify only (Issue #71)
 
-> **Status: implemented, NOT authorized, NOT run.** `.github/workflows/ios-hosted-signing.yml` can sign and verify the approved
-> iOS 1.0.4 (1000035) build on a GitHub-hosted runner with Apple's cloud-managed Distribution certificate. It **cannot sign today**:
-> the environment and secrets do not exist, and the release record carries no authorization for it (section 5). It **never
-> uploads**. It decides no D or X row of the release record, changes no gate and is not G2. Parent issue: #54; release
+> **Status: implemented; G2S authorization recorded (conditional); credential-free preflight done; NOT yet run with credentials.**
+> `.github/workflows/ios-hosted-signing.yml` can sign and verify the approved iOS 1.0.4 (1000035) build on a GitHub-hosted runner with Apple's
+> cloud-managed Distribution certificate. The CTO authorized **one** such run (**G2S**, release record sections 4.2 and 6.1, comment
+> https://github.com/CadenaBitcoin/signer_app/issues/71#issuecomment-7038341975); it becomes effective only when that record is merged on `development` and the gate passes. It **cannot sign** until the
+> owner also creates the three environment secrets (section 4). It **never uploads**, and G2S is not G2: it gives no upload, no distribution and no later gate.
+> The protected environment `ios-hosted-signing` exists (section 4); the credential-free preflight run `44726071796` (2026-11-20) built the unsigned archive,
+> skipped `sign`, and showed that the real archive passes the validator and carries the authorized `dlc_wallet` hash (record section 4.2). Parent issue: #54; release
 > procedure: [IOS_RELEASE.md](IOS_RELEASE.md); record: [release-records/ios-1.0.4-1000035.md](release-records/ios-1.0.4-1000035.md).
 > Every statement about Apple's behaviour below is labelled **Unconfirmed** until a run has shown it.
 >
@@ -128,13 +131,16 @@ binaries were identical across the two runs except the Dart snapshot `App.framew
 
 ## 4. What the owner must configure by hand (nothing here is done by the pull request)
 
-Organization Owners only ([IOS_SIGNING.md](IOS_SIGNING.md) section 7). Do this only after the pull request is merged and section 5 is
-satisfied; creating the environment earlier changes nothing but also earns nothing.
+Organization Owners only ([IOS_SIGNING.md](IOS_SIGNING.md) section 7). **Actual state (read from the GitHub API on 2026-11-20):** items 1 to 3 are
+done and item 4 is not; the environment holds no secret, no variable, and the repository and organization hold no secret.
 
 1. Repository **Settings, Environments, New environment**: name exactly `ios-hosted-signing`.
 2. **Deployment branches and tags: Selected branches**, one rule: `development`. (The workflow also refuses any other ref.)
-3. **Required reviewers: none.** The authorization is the release record ([RELEASE_POLICY.md](RELEASE_POLICY.md) 2.3; the two
-   Maintainers accounts are one person, so a reviewer would add no independence). **Wait timer: none.**
+3. **Required reviewers: `sziller` and `CadenaWizard`** (the two accounts are one person, the CTO; `prevent_self_review` is off, so the CTO can confirm the
+   deployment; **administrator bypass is disabled**). This approval **confirms the deployment only** (it is asked when the `sign` job starts, after the
+   gate and the build, before any secret exists); it does **not** replace the CTO's authorization, which is the release record ([RELEASE_POLICY.md](RELEASE_POLICY.md)
+   2.3, decision D12). It adds no independence and none is claimed. **Wait timer: none.** Do not merge anything to `development` while the run waits for this
+   approval: the tip check would stop it.
 4. Add the three **environment** secrets of section 3. **Never** repository or organization secrets.
 5. Do not add a variable, a `.p12`, a certificate password or a provisioning profile.
 6. Ask for secret scanning and push protection if they are not on yet.
@@ -143,15 +149,16 @@ satisfied; creating the environment earlier changes nothing but also earns nothi
    '{branch_policy: .deployment_branch_policy, protection_rules: .protection_rules}'` must show a custom branch policy, and the
    branch policy list must contain exactly `development`.
 
-After the run: the key stays valid until it is revoked or rotated. Rotation and revocation in App Store Connect remain available security
-controls (use them at once if anything about a run is in doubt); this document does not make revocation after the first signing run
-mandatory. A temporary Admin key, if it should later prove necessary, is a separate explicit decision and is not covered by D14.
+After the run: **remove the three secrets from the environment at once** (section 5.1); that is what stops a further run, because the workflow does not count runs.
+Removing the GitHub secrets does **not** revoke the Apple key: it stays valid until it is revoked or rotated in App Store Connect. Rotation and revocation remain
+available security controls (use them at once if anything about a run is in doubt); this document does not make revocation after the first signing run mandatory.
+A temporary Admin key, if it should later prove necessary, is a separate explicit decision and is not covered by D14.
 
 ## 5. Authorization, and the minimum amendments
 
 **What blocks signing today (by design).** Two independent locks:
 
-1. The environment and its secrets do not exist (section 4).
+1. The three environment secrets do not exist (the environment itself exists, section 4).
 2. The release record must contain a complete **G2S** authorization, **and** the release decisions G2S needs must be decided.
    `tool/check_signing_authorization.sh` (run by the `authorize` job and again at the start of the `sign` job, before any secret is
    touched) accepts only these lines, each exactly once at the start of a line with LF endings, **outside** fenced code blocks and
@@ -204,15 +211,15 @@ Privacy), X2 (privacy manifest) and the prerequisites of record section 4.1. The
 runner, nothing is sent to App Store Connect and nobody can install it. The CTO may tighten the list by amending the gate in a reviewed
 pull request, which changes the gate's blob. G2S gives neither G2, G3, G4 nor G5, and the existing G1 to G5 governance is unchanged.
 
-**Why the current documents do not support a signing-only authorization.** In the record, G2 is "production signing **and** the one
+**Why the documents did not support a signing-only authorization (the state before the G2S authorization pull request, which amends them as listed below the table).** In the record, G2 is "production signing **and** the one
 upload" ([record](release-records/ios-1.0.4-1000035.md) section 4.1 and section 6; [IOS_RELEASE.md](IOS_RELEASE.md) gate table). D3, D9,
 D11 and D12 describe signing on a Mac under the operator's control; section 4.1 item 4 makes the operator's Mac-side diagnostic a
 prerequisite; [IOS_SIGNING.md](IOS_SIGNING.md) section 5 rejects a team key for a staging credential (option A), prefers an individual
 key (B) and rejects "Admin-level key or Xcode cloud-managed signing" (C), and section 3.3 closes the signing experiments. A Developer-role
 team key used for cloud-managed signing is a **deviation from section 5**, which says its model "is not final". Nothing was changed in any
-of these files by this pull request.
+of these files by the pull request that added this document.
 
-**Minimum amendments (proposed text; each is a reviewed pull request and the CTO's decision):**
+**Minimum amendments (the original proposal; each is a reviewed pull request and the CTO's decision; applied by the G2S authorization pull request as listed below the table):**
 
 | # | Where | Amendment |
 |---|---|---|
@@ -223,8 +230,38 @@ of these files by this pull request.
 | A5 | [IOS_SIGNING.md](IOS_SIGNING.md) sections 3 and 5 and [IOS_RELEASE.md](IOS_RELEASE.md) section 1 | A pointer to this document: hosted signing exists as a manually started workflow for 1.0.4; section 5's key model is superseded **for this release** by A2; the Apple-side operator role is not needed for signing. [IOS_SIGNING.md](IOS_SIGNING.md) section 3.3 ("closed") is unaffected: it concerns the throwaway self-signed identity. |
 | A6 | [RELEASE_POLICY.md](RELEASE_POLICY.md) 2.3, "Manual operations before automation exist" | One sentence: a manual operation may be a manually started workflow in a protected environment; it still needs the CTO's written authorization of that operation and is not an exception to the authorization policy. Only if the CTO wants the policy text to say so; the record's A1 is enough for this release. |
 
-Not part of G2S, and not decided here: X1, X2, D1 and D2 (the record still reads "Proposed" for both; if the CTO has already accepted them on
-Issue #71, that is record bookkeeping, not verified here), G2 (upload), G3 to G5, the push entitlement (D6 is enforced by V5/V7, not decided).
+**Decided for G2S on 2026-11-20** (release record section 4): D3, D6, D7, D8, D9, D10, D11, D12 and D14. D6, the absence of the push-notification entitlement
+(`aps-environment`), **is decided**: the CTO accepted it for this release, and the signing job enforces it (V5, V7). That acceptance does not extend to the Apple warning
+ITMS-90078 at a later upload.
+
+**Not part of G2S, still undecided, deferred to the gates named in record section 4.2:** X1, X2, D1, D2, D4 and D5 (the record still reads "Proposed" or "Open" for them;
+the substance of D1 was accepted by the CTO on Issue #71 on 2026-11-12, which is record bookkeeping still to be done before G2), G2 (upload) and G3 to G5.
+
+**Applied by the G2S authorization pull request** (reviewed by the CTO, which is the authorization boundary): (1) the release record: the gate
+G2S in the gate table (section 6), the G2S lines (section 6.1), the scope, conditions, preflight and environment facts (new section 4.2), D3, D6, D7, D8,
+D9, D10, D11, D12 and the new D14 `Decided` on 2026-11-20 with the accepted risks written into each row, the deferred rows D1, D2, D4, D5, X1 and X2
+unchanged (X2 only gains the completed technical evidence and stays Open), the roles (section 2), signing route and facts (section 5), the results rows
+(section 7), and the status unchanged at `G1 AUTHORIZED`; (2) [IOS_RELEASE.md](IOS_RELEASE.md): the G2S gate, the hosted-route notes and the Mac-route note of
+section 8; (3) [IOS_SIGNING.md](IOS_SIGNING.md) section 5: the exception for this operation; (4) [RELEASE_POLICY.md](RELEASE_POLICY.md) 2.3: one sentence;
+(5) this document: the status, the environment's actual configuration and the steps below.
+
+### 5.1 One operation is authorized, and the workflow does not enforce it
+
+The CTO authorized **exactly one** hosted signing-and-verification operation. **The workflow does not technically enforce a one-time execution limit**: it has no run
+counter, the gate cannot tell that an authorization was used, and the same G2S lines keep passing the gate (and a new run can be dispatched) until the record is changed
+and the secrets are gone. A re-run of an old run is refused only because the tip of `development` moves; a new dispatch from an unchanged tip is not. The controls are
+procedures, written into the release record (section 4.2, "One operation"):
+
+- An attempt that **reaches Apple credential use** (the secret step of the `sign` job starts) **consumes** the authorization, whether or not signing succeeds.
+- Any **additional signing attempt requires explicit CTO authorization** (a new Issue #71 decision and a new reviewed record pull request).
+- A failure **before** credentials are accessed (the gate, the build, the archive validator, the `dlc_wallet` hash comparison, any pre-secret check) is **not** a completed
+  signing attempt; **any subsequent attempt still needs an explicit operator decision**, noted on Issue #71 with the failed run's ID and cause. Do not use GitHub's
+  "Re-run" button for this.
+- The **environment deployment approval is deliberate and specific** to the one authorized run (checklist in the record); a doubtful deployment is rejected.
+- **After the attempt**, whatever its result, **remove the three Apple credentials from the environment** `ios-hosted-signing` at once and **withdraw the G2S
+  authorization** through a reviewed pull request (`G2S-STATUS: WITHDRAWN`).
+- **Removing the GitHub secrets does not revoke the Apple Developer API key.** The key remains valid in App Store Connect until it is rotated or revoked there, which stays
+  an available security control and is not mandatory (D14).
 
 ## 6. What is not known (the first run answers it)
 
@@ -259,18 +296,24 @@ Issue #71, that is record bookkeeping, not verified here), G2 (upload), G3 to G5
    - *What runs only on macOS* (the archive step's `codesign`/PlistBuddy reads, V1 to V9, the real `xcodebuild`) cannot run in the Linux
      tests, which stub `xcodebuild` and `plutil` and use synthetic credentials. The first real run is the first test of those steps.
    - *No merge to `development` during a run:* the tip check stops the run at the re-check (fail closed, but a wasted run).
+   - *No one-time execution limit:* the workflow does not count runs, and nothing technical marks the authorization as used (section 5.1). The single use rests on the
+     procedures named there: the deliberate environment approval, removing the credentials, and the reviewed withdrawal.
 
 ## 7. The smallest steps from here
 
-1. The CTO reviews and merges this pull request (nothing signs: no environment, no authorization).
-2. Optionally run the workflow once from `development` **before** anything else exists: `authorize` reports "not authorized", `build`
-   proves the unsigned hand-over, `sign` is skipped, and no secret is read.
-3. A record pull request with amendments A1 to A4 (A5 and A6 optionally), the decided rows of section 5 and the eleven `G2S-` lines
-   (blobs from `--print-expected`), preceded by the CTO's written G2S comment on Issue #71. It is merged last, with nothing else
-   merged to `development` until the run has finished.
-4. The owner creates the environment and the three secrets (section 4).
-5. Run the workflow with the defaults. Read the summary; record the certificate fingerprint (D8); decide X2 and X1 before any upload.
-6. The upload job, as its own pull request, reusing the verified IPA of the same run, behind G2.
+1. Done: the workflow and the gate are merged; the environment exists; the credential-free preflight (run `44726071796`) built the real archive and the
+   validator and the `dlc_wallet` hash were checked against it.
+2. The CTO reviews and merges the G2S authorization pull request (the record with the decided rows and the G2S lines). It is the last merge to `development`
+   before the run.
+3. The owner creates the three environment secrets of section 3 in `ios-hosted-signing` (never repository or organization secrets) and re-reads the environment
+   (section 4, item 7).
+4. Start the workflow by hand from `development` with the defaults. The required reviewers confirm the deployment **deliberately, for this one run** (the checklist of
+   record section 4.2). The gate re-checks the record, the tip and the hash before any secret is used. Read the summary: the certificate SHA-256 is **discovered** (circular, D8) and is recorded in the release record, section 7.
+5. After the signing attempt, whatever its result: **remove the three credentials from the environment at once**, then a reviewed pull request sets `G2S-STATUS: WITHDRAWN`
+   (condition 8: a further attempt needs the CTO's new authorization; a failure before credential use is not a completed attempt, but a later attempt still needs an
+   explicit operator decision, section 5.1) and, separately, fills section 7. Removing the secrets is not revoking the Apple key; rotate or revoke it if anything about
+   the run is in doubt (D14).
+6. The upload (G2) is a later, separate authorization and, if wanted, a separate pull request for an upload job; X1, X2, D1, D2, D4 and D5 are decided before it.
 
 ## 8. Disposition of the independent audit findings
 

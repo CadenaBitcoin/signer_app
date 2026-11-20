@@ -232,7 +232,10 @@ person performs it by hand. That is an **operational exception to the future aut
 an exception to this authorization policy. Because no pipeline run exists to carry the merge's
 authorization, such an operation needs the CTO's explicit, written authorization of that specific
 operation, made through the same boundary. It does not need, and no document may require, a
-second human. The first is iOS 1.0.4 ([IOS_RELEASE.md](IOS_RELEASE.md)).
+second human. The first is iOS 1.0.4 ([IOS_RELEASE.md](IOS_RELEASE.md)). A manual operation may be carried out by a manually started workflow in a
+protected environment (iOS 1.0.4, G2S: [IOS_HOSTED_SIGNING.md](IOS_HOSTED_SIGNING.md)); it still needs the CTO's written authorization of that specific operation, it is
+not a merge-authorized pipeline (a merge authorizes only what the workflows actually do), and the environment's reviewer approval confirms a deployment, never
+replaces that authorization.
 
 ### 2.4 Failure, retry and recovery (architectural requirement; not implemented)
 

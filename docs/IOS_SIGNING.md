@@ -416,6 +416,15 @@ another app. The model is **not finalized** before items 2 and 3 of section 4 ar
 API access to be enabled for the organization by the Account Holder; it is reported disabled. Until then no
 key is requested or created, and no signing or upload secret is configured.
 
+**Exception for the iOS 1.0.4 hosted signing operation (Issue #71; CTO decisions D3, D7 and D14 of the release record, 2026-11-20).** For the one G2S
+signing-and-verification operation the credential is a **dedicated Developer-role team API key** (option A) used for **Xcode cloud-managed signing** (the
+approach of option C), which this section otherwise rejects. The deviations are accepted in writing: the key's scope cannot be restricted to the application;
+the goal above that the credential must not create certificates does not hold, because cloud-managed Distribution signing may create certificates and
+profiles in the team's account (D7); the fallback below applies, with the loss of app isolation recorded (D14) and compensated by the required reviewers of the
+protected environment `ios-hosted-signing` ([IOS_HOSTED_SIGNING.md](IOS_HOSTED_SIGNING.md) section 4). Rotation and revocation remain available; automatic
+revocation is not mandatory; a temporary Admin-level key would need its own authorization. This exception covers G2S only: it is **not** a decision for any
+staging or upload credential, and the model below stays "not final" for them.
+
 Open points the account owner must confirm: that a service user can be restricted to the
 staging app only; the lowest role that still shows **Upload builds**; that this role does not
 show **Submit apps**; and that the organization accepts a dedicated service user. If B is not
