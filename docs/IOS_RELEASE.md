@@ -35,6 +35,11 @@ e-mail, zip or someone else's checkout. The record's `Status` line says what you
 | `G2 AUTHORIZED` | Also steps 4 to 6 (signed build, verification, upload to TestFlight) |
 | `WITHDRAWN` | Nothing. Stop |
 
+**G2S is not a status.** Independently of `Status`, the record's **G2S lines** (record section 6.1) can authorize **one hosted signing-and-verification run** of
+`.github/workflows/ios-hosted-signing.yml` (see [IOS_HOSTED_SIGNING.md](IOS_HOSTED_SIGNING.md)): no operator, no Mac, never an upload. It gives the operator
+nothing to do and none of steps 4 to 6; the signing and the upload by an operator still need `G2 AUTHORIZED`. The workflow does **not** technically enforce "one run":
+the single use is kept by the procedures of record section 4.2 ("One operation").
+
 **What you execute** (details, expected output and the reasons are in the sections named):
 
 ```bash
@@ -105,6 +110,10 @@ independent authorizer. The operator is a separate role for the person who perfo
 other AI assistant hold neither role**; they may help with documentation and read-only checks and never merge, promote, sign, upload or
 authorize.
 
+**Hosted route (G2S).** For the one hosted signing-and-verification operation of the release record (section 4.2) the Apple-side work is done by a GitHub-hosted
+workflow, confirmed by the required reviewers of its protected environment, and no operator is involved (decision D3). That is an operational exception to the
+future automation, not to the authorization policy. The operator role above stays as written for every other operation.
+
 ### Authorization gates
 
 Each gate is a separate, written, dated decision recorded in the release record. A later gate is
@@ -120,7 +129,8 @@ second human. The same person gives G1 to G5; the release record says so and cal
 | Gate | Decision | Decided by | Needed before |
 |---|---|---|---|
 | **G1** | Source revision authorized: the exact commit SHA and the content it must equal | Release coordinator | The operator retrieves anything |
-| **G2** | **The CTO's written authorization of the manual operation**: production signing **and** upload to App Store Connect (TestFlight) | Release coordinator (the CTO) | Signing certificates are used, and the upload |
+| **G2S** | **The CTO's written authorization of ONE GitHub-hosted signing-and-verification operation**: signing with Apple's cloud-managed Distribution certificate through the dedicated team API key, and verification; **no upload, no distribution; not G2** (record sections 4.2 and 6.1) | Release coordinator (the CTO) | The hosted workflow's `sign` job runs, and the Apple team API key is used |
+| **G2** | **The CTO's written authorization of the manual operation**: production signing **and** upload to App Store Connect (TestFlight) | Release coordinator (the CTO) | Signing for the upload, and the upload. G2S does not give it |
 | **G3** | The processed build may be assigned to named internal testers | Release coordinator (initially; [IOS_SIGNING.md](IOS_SIGNING.md) section 2, item 6) | Any tester receives the build |
 | **G4** | **Submission to App Review**, with the acceptance evidence of section 11 (no time window) | Release coordinator (the CTO) | The "Submit for Review" button |
 | **G5** | **Public release** of an approved version | Release coordinator (the CTO), separately from G4 | Any step that makes the build available to the public |
@@ -185,7 +195,8 @@ All must hold, and be recorded, before the operator is told to start.
 
 The release record is what the operator trusts for *which* commit. It is authoritative only when it is on `development`
 through a merged, reviewed pull request (a record that exists only in a chat, an e-mail or a branch is not). Its `Status` line is
-one of `DRAFT` (the skeleton), `G1 AUTHORIZED`, `G2 AUTHORIZED` or `WITHDRAWN`.
+one of `DRAFT` (the skeleton), `G1 AUTHORIZED`, `G2 AUTHORIZED` or `WITHDRAWN`. G2S is not a status: it is recorded by the G2S lines of the
+record (section 6.1) in a reviewed pull request, binds the exact workflow, gate, tools and native-library hash, and leaves the status unchanged.
 
 **No circular dependency.** A record cannot contain the SHA of the commit that contains it, so the order is fixed:
 
@@ -319,6 +330,10 @@ pod --version                # 1.17.0
 ```
 
 ## 8. Build, sign and export
+
+**This section is the procedure of an operator on a Mac** (the route of G2). The one hosted signing-and-verification operation of G2S does not use it:
+it is performed by the workflow described in [IOS_HOSTED_SIGNING.md](IOS_HOSTED_SIGNING.md), under the CTO's decision recorded in record section 4.2 (Mac-local
+signing assumptions in this document do not apply to that operation, D3).
 
 Run from the clean checkout of section 5. Nothing here needs a secret typed into a command or a file.
 Steps 1 to 4 are credential-free and need only G1; **step 5 uses the signing identity and needs G2.**

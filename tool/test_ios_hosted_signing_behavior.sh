@@ -196,11 +196,18 @@ exec "$REAL_GIT" "$@"
 EOF
 chmod +x "$stubdir/git"
 
-mkws() { # DIR : the files the gate reads, with the WORKFLOW UNDER TEST, and the real (unauthorized) record
+# The record as it was BEFORE any G2S authorization: no G2S line, no D14 row, the nine G2S rows back to "Proposed". The tests build their
+# fixtures from this, so they hold whether or not the committed record already carries the authorization (and stay valid after it is withdrawn).
+neutral_record() { # IN OUT
+  awk '/^G2S-/ { next } /^\| D14 \| / { next } { print }' "$1" | awk '
+    BEGIN { n = split("D3 D6 D7 D8 D9 D10 D11 D12", a, " "); for (i = 1; i <= n; i++) want[i] = "| " a[i] " | " }
+    { for (i = 1; i <= n; i++) if (index($0, want[i]) == 1) sub(/\| Decided \| [^|]*\| [0-9-]+ \|[ ]*$/, "| Proposed, not decided | TBD | TBD |"); print }' > "$2"
+}
+mkws() { # DIR : the files the gate reads, with the WORKFLOW UNDER TEST, and the record before any authorization
   rm -rf "$1"; mkdir -p "$1/.github/workflows" "$1/docs/release-records"
   mkdir -p "$1/tool"; cp "$root"/tool/{check_signing_authorization.sh,build_manifest.py,ipa_inspect.py,validate_handover_archive.py,verify_artifact.sh,verify_ipa.py} "$1/tool/"
   cp "$wf" "$1/.github/workflows/ios-hosted-signing.yml"
-  cp "$root/docs/release-records/ios-1.0.4-1000035.md" "$1/$REC"
+  neutral_record "$root/docs/release-records/ios-1.0.4-1000035.md" "$1/$REC"
 }
 decide_rows() { # RECORD ROWS... : the rows become Decided (what the CTO's record pull request would do)
   local rec="$1" id; shift
