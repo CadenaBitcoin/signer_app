@@ -65,7 +65,7 @@ PY
 }
 for pair in "authorize|Validate the inputs|vin_a" "build|Validate the inputs|vin_b" "sign|Validate the inputs|vin_s" \
             "authorize|Check the release record|gate" "sign|Re-check the authorization|recheck" \
-            "sign|Export and sign|secret" "sign|Seal the evidence|seal" "sign|Check the archive digest|archive" "sign|Enforce the authorized dlc_wallet|dlc"; do
+            "sign|Export and sign|secret" "sign|Seal the evidence|seal" "sign|Check the archive digest|archive" "sign|Enforce the authorized dlc_wallet|dlc" "sign|Report (job summary)|report" "sign|Native library identity|v9"; do
   IFS='|' read -r j n v <<<"$pair"
   f="$(sf "$j" "$n")" && eval "STEP_$v=\"$f\"" || { bad "the workflow has exactly one step '$n' in job $j"; eval "STEP_$v=/nonexistent"; }
 done
@@ -550,6 +550,75 @@ rm -rf "$tmp/xr"; mkdir -p "$tmp/xr"; tar -xf "$av/rv_chain.tar" -C "$tmp/xr" 2>
 fi
 
 # ============================================================================================================================
+# 6b. Exit-status constructs of steps that only run on macOS (the first real run stopped at one): the REAL lines of the steps,
+#     extracted from the YAML and run on Linux with a stand-in `codesign`, under the step's own shell options (bash -e, pipefail)
+# ============================================================================================================================
+python3 -I - "$STEP_archive" "$STEP_v9" "$tmp" <<'PYX'
+import sys, re
+archive, v9, out = open(sys.argv[1]).read().split("\n"), open(sys.argv[2]).read().split("\n"), sys.argv[3]
+a = next(i for i, l in enumerate(archive) if 'codesign_state="$(codesign -dv' in l)
+b = next(i for i, l in enumerate(archive) if "codesign shows a signature on the archived app" in l)
+open(out + "/snip_unsigned.sh", "w").write("\n".join(archive[a:b + 1]) + "\n")
+c = next(i for i, l in enumerate(v9) if "The native library inspection failed" in l)
+open(out + "/snip_v9_tail.sh", "w").write("\n".join(v9[c:]) + "\n")
+PYX
+[ -s "$tmp/snip_unsigned.sh" ] && [ -s "$tmp/snip_v9_tail.sh" ]; chk "the unsigned-state lines and the V9 tail can be extracted from the workflow" $?
+run_unsigned() { # CASE -> UNS_RC ; the evidence file stays in $UNS_DIR
+  UNS_DIR="$(mktemp -d -p "$tmp")"; mkdir -p "$UNS_DIR/evidence" "$UNS_DIR/bin" "$UNS_DIR/x/Runner.app"
+  cat > "$UNS_DIR/bin/codesign" <<'EOF'
+#!/bin/bash
+# STAND-IN for codesign -dv. An unsigned bundle: the line the build job captured on the real archive, exit 1 (as `codesign -d` does).
+a="$STUB_APP"
+case "$STUB_CASE" in
+  unsigned)        echo "$a: code object is not signed at all"; exit 1 ;;
+  unsigned_note)   echo "$a: code object is not signed at all"; echo "warning: something else"; exit 1 ;;
+  adhoc)           printf 'Executable=%s/Runner\nIdentifier=com.app.cadenabitcoin\nFormat=app bundle with Mach-O thin (arm64)\nSignature=adhoc\n' "$a"; exit 0 ;;
+  signed)          printf 'Executable=%s/Runner\nIdentifier=com.app.cadenabitcoin\nFormat=app bundle with Mach-O thin (arm64)\nAuthority=Apple Distribution: X\nTeamIdentifier=D65458CPDP\n' "$a"; exit 0 ;;
+  phrase_then_sig) echo "$a: code object is not signed at all"; echo "Authority=Apple Distribution: X"; exit 1 ;;
+  phrase_not_last) echo "$a: code object is not signed at all yet"; exit 1 ;;
+  error)           echo "$a: No such file or directory"; exit 1 ;;
+  empty)           exit 0 ;;
+esac
+EOF
+  chmod +x "$UNS_DIR/bin/codesign"
+  ( cd "$UNS_DIR" && env -i PATH="$UNS_DIR/bin:$PATH" HOME="$HOME" APP="$UNS_DIR/x/Runner.app" STUB_APP="$UNS_DIR/x/Runner.app" STUB_CASE="$1" bash -e -c "set -uo pipefail
+$(cat "$tmp/snip_unsigned.sh")" > "$UNS_DIR/out.txt" 2>&1 ); UNS_RC=$?
+}
+run_unsigned unsigned; [ "$UNS_RC" -eq 0 ]; chk "unsigned-state: a genuinely unsigned app (codesign prints the phrase and exits 1) is ACCEPTED under pipefail" $? "rc=$UNS_RC $(head -n 2 "$UNS_DIR/out.txt")"
+grep -q 'code object is not signed at all' "$UNS_DIR/evidence/archive-codesign-state.txt"; chk "unsigned-state: the codesign answer is kept as evidence" $?
+run_unsigned unsigned_note; [ "$UNS_RC" -eq 0 ]; chk "unsigned-state: an unsigned answer with an extra harmless line is accepted" $?
+for c in adhoc signed phrase_then_sig phrase_not_last error empty; do
+  run_unsigned "$c"; [ "$UNS_RC" -ne 0 ]; chk "unsigned-state: case '$c' is REFUSED" $? "rc=$UNS_RC"
+done
+run_unsigned adhoc; grep -q '::error::The archived app is not unsigned' "$UNS_DIR/out.txt"; chk "unsigned-state: the refusal of an ad-hoc-signed app says why" $? "$(head -n 2 "$UNS_DIR/out.txt")"
+run_unsigned adhoc; [ -s "$UNS_DIR/evidence/archive-codesign-state.txt" ] && grep -q 'Signature=adhoc' "$UNS_DIR/evidence/archive-codesign-state.txt"; chk "unsigned-state: a refused answer is kept as evidence too" $?
+
+# the Report step: an optional file that is absent is not a failure; a summary that cannot be written is
+run_report() { # SETUP-COMMANDS [SUMMARY_PATH] -> REP_RC, REP_DIR
+  REP_DIR="$(mktemp -d -p "$tmp")"; mkdir -p "$REP_DIR/evidence"; ( cd "$REP_DIR" && eval "$1" )
+  ( cd "$REP_DIR" && env -i PATH="$PATH" HOME="$HOME" GITHUB_STEP_SUMMARY="${2:-$REP_DIR/summary.md}" bash -e "$STEP_report" > "$REP_DIR/out.txt" 2>&1 ); REP_RC=$?
+}
+run_report ':'; [ "$REP_RC" -eq 0 ] && grep -q '^## iOS hosted signing' "$REP_DIR/summary.md"; chk "report: with no optional evidence file at all (a failed early run) the step succeeds and writes the header" $? "rc=$REP_RC"
+run_report 'echo x > evidence/v9-native.txt'; [ "$REP_RC" -eq 0 ] && grep -q '### v9-native.txt' "$REP_DIR/summary.md"; chk "report: with some optional files and the last one (export-diagnosis.txt) absent -- a SUCCESSFUL run -- the step succeeds" $? "rc=$REP_RC"
+run_report 'for f in export-result ipa-digest v1-identity v4-profile-summary v6-environment v9-native export-diagnosis; do echo "$f" > evidence/$f.txt; done; echo abc > evidence/certificate-sha256.txt'; [ "$REP_RC" -eq 0 ] && grep -q '### export-diagnosis.txt' "$REP_DIR/summary.md" && grep -q 'Signing certificate SHA-256' "$REP_DIR/summary.md"; chk "report: with every optional file present all are reported and the step succeeds" $? "rc=$REP_RC"
+run_report ':' "$REP_DIR/no-such-dir/summary.md"; [ "$REP_RC" -ne 0 ]; chk "report: a summary that cannot be written is still a failure (a meaningful reporting failure is not hidden)" $? "rc=$REP_RC"
+
+# V9: the manifest line is informational; the gate lines still fail the step
+run_v9() { # EXPORTS_LINE FORBIDDEN STRINGS_FORBIDDEN MANIFEST(yes|no) -> V9_RC, V9_DIR
+  V9_DIR="$(mktemp -d -p "$tmp")"; mkdir -p "$V9_DIR/evidence" "$V9_DIR/app/Frameworks/dlc_wallet.framework"; : > "$V9_DIR/app/Frameworks/dlc_wallet.framework/dlc_wallet"
+  [ "$4" = yes ] && : > "$V9_DIR/app/Frameworks/dlc_wallet.framework/PrivacyInfo.xcprivacy"
+  echo "$1" > "$V9_DIR/evidence/v9-native.txt"
+  ( cd "$V9_DIR" && env -i PATH="$PATH" HOME="$HOME" APP="$V9_DIR/app" forbidden="$2" strings_forbidden="$3" bash -e -c "set -uo pipefail
+$(cat "$tmp/snip_v9_tail.sh")" > "$V9_DIR/out.txt" 2>&1 ); V9_RC=$?
+}
+OKX='exports=exactly the nine expected'
+run_v9 "$OKX" 0 0 no;  [ "$V9_RC" -eq 0 ] && grep -q 'privacy_manifest=none' "$V9_DIR/evidence/v9-native.txt"; chk "V9: no manifest: the step succeeds and says 'none'" $? "rc=$V9_RC"
+run_v9 "$OKX" 0 0 yes; [ "$V9_RC" -eq 0 ] && grep -q 'privacy_manifest=present' "$V9_DIR/evidence/v9-native.txt"; chk "V9: a privacy manifest present (X2 resolved later) does NOT fail the step; it is reported as 'present'" $? "rc=$V9_RC $(head -n 2 "$V9_DIR/out.txt")"
+run_v9 'exports=DIFFER' 0 0 no;  [ "$V9_RC" -ne 0 ] && grep -q 'The native library inspection failed' "$V9_DIR/out.txt"; chk "V9 gate: exports other than the nine expected still FAIL the step" $? "rc=$V9_RC"
+run_v9 "$OKX" 1 0 no;  [ "$V9_RC" -ne 0 ]; chk "V9 gate: a forbidden name among the exports still FAILS the step" $? "rc=$V9_RC"
+run_v9 "$OKX" 0 2 yes; [ "$V9_RC" -ne 0 ]; chk "V9 gate: a forbidden name in the strings still FAILS the step (with a manifest present)" $? "rc=$V9_RC"
+
+# ============================================================================================================================
 # 7. Mutations: the dangerous edits of the independent audit (F5) and more, applied to a COPY of the workflow
 # ============================================================================================================================
 echo
@@ -591,6 +660,17 @@ m("U_dlc_hash_ignored", "the dlc_wallet hash comparison never fails", 'if [ "$ac
 m("U2_dlc_actual_from_record", "the dlc_wallet hash is read from the record on both sides", 'actual="$(shasum -a 256 "$fw" | awk \'{print $1}\')"', 'actual="$authorized"')
 m("U4_dlc_env_override", "an environment variable may substitute the authorized hash", 'authorized="$(bash tools/tool/check_signing_authorization.sh --print-field G2S-DLC-WALLET-SHA256 --record "$record" --tools-root tools)"; rc=$?', 'authorized="${DLC_WALLET_SHA256:-$(bash tools/tool/check_signing_authorization.sh --print-field G2S-DLC-WALLET-SHA256 --record "$record" --tools-root tools)}"; rc=$?')
 m("U5_dlc_step_exits_early", "the dlc_wallet step exits successfully before comparing", '          fw="$ARCHIVE/Products/Applications/Runner.app/Frameworks/dlc_wallet.framework/dlc_wallet"\n', '          fw="$ARCHIVE/Products/Applications/Runner.app/Frameworks/dlc_wallet.framework/dlc_wallet"\n          exit 0\n')
+def block(mid, desc, start, end, new):
+    global src
+    a = src.index(start); b = src.index(end, a) + len(end)
+    M.append((mid, desc, src[a:b], new, 0))
+block("W1_unsigned_pipefail_regression", "the unsigned-state check is the old pipeline again (false failure under pipefail)", '          codesign_state="$(codesign -dv', 'on the archived app."; exit 1; fi\n', '          codesign -dv "$APP" 2>&1 | head -n 3 | grep -q \'not signed at all\' || { echo "::error::The archived app is not unsigned."; exit 1; }\n')
+m("W2_unsigned_accepts_anything", "the unsigned-state check accepts any codesign answer", "            *': code object is not signed at all') ;;\n            *) echo", "            *) ;;\n            *) echo")
+m("W3_unsigned_ignores_signature_lines", "signature lines after the phrase are ignored", "if grep -qE '^(Signature|Authority|TeamIdentifier)=' <<<\"$codesign_state\"; then", "if false; then")
+m("W4_report_old_form", "the Report step ends with the && form again (fails when export-diagnosis.txt is absent)", '              [ -f "$f" ] || continue   # an optional file that does not exist is not an error (a successful run has no export-diagnosis.txt)\n              echo "### ${f#evidence/}"; echo \'```\'; cat "$f"; echo \'```\'\n', '              [ -f "$f" ] && { echo "### ${f#evidence/}"; echo \'```\'; cat "$f"; echo \'```\'; }\n')
+m("W5_report_hides_summary_failure", "the Report step hides a summary that cannot be written", '          } >> "$GITHUB_STEP_SUMMARY"\n\n      - name: Upload the text evidence', '          } >> "$GITHUB_STEP_SUMMARY" 2>/dev/null || true\n\n      - name: Upload the text evidence')
+block("W6_v9_old_form", "the V9 manifest line is the && form again (fails when a manifest exists)", "          # Informational only (X2 is open)", "          fi\n", '          [ "$(ls "$APP/Frameworks/dlc_wallet.framework" | grep -c PrivacyInfo || true)" = "0" ] && echo "dlc_wallet_privacy_manifest=none (decision X2 is open; not decided here)" | tee -a evidence/v9-native.txt\n')
+m("W7_v9_gate_suppressed", "a blanket || true suppresses the V9 security verdict", '|| { echo "::error::The native library inspection failed."; exit 1; }', '|| true')
 m("O_upload_added", "an upload step in the signing job", '      - name: Fix the IPA digest again (integrity of the file that was verified)', '      - name: upload\n        run: xcrun altool --upload-app -f "$IPA" --apiKey x\n      - name: Fix the IPA digest again (integrity of the file that was verified)')
 m("O2_destination_upload", "the export destination is upload", '<key>destination</key><string>export</string>', '<key>destination</key><string>upload</string>')
 m("P_build_number_managed", "Xcode may manage the build number", '<key>manageAppVersionAndBuildNumber</key><false/>', '<key>manageAppVersionAndBuildNumber</key><true/>')
