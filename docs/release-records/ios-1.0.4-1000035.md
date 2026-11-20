@@ -162,20 +162,33 @@ merged reviewed pull request that sets `Status` to `G2 AUTHORIZED`. No second pe
 
 ## 5. Facts confirmed by the operator before signing (IOS_RELEASE.md section 6)
 
+**Provenance of the answers below.** *Coordinator-reported (2026-11-19)*: the release coordinator read Apple's Developer and App Store
+Connect web pages directly; the values are not verified through the App Store Connect API, and no screenshot, account address or
+other account detail is stored here. *Repository-verified*: read from the approved source or the repository. *Noah-reported*: given
+earlier by the intended operator and not verified. None of these entries decides a D or X row, authorizes a gate, or records the
+operator's acceptance of the role.
+
 | # | Fact | Answer |
 |---|---|---|
-| 1 | Team, enrollment type, Team ID | TBD |
-| 2 | App Store Connect record: name, SKU, bundle ID, status | TBD |
-| 3 | Live version and highest build ever uploaded | Highest uploaded build `1000034` (**reported by Noah, not verified**); 1000035 is therefore not yet used. Live version: TBD |
-| 4 | App ID registration and capabilities | Push Notifications enabled on the App ID; no provisioning profiles listed in the account (**reported by Noah, not verified**). Repository facts: the app declares the `remote-notification` background mode and has no entitlements file and no `aps-environment` |
-| 5 | Operator's role and access | TBD |
-| 6 | Distribution certificate: SHA-256 fingerprint, expiry, creator, key holder | The distribution certificate is Apple **cloud-managed**; there is no local Apple Distribution certificate and no private key on any Mac (**reported by Noah, not verified**). Fingerprint: **not known before signing**; collected from the signed IPA with `verify_ipa.py certificate` and recorded in section 7 by the coordinator before upload. Expiry, creator: TBD |
+| 1 | Team, enrollment type, Team ID | Organization "Cadena Bitcoin S.A. de C.V.", enrollment type Organization, Team ID `D65458CPDP` (**coordinator-reported, 2026-11-19**). The Team ID equals `DEVELOPMENT_TEAM` in `ios/Runner.xcodeproj` (repository-verified). The team the operator signs in as on the operator's Mac is **not yet confirmed**; a different team stops the operation |
+| 2 | App Store Connect record: name, SKU, bundle ID, status | App "Cadena Bitcoin", SKU `com.app.cadenabitcoin`, Apple App ID `6753348211`, bundle ID `com.app.cadenabitcoin` (equals the repository's production bundle ID), iOS version record `1.0.4` in status `Prepare for Submission` (**coordinator-reported, 2026-11-19**). Nothing has been submitted for review |
+| 3 | Live version and highest build ever uploaded | Highest build seen in the App Store Connect builds list: version `1.0.3`, build `1000034`, uploaded 2026-07-30; no build `1000035` or higher was in the inspected list (**coordinator-reported, 2026-11-19, not API-verified**; consistent with Noah's earlier report). The stop condition "highest build 1000035 or more" is not triggered on this evidence. Not stated: whether the inspected list covered expired and never-released builds. Live iOS version: TBD (not stated) |
+| 4 | App ID registration and capabilities | Push Notifications is enabled on the registered App ID (Noah; **coordinator-reported, 2026-11-19**). No manually managed provisioning profile is visible in the portal (coordinator-reported; Xcode-managed profiles are not shown there). **A registered capability is not evidence that the application implements push**: the app declares the `remote-notification` background mode and has no entitlements file and no `aps-environment` (repository-verified; D6) |
+| 5 | Operator's role and access | The Apple Developer organization has Admin accounts for the coordinator and for the intended operator; the coordinator reports that the operator's Apple-side privileges suffice for the planned workflow (**coordinator-reported, 2026-11-19**; account addresses are deliberately not recorded). **Still unverified:** the operator's acceptance of the role (section 2) and the operator's Xcode sign-in and signing capability on the Mac |
+| 6 | Distribution certificate: SHA-256 fingerprint, expiry, creator, key holder | An Apple **cloud-managed** Distribution certificate is listed, valid until 2027-07-09, created under the organization (no individual named); an Apple Development certificate is also listed, valid until 2027-07-09, its management type not stated (**coordinator-reported, 2026-11-19**). There is no local Apple Distribution certificate and no private key on any Mac (**Noah, not verified**). No certificate or profile was created for this inspection. **Cloud-managed signing has not been demonstrated by a signing operation for 1.0.4.** Fingerprint: **not known before signing**; collected from the signed IPA with `verify_ipa.py certificate` and recorded in section 7 by the coordinator before upload. The portal's expiry is a listing; the signing certificate's own expiry is read from the IPA (IOS_RELEASE.md section 9, V3, V4) |
 | 7 | Signing route (A automatic / B manual) | Proposed: A (section 4); **not decided** |
-| 8 | Agreements accepted | Program License Agreement accepted; Free Apps Agreement active (**reported by Noah, not verified**) |
+| 8 | Agreements accepted | Free Apps Agreement **Active**, through 2027-09-09; Digital Services Act compliance **Active**; Paid Apps Agreement **New** (not accepted), which the coordinator reads as not required for the intended internal TestFlight distribution; no outstanding agreement blocker was identified (**coordinator-reported, 2026-11-19**). Program License Agreement accepted (**Noah, not verified**; not part of the 2026-11-19 inspection). **Open:** IOS_RELEASE.md section 6 item 8 stops on "any" pending agreement; whether a Paid Apps Agreement in status New counts is for the coordinator to decide before G2 |
 | 9 | Export compliance and privacy answers given | TBD |
 | 10 | Push and privacy-manifest decisions known | TBD |
 | 11 | Mac, Xcode, SDK, Flutter, CocoaPods versions; test devices and iOS versions | TBD |
 | 12 | Zero-value production test account approved by | TBD |
+
+**Internal TestFlight configuration (coordinator-reported, 2026-11-19; not a numbered item).** An internal group "Cadena Internal
+Testing" exists (renamed from a generic name) with two internal testers, who have installed the application on physical iPhones before;
+tester feedback is enabled and automatic distribution is configured **for Xcode builds**. Automatic distribution for Xcode builds does not
+establish how a build uploaded with Transporter is assigned, so the group's behavior for such an upload is unverified and should be
+checked before G2. **Nothing has been uploaded, assigned or distributed**; assignment to testers is G3 (section 6), pending. Tester
+identities are not recorded here and the section 7 row for the tester group stays TBD until after an upload.
 
 ## 6. Authorization gates (IOS_RELEASE.md section 1)
 
