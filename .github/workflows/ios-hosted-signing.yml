@@ -505,7 +505,18 @@ jobs:
           APP="$ARCHIVE/Products/Applications/Runner.app"
           [ -d "$APP" ] && [ ! -L "$APP" ] || { echo "::error::No Runner.app in the archive."; exit 1; }
           [ "$(find "$ARCHIVE/Products/Applications" -maxdepth 1 -name '*.app' | wc -l | tr -d ' ')" = "1" ] || { echo "::error::The archive holds more than one app."; exit 1; }
-          codesign -dv "$APP" 2>&1 | head -n 3 | grep -q 'not signed at all' || { echo "::error::The archived app is not unsigned."; exit 1; }
+          # `codesign -dv` exits NON-ZERO for an unsigned bundle, which is the answer wanted here; under `pipefail` that status would fail the whole
+          # pipeline even though the text matched (the first real run stopped here). So its exit status is ignored ON PURPOSE and its TEXT is judged: the
+          # first line must END with ": code object is not signed at all" and no line may show a signature. An ad-hoc or distribution-signed app, an
+          # error message and an empty answer are all refused. The answer is kept as evidence.
+          codesign_state="$(codesign -dv "$APP" 2>&1 | head -n 12 || true)"
+          printf '%s\n' "$codesign_state" > evidence/archive-codesign-state.txt
+          codesign_first_line="${codesign_state%%$'\n'*}"
+          case "$codesign_first_line" in
+            *': code object is not signed at all') ;;
+            *) echo "::error::The archived app is not unsigned (codesign says: $codesign_first_line)."; exit 1 ;;
+          esac
+          if grep -qE '^(Signature|Authority|TeamIdentifier)=' <<<"$codesign_state"; then echo "::error::codesign shows a signature on the archived app."; exit 1; fi
           [ ! -e "$APP/embedded.mobileprovision" ] && [ ! -e "$APP/_CodeSignature" ] || { echo "::error::The archived app carries a profile or a signature folder."; exit 1; }
           # Identity and version, read by Apple's PlistBuddy (the build job's repository checks already judged this very app).
           pbid="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$APP/Info.plist")"
@@ -816,7 +827,12 @@ jobs:
             echo "create_deterministic_nonce_in_exports=$(grep -c 'create_deterministic_nonce' "$RUNNER_TEMP/dlc.exports.txt" || true) (known: D1 / Issue #22; the library is not rebuilt)"
           } | tee evidence/v9-native.txt
           grep -q '^exports=exactly the nine expected$' evidence/v9-native.txt && [ "$forbidden" -eq 0 ] && [ "$strings_forbidden" -eq 0 ] || { echo "::error::The native library inspection failed."; exit 1; }
-          [ "$(ls "$APP/Frameworks/dlc_wallet.framework" | grep -c PrivacyInfo || true)" = "0" ] && echo "dlc_wallet_privacy_manifest=none (decision X2 is open; not decided here)" | tee -a evidence/v9-native.txt
+          # Informational only (X2 is open): the manifest state is reported either way and never decides the step's exit status. The checks above are the gate.
+          if [ "$(ls "$APP/Frameworks/dlc_wallet.framework" | grep -c PrivacyInfo || true)" = "0" ]; then
+            echo "dlc_wallet_privacy_manifest=none (decision X2 is open; not decided here)" | tee -a evidence/v9-native.txt
+          else
+            echo "dlc_wallet_privacy_manifest=present (decision X2 is open; not decided here)" | tee -a evidence/v9-native.txt
+          fi
 
       - name: Fix the IPA digest again (integrity of the file that was verified)
         run: |
@@ -859,7 +875,8 @@ jobs:
               echo '```'; cat evidence/certificate-sha256.txt; cat evidence/pin.txt 2>/dev/null; echo '```'
             fi
             for f in evidence/export-result.txt evidence/ipa-digest.txt evidence/v1-identity.txt evidence/v4-profile-summary.txt evidence/v6-environment.txt evidence/v9-native.txt evidence/export-diagnosis.txt; do
-              [ -f "$f" ] && { echo "### ${f#evidence/}"; echo '```'; cat "$f"; echo '```'; }
+              [ -f "$f" ] || continue   # an optional file that does not exist is not an error (a successful run has no export-diagnosis.txt)
+              echo "### ${f#evidence/}"; echo '```'; cat "$f"; echo '```'
             done
           } >> "$GITHUB_STEP_SUMMARY"
 

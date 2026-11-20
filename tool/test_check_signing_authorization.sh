@@ -76,7 +76,15 @@ cp "$real_record" "$good"; decide "$good" $DECISIONS; d14 "$good"; { echo; marke
 committed_status="$(grep -E '^G2S-STATUS: ' "$committed_record" || true)"
 case "$committed_status" in
   'G2S-STATUS: AUTHORIZED')
-    expect_rc "the committed record carries a complete G2S authorization: the gate ACCEPTS it with this checkout's workflow, gate and tools (exit 0)" 0 "$committed_record"
+    # The authorization is bound to the exact workflow, gate and tools. If one of them changed after the CTO gave it (this checkout's files no longer
+    # give the blob lines the record names), the gate MUST refuse until the authorization is re-issued: that is the binding working, not a failure.
+    stale=0
+    while IFS= read -r want_line; do grep -qxF "$want_line" "$committed_record" || stale=1; done < <(expected_lines)
+    if [ "$stale" -eq 0 ]; then
+      expect_rc "the committed record carries a complete G2S authorization for exactly this checkout's workflow, gate and tools: the gate ACCEPTS it (exit 0)" 0 "$committed_record"
+    else
+      expect_rc "the committed record's G2S authorization is STALE (a bound file changed after it was given): the gate fails closed (exit 1) until it is re-issued" 1 "$committed_record"
+    fi
     sed 's/^G2S-STATUS: AUTHORIZED$/G2S-STATUS: WITHDRAWN/' "$committed_record" > "$tmp/committed-withdrawn.md"
     expect_rc "the committed record with G2S-STATUS: WITHDRAWN fails closed (exit 1)" 1 "$tmp/committed-withdrawn.md" ;;
   'G2S-STATUS: WITHDRAWN')
