@@ -177,7 +177,8 @@ https://github.com/CadenaBitcoin/signer_app/issues/71#issuecomment-7038341975
 (comment id `7038341975`, account `CadenaWizard`, created 2026-11-20T11:26:04Z, never edited). It names the application (Cadena Bitcoin
 Signer App), release `1.0.4 (1000035)`, `APPROVED_SHA` `42d358a4e7bcbf85b92aa992ec6439214dbd4405`, bundle ID `com.app.cadenabitcoin` and Apple Team ID
 `D65458CPDP`, and accepts D3, D6, D7, D8, D9, D10, D11, D12 and D14 as worded in section 4. It states: "G2S execution becomes authorized only when
-these conditions are reflected in the approved and merged release record and the workflow's authorization gate passes."
+these conditions are reflected in the approved and merged release record and the workflow's authorization gate passes." **Supplemented on 2026-11-20 by the
+CTO's decision https://github.com/CadenaBitcoin/signer_app/issues/71#issuecomment-7046097307** (workflow correction; see "Failed attempt and corrected workflow" below), which does not replace this authorization.
 
 **The operation G2S authorizes (exhaustive).** One run of `.github/workflows/ios-hosted-signing.yml`, started by hand from `development` for the
 approved source, version, bundle ID and team above, through the protected environment `ios-hosted-signing`: one unsigned archive is built, exported
@@ -226,6 +227,43 @@ following controls, which are procedures, not mechanisms:
 6. **Removing the GitHub secrets does not revoke the Apple Developer API key.** The key stays valid in App Store Connect, and the CTO's own copies of the `.p8` file are
    untouched, until the key is rotated or revoked there. Rotation and revocation remain available security controls and are **not** made mandatory by D14; they are a separate
    decision, to be taken at once if anything about the attempt is in doubt.
+
+**Failed attempt and corrected workflow (authorization update of 2026-11-20).**
+
+| Item | Fact |
+|---|---|
+| Run | `44738600156`, `workflow_dispatch` from `development` at `5270380c1b379ae63967d0dbc1c3e72bc3fee2b9` (2026-11-20): https://github.com/CadenaBitcoin/signer_app/actions/runs/44738600156 |
+| Result | **FAILED** |
+| Authorization gate | **PASSED** |
+| Unsigned archive build | **PASSED** (archive SHA-256 `360746599adeccd28c6b72d79b4dd8a2b3c12e638733ca06af3375c493737163`) |
+| Archive validation | **PASSED** before and after extraction; the `dlc_wallet` SHA-256 equals the authorized `9a2d1d98ee4cf7aa608a161cff3d57aa380fec227876ab9c4b2b93f3f381fc13` (a fourth independent build) |
+| Failure | The unsigned-state check of the `sign` job: `codesign -dv` exits non-zero for an unsigned bundle and the step ran under `pipefail`, so a genuinely unsigned archive was refused ("The archived app is not unsigned."). The archive was unsigned (no `_CodeSignature`, no embedded profile, the same Mach-O state as the preflight archive) |
+| Apple credential-use step | **NOT REACHED**: skipped; no secret was read (the job log has no `APPLE_API` and no `exportArchive`) |
+| Apple signing | **NOT EXECUTED** |
+| App Store Connect upload | **NONE** |
+| G2S operation consumed | **NO**: a failure before Apple credential use is not a completed signing attempt (section 4.2, control 3) |
+| Credentials | The three environment secrets were removed afterwards: 0 environment, 0 repository and 0 organization secrets (read from GitHub on 2026-11-20) |
+| Corrective implementation | **PR #116** (merge commit `e83201c9011925d118d356fa911e7c0a37502131`): the unsigned-state check judges `codesign`'s text instead of its exit status; the Report step no longer fails on an absent optional file; the V9 privacy-manifest line no longer decides the step's exit status. No security check is weakened |
+| Workflow identity | `G2S-WORKFLOW-BLOB`: `2a0b4c3c07730c034bb4ac5fa7d859b3a5cf8f4a` (before) to `60945f9aeabc6c0a3dbeaee5de541879b641fd2c` (PR #116). The gate (`3807ee8a...`), the five bound tools, the application, the native library and `G2S-DLC-WALLET-SHA256` are unchanged. The previous workflow blob is **no longer authorized** |
+| CTO decision | "CTO Decision: G2S Workflow Correction and Authorization Update", Issue #71 comment `7046097307` (`CadenaWizard`, 2026-11-20T17:26:33Z, never edited): https://github.com/CadenaBitcoin/signer_app/issues/71#issuecomment-7046097307 |
+
+**This is a corrected attempt, not a second signing operation.** The CTO approved proceeding with a corrected attempt after a failure that stopped before Apple credential use.
+The original G2S authorization (comment `7038341975`) stays the authorization of the operation and of its nine decisions; the update of comment `7046097307` supplements it with the
+corrected workflow identity and replaces nothing else. The authorized scope is unchanged: **one** signing-and-verification operation, **no upload, no distribution**; it does not authorize an
+additional signing operation after Apple credential use. The CTO's conditions of that update, and where they are met:
+
+| # | Condition (comment of 2026-11-20, 17:26) | Where it is met |
+|---|---|---|
+| 1 | The updated workflow identity is recorded through a reviewed pull request merged into `development` | This record update |
+| 2 | The authorization gate accepts the updated release record | The gate's verdict on this record with the corrected workflow, gate and tools |
+| 3 | The protected `ios-hosted-signing` environment remains enforced | Reviewers `sziller` and `CadenaWizard`, administrator bypass disabled, deployment branch `development` only (read on 2026-11-20) |
+| 4 | No further change to the bound workflow, gate or verification tools without reauthorization | The G2S blob lines of section 6.1: any change makes the gate refuse |
+| 5 | No upload, TestFlight distribution or later gate is authorized | Unchanged: G2, G3, G4 and G5 are not authorized; the workflow has no upload operation |
+| 6 | The Apple credentials are restored only after the updated authorization is merged and verified | The owner re-creates the three environment secrets only after this record is merged on `development` and the gate has been re-checked against it |
+| 7 | The one-operation controls and the post-attempt credential-removal requirements remain in force | Section 4.2, "One operation" (controls 1 to 6), unchanged |
+
+**This update becomes effective only after this record, with the corrected workflow identity, is merged into `development`**; it must be the last merge to `development` before the next signing attempt.
+G1 remains valid; G2, G3, G4 and G5 remain unauthorized.
 
 **Credential-free preflight (2026-11-20).** Run `44726071796`, `workflow_dispatch` from `development` (`02375314a50d0da52872bbab01921f58c82d3196`) with the approved inputs:
 https://github.com/CadenaBitcoin/signer_app/actions/runs/44726071796 . Result: success; the gate said `authorized=false`, the `sign` job was **skipped** (no
@@ -291,7 +329,7 @@ Only G1 and the signing-only G2S have been decided. Nothing in sections 1 to 4 s
 | Gate | Decision | By | Date | Reference |
 |---|---|---|---|---|
 | G1 source (commit only) | **AUTHORIZED** | CTO and release coordinator, GitHub account `CadenaWizard` | 2026-11-12 | https://github.com/CadenaBitcoin/signer_app/issues/71#issuecomment-6833584989 |
-| **G2S** hosted signing and verification only: the CTO's written authorization of ONE GitHub-hosted signing-and-verification operation; **no upload, no distribution; not G2** (section 4.2) | **AUTHORIZED** (conditional: effective only when this record is merged on `development` and the workflow's gate passes; one operation) | CTO, GitHub account `CadenaWizard` | 2026-11-20 | https://github.com/CadenaBitcoin/signer_app/issues/71#issuecomment-7038341975 |
+| **G2S** hosted signing and verification only: the CTO's written authorization of ONE GitHub-hosted signing-and-verification operation; **no upload, no distribution; not G2** (section 4.2) | **AUTHORIZED** (conditional: effective only when this record is merged on `development` and the workflow's gate passes; one operation) | CTO, GitHub account `CadenaWizard` | 2026-11-20 | https://github.com/CadenaBitcoin/signer_app/issues/71#issuecomment-7038341975 (original authorization); supplementary, corrected workflow: https://github.com/CadenaBitcoin/signer_app/issues/71#issuecomment-7046097307 |
 | G2 production signing and upload to App Store Connect: the CTO's written authorization of this manual operation, after the prerequisites of section 4.1 (not an exception to the authorization policy). **Not given by G2S**; a G2 operation builds and signs its own archive | **PENDING** | TBD | TBD | TBD |
 | G3 assignment to named internal testers (the CTO) | **PENDING** | TBD | TBD | TBD |
 | G4 submission to App Review (the CTO, a separate manual operation; needs the acceptance evidence of IOS_RELEASE.md section 11, which has no minimum duration) | **NOT AUTHORIZED** (not given) | | | |
@@ -302,7 +340,8 @@ Only G1 and the signing-only G2S have been decided. Nothing in sections 1 to 4 s
 These eleven lines are read by `tool/check_signing_authorization.sh` (IOS_HOSTED_SIGNING.md section 5). Each must stay exactly once, at the start of its
 own line, with no other text on it, **outside** code blocks and comments; the gate also requires the decided rows of section 4, the status line of section 0,
 the `APPROVED_SHA` row of section 3.1, and that the workflow revision is the current tip of `development`. They authorize **one** signing-and-verification operation
-and **never an upload**. The workflow does **not** enforce that limit (no counter): section 4.2, "One operation", lists the operational controls. After the signing
+and **never an upload**. `G2S-WORKFLOW-BLOB` was updated on 2026-11-20 to the corrected workflow of PR #116 (section 4.2, "Failed attempt and corrected workflow");
+every other line, including `G2S-AUTHORIZATION` (the original authorization), is unchanged. The workflow does **not** enforce that limit (no counter): section 4.2, "One operation", lists the operational controls. After the signing
 attempt the three credentials are removed from the environment and these lines are withdrawn by a reviewed pull request that sets the first line to `G2S-STATUS: WITHDRAWN`.
 
 G2S-STATUS: AUTHORIZED
@@ -317,7 +356,7 @@ G2S-BUNDLE-ID: com.app.cadenabitcoin
 
 G2S-TEAM-ID: D65458CPDP
 
-G2S-WORKFLOW-BLOB: 2a0b4c3c07730c034bb4ac5fa7d859b3a5cf8f4a
+G2S-WORKFLOW-BLOB: 60945f9aeabc6c0a3dbeaee5de541879b641fd2c
 
 G2S-GATE-BLOB: 3807ee8a1b8caf4ce5f22a6f2540c0658aba90b6
 
@@ -335,6 +374,7 @@ Review and not a release.
 
 | | |
 |---|---|
+| G2S attempt history: run `44738600156` FAILED before Apple credential use (corrected by PR #116); the operation is **not consumed**; no signing, no upload (section 4.2) | Recorded in section 4.2 |
 | G2S run (hosted signing and verification): run ID and conclusion; evidence artifact `ios-hosted-signing-evidence_<run>-<attempt>` and its `SHA256SUMS` value; the first-run signing-certificate SHA-256 (D8, circular until recorded) | TBD |
 | IPA SHA-256 and size | TBD |
 | Signing certificate collected from the IPA (`certificate` output, `codesign`/`openssl` cross-check); SHA-256 **recorded by the coordinator before upload**; embedded profile name, type and expiry | TBD |
