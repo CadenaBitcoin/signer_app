@@ -207,20 +207,20 @@ for target in $targets; do
       echo "::endgroup::"
       verify="ok"; [ "$vrc" -eq 0 ] && n_verified=$((n_verified + 1)) || verify="FAILED(exit $vrc)"
       parser="n/a"
-      case "$(printf '%s\n' "$pout" | grep -E '^PROBE-RESULT ' | head -1)" in
+      case "$(grep -E '^PROBE-RESULT ' <<<"$pout" | head -1)" in
         *"parser=accepted"*) parser="accepted" ;;
         *"parser=rejected"*) parser="rejected" ;;
       esac
       # The probe's own verdict on the evidence. Its exit status is 0 when evidence AND any requested dump are complete, 1 when one of
       # them is not, 2 when it failed itself; so exit 1 still means complete evidence if, and only if, the result line says the
       # evidence is complete and the dump is the incomplete part.
-      if { [ "$prc" -eq 0 ] || { [ "$prc" -eq 1 ] && printf '%s\n' "$pout" | grep -F "fixture_dump=INCOMPLETE" >/dev/null; }; } \
-         && printf '%s\n' "$pout" | grep -F "PROBE-RESULT der_evidence=complete" >/dev/null \
-         && ! printf '%s\n' "$pout" | grep -F "der_evidence=INCOMPLETE" >/dev/null; then evidence="ok"; else evidence="NONE(probe exit $prc)"; fi
+      if { [ "$prc" -eq 0 ] || { [ "$prc" -eq 1 ] && grep -F "fixture_dump=INCOMPLETE" >/dev/null <<<"$pout"; }; } \
+         && grep -F "PROBE-RESULT der_evidence=complete" >/dev/null <<<"$pout" \
+         && ! grep -F "der_evidence=INCOMPLETE" >/dev/null <<<"$pout"; then evidence="ok"; else evidence="NONE(probe exit $prc)"; fi
       fixture="not-requested"
       if [ -n "$dump" ]; then
-        if [ "$prc" -eq 0 ] && printf '%s\n' "$pout" | grep -F "fixture_dump=complete" >/dev/null \
-           && ! printf '%s\n' "$pout" | grep -F "fixture_dump=INCOMPLETE" >/dev/null \
+        if [ "$prc" -eq 0 ] && grep -F "fixture_dump=complete" >/dev/null <<<"$pout" \
+           && ! grep -F "fixture_dump=INCOMPLETE" >/dev/null <<<"$pout" \
            && printf '%s\n' "$pout" | python3 -I -c "$check_dump"; then
           fixture="ok"; n_fixture=$((n_fixture + 1))
         else
