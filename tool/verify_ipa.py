@@ -252,6 +252,13 @@ def check_code_signature(rep, label, path, bundle_dir, bundle_id, team_id, expec
             result["ok"] = False
             rep.fail("%s has no readable CodeDirectory" % tag)
             continue
+        embedded, embedded_err = None, None
+        try:
+            embedded = I.embedded_info_plist(s["data"], s["macho"])
+        except I.MachOError as e:
+            embedded_err = str(e)
+            result["ok"] = False
+            rep.fail("%s: %s" % (tag, embedded_err))
         names = [cd["hash_name"] for _k, cd in s["cds"]]
         if "sha256" not in names:
             result["ok"] = False
@@ -292,53 +299,23 @@ def check_code_signature(rep, label, path, bundle_dir, bundle_id, team_id, expec
                     result["ok"] = False
                     rep.fail("%s: %s was changed after signing" % (tag, what))
             info = os.path.join(bundle_dir, "Info.plist") if bundle_dir else None
-            slot_check(I.SLOT_INFO, info if info and os.path.isfile(info) else None, "Info.plist")
+            if info and os.path.isfile(info):
+                slot_check(I.SLOT_INFO, info, "Info.plist")
+            elif embedded_err is None:
+                # No Info.plist file: Apple's codesign seals the Mach-O's own `__TEXT,__info_plist` section in slot 1
+                # when it has one (and nothing, a zero hash, when it has none). Either way the slot must agree with
+                # what is actually there: a section whose hash differs, a section that is not sealed, and a seal with
+                # neither a file nor a section are all refused by slot_check.
+                slot_check(I.SLOT_INFO, embedded, "Info.plist" if embedded is None else "the embedded Info.plist section")
             res = os.path.join(bundle_dir, "_CodeSignature", "CodeResources") if bundle_dir else None
             slot_check(I.SLOT_RESOURCES, res if res and os.path.isfile(res) else None, "CodeResources")
             slot_check(I.SLOT_REQUIREMENTS, s["requirements_blob"], "the code requirements")
             slot_check(I.SLOT_ENTITLEMENTS, s["entitlements_blob"], "the entitlements")
             slot_check(I.SLOT_DER_ENTITLEMENTS, s["der_entitlements_blob"], "the DER entitlements")
-        if s["cms"] is None:
-            result["ok"] = False
-            rep.fail("%s has no CMS signature (no signing identity)" % tag)
-            continue
-        verified = I.cms_verify(s["cms"], detached=s["slots"].get(I.SLOT_CODEDIRECTORY))
-        if not verified["ok"]:
-            result["ok"] = False
-            rep.fail("%s CMS signature is not valid: %s" % (tag, verified["why"]))
-        try:
-            cms = I.parse_cms(s["cms"])
-            bound = I.cms_cdhashes(s["cms"])
-        except (I.Asn1Error, IndexError, ValueError, KeyError) as e:
-            result["ok"] = False
-            rep.fail("%s CMS signature is unreadable: %s" % (tag, e))
-            continue
-        if verified["ok"] and verified["signer_sha256"] != cms["signer"]["sha256"]:
-            result["ok"] = False
-            rep.fail("%s: the signer certificate read from the signature is not the one that verified it" % tag)
-        if cms["digest_oid"] not in I.OID_SHA256_FAMILY:
-            result["ok"] = False
-            rep.fail("%s CMS signature uses a digest weaker than SHA-256 (%s)" % (tag, cms["digest_oid"]))
-        if bound is None:
-            result["ok"] = False
-            rep.fail("%s CMS signature does not bind the cdhashes" % tag)
-        else:
-            for key, cd in s["cds"]:
-                if I.cd_hash(cd, cd["hash_name"]) not in bound:
-                    result["ok"] = False
-                    rep.fail("%s CodeDirectory 0x%x is not bound by the signature (it was replaced)" % (tag, key))
-        signer = cms["signer"]
-        if result["cms_certs"] is None:
-            result["cms_certs"] = cms["certs"]
-        if signer is None:
-            result["ok"] = False
-            rep.fail("%s signature carries no signer certificate" % tag)
-            continue
-        if first_signer is None:
-            first_signer = signer
-        elif signer["sha256"] != first_signer["sha256"]:
-            result["ok"] = False
-            rep.fail("%s is signed by a different certificate than the other architecture slice" % tag)
+        # ---- what does not depend on the CMS signature: entitlements and the recorded cdhash ----
+        # (If the CMS stage below fails, these still run on the data that is present: a failure of one check must not
+        # hide the others. Entitlements read from a signature whose CMS did not verify are for diagnosis only, and the
+        # run fails anyway: every CMS failure sets result["ok"] = False.)
         if s["entitlements"] is not None:
             if s["der_entitlements"] is not None and s["der_entitlements"] != s["entitlements"]:
                 result["ok"] = False
@@ -353,6 +330,62 @@ def check_code_signature(rep, label, path, bundle_dir, bundle_id, team_id, expec
             rep.fail("%s has DER entitlements but no XML entitlements" % tag)
         if result["cdhash"] is None and s["cds"]:
             result["cdhash"] = I.cd_hash(s["cds"][0][1], s["cds"][0][1]["hash_name"]).hex()
+
+        # ---- the CMS signature, and the checks that need it ----
+        cms = bound = None
+        bound_read = False
+        if s["cms"] is None:
+            result["ok"] = False
+            rep.fail("%s has no CMS signature (no signing identity)" % tag)
+            rep.warn("%s: NOT CHECKED, there is no CMS signature: its validity, the signer, the digest algorithm and the CodeDirectory binding" % tag)
+            continue
+        verified = I.cms_verify(s["cms"], detached=s["slots"].get(I.SLOT_CODEDIRECTORY))
+        if not verified["ok"]:
+            result["ok"] = False
+            rep.fail("%s CMS signature is not valid: %s" % (tag, verified["why"]))
+        try:
+            cms = I.parse_cms(s["cms"])
+        except (I.Asn1Error, IndexError, ValueError, KeyError) as e:
+            result["ok"] = False
+            rep.fail("%s CMS signature is unreadable: %s" % (tag, e))
+            rep.warn("%s: NOT CHECKED, the CMS structure is unreadable: the signer, the digest algorithm and the signer's consistency across slices" % tag)
+        try:
+            bound = I.cms_cdhashes(s["cms"])
+            bound_read = True
+        except (I.Asn1Error, IndexError, ValueError, KeyError) as e:
+            result["ok"] = False
+            rep.fail("%s CMS cdhashes attribute is unreadable: %s" % (tag, e))
+            rep.warn("%s: NOT CHECKED, the cdhashes attribute is unreadable: that each CodeDirectory is bound by the signature" % tag)
+        if cms is not None:
+            if verified["ok"] and verified["signer_sha256"] != cms["signer"]["sha256"]:
+                result["ok"] = False
+                rep.fail("%s: the signer certificate read from the signature is not the one that verified it" % tag)
+            if cms["digest_oid"] not in I.OID_SHA256_FAMILY:
+                result["ok"] = False
+                rep.fail("%s CMS signature uses a digest weaker than SHA-256 (%s)" % (tag, cms["digest_oid"]))
+        if bound_read:
+            if bound is None:
+                result["ok"] = False
+                rep.fail("%s CMS signature does not bind the cdhashes" % tag)
+            else:
+                for key, cd in s["cds"]:
+                    if I.cd_hash(cd, cd["hash_name"]) not in bound:
+                        result["ok"] = False
+                        rep.fail("%s CodeDirectory 0x%x is not bound by the signature (it was replaced)" % (tag, key))
+        if cms is None:
+            continue
+        signer = cms["signer"]
+        if result["cms_certs"] is None:
+            result["cms_certs"] = cms["certs"]
+        if signer is None:
+            result["ok"] = False
+            rep.fail("%s signature carries no signer certificate" % tag)
+            continue
+        if first_signer is None:
+            first_signer = signer
+        elif signer["sha256"] != first_signer["sha256"]:
+            result["ok"] = False
+            rep.fail("%s is signed by a different certificate than the other architecture slice" % tag)
     result["signer"] = first_signer
     if result["ok"]:
         rep.ok("%s: signature intact (page hashes, special slots, CMS, bound cdhashes)" % label)

@@ -27,6 +27,7 @@ import shutil
 import struct
 import subprocess
 import tempfile
+import xml.parsers.expat
 
 # ---- ASN.1 / BER (enough for CMS and X.509; indefinite lengths included) ---------------------
 
@@ -230,13 +231,66 @@ def parse_cms(blob):
 
 
 OID_APPLE_CDHASHES = "1.2.840.113635.100.9.1"
+CDHASH_LEN = 20
+MAX_CDHASHES_PLIST = 65536  # the real attribute is a few hundred bytes; refuse anything absurd before parsing it
+
+
+class _StrictDict(dict):
+    """A plist dictionary that refuses a repeated key (plistlib would silently keep the last one, so two
+    `cdhashes` entries could show a verifier one list and a reader another)."""
+
+    def __setitem__(self, key, value):
+        if key in self:
+            raise Asn1Error("duplicate key %r in the cdhashes property list" % (key,))
+        dict.__setitem__(self, key, value)
+
+
+def parse_cdhashes_plist(data):
+    """The `cdhashes` array of Apple's hash-agility attribute -> [bytes of 20], in the attribute's order.
+
+    The property list is read with an EXPLICIT format, never `plistlib`'s automatic detection: that detection
+    accepts an XML list only when it starts with `<?xml` or `<plist`, and Apple's cloud-managed signing service
+    (Xcode 26.3, observed in Authorization C, run 44834801248: 16 of 16 signatures) writes it starting with
+    `<!DOCTYPE plist`, with no XML declaration. Accepted: XML (with or without the declaration, optionally after
+    white space) and binary (`bplist00`). Refused, each as an Asn1Error: any other first bytes, an oversized
+    attribute, a DTD that declares entities, a repeated key, a top level that is not a dictionary, a missing or
+    non-list `cdhashes`, an empty list, an element that is not data of exactly 20 bytes, and a repeated hash."""
+    if len(data) > MAX_CDHASHES_PLIST:
+        raise Asn1Error("the cdhashes property list is larger than %d bytes" % MAX_CDHASHES_PLIST)
+    head = data.lstrip(b" \t\r\n")
+    if head.startswith(b"bplist00"):
+        fmt = plistlib.FMT_BINARY
+    elif head.startswith((b"<?xml", b"<!DOCTYPE plist", b"<plist")):
+        fmt = plistlib.FMT_XML
+        if b"<!ENTITY" in data:
+            raise Asn1Error("the cdhashes property list declares entities")
+    else:
+        raise Asn1Error("the cdhashes attribute is neither an XML nor a binary property list")
+    try:
+        plist = plistlib.loads(data, fmt=fmt, dict_type=_StrictDict)
+    except (ValueError, xml.parsers.expat.ExpatError, struct.error, OverflowError, RecursionError) as e:
+        raise Asn1Error("the cdhashes property list is unreadable: %s" % e)
+    if not isinstance(plist, dict):
+        raise Asn1Error("the cdhashes property list is not a dictionary")
+    hashes = plist.get("cdhashes")
+    if not isinstance(hashes, list) or not hashes:
+        raise Asn1Error("the cdhashes property list has no non-empty `cdhashes` array")
+    out = []
+    for h in hashes:
+        if not isinstance(h, (bytes, bytearray)) or len(h) != CDHASH_LEN:
+            raise Asn1Error("a `cdhashes` element is not data of exactly %d bytes" % CDHASH_LEN)
+        out.append(bytes(h))
+    if len(set(out)) != len(out):
+        raise Asn1Error("the `cdhashes` array lists the same hash twice")
+    return out
 
 
 def cms_cdhashes(blob):
     """The cdhashes that the CMS signature of a code signature binds (Apple signed attribute
-    1.2.840.113635.100.9.1, a plist with a `cdhashes` array), as a list of bytes; None if absent.
-    This is what ties the alternate CodeDirectories to the signature: the CMS message digest only
-    covers the primary one."""
+    1.2.840.113635.100.9.1, a property list with a `cdhashes` array), as a list of bytes; None if the
+    attribute is absent. This is what ties the alternate CodeDirectories to the signature: the CMS message
+    digest only covers the primary one. Anything present but malformed raises Asn1Error (it is never read as
+    "absent" and never as an empty list)."""
     root = parse_der(blob)
     sd = root.children[1].children[0]
     sets = [p for p in sd.children if p.cls == 0 and p.tag == 17]
@@ -247,8 +301,10 @@ def cms_cdhashes(blob):
         if k.cls == 2 and k.tag == 0:  # [0] IMPLICIT signedAttrs
             for attr in k.children:
                 if oid_str(attr.children[0]) == OID_APPLE_CDHASHES:
-                    plist = plistlib.loads(octets(attr.children[1].children[0]))
-                    found.append([bytes(h) for h in plist.get("cdhashes", [])])
+                    values = attr.children[1].children
+                    if len(values) != 1 or values[0].cls != 0 or values[0].tag != 4:
+                        raise Asn1Error("the cdhashes attribute must hold exactly one OCTET STRING")
+                    found.append(parse_cdhashes_plist(octets(values[0])))
     if len(found) > 1:
         raise Asn1Error("the cdhashes attribute appears more than once")
     return found[0] if found else None
@@ -445,6 +501,48 @@ def parse_macho_slice(data, off, size):
         pos += csize
     return {"cpu": cpu, "filetype": filetype, "ncmds": ncmds, "sizeofcmds": sizeofcmds, "cmds": cmds,
             "codesig": codesig, "linkedit": linkedit, "cmds_end": 32 + sizeofcmds, "size": len(sl)}
+
+
+_ZEROFILL_SECTION_TYPES = (0x01, 0x0C, 0x12)  # S_ZEROFILL, S_GB_ZEROFILL, S_THREAD_LOCAL_ZEROFILL
+
+
+def embedded_info_plist(sl, m):
+    """The contents of the `__TEXT,__info_plist` section of a 64-bit slice, or None when it has none.
+
+    A Mach-O that is not the executable of a bundle can carry its Info.plist inside itself (the section is
+    linked in with `-sectcreate __TEXT __info_plist`); Apple's codesign then seals THESE bytes in special slot 1,
+    where a bundle seals its Info.plist file. Observed on real data: the Apple-signed Swift runtime library
+    `libswift_Concurrency.dylib` of the 1.0.4 archive has the section (591 bytes) and both of its CodeDirectories
+    (SHA-1 and SHA-256) seal exactly its hash. No file name is consulted: any slice is read the same way.
+    Anything that would make the section ambiguous or unreadable raises MachOError: more than one such section,
+    a zero-fill section, or content outside the slice."""
+    found = []
+    for cmd, pos, csize in m["cmds"]:
+        if cmd != LC_SEGMENT_64:
+            continue
+        if csize < 72:
+            raise MachOError("segment command too small")
+        nsects = struct.unpack("<I", sl[pos + 64:pos + 68])[0]
+        if 72 + 80 * nsects > csize:
+            raise MachOError("segment command smaller than its sections")
+        for i in range(nsects):
+            base = pos + 72 + 80 * i
+            sectname = sl[base:base + 16].split(b"\0")[0]
+            segname = sl[base + 16:base + 32].split(b"\0")[0]
+            if sectname == b"__info_plist" and segname == b"__TEXT":
+                size, off = struct.unpack("<QI", sl[base + 40:base + 52])
+                flags = struct.unpack("<I", sl[base + 64:base + 68])[0]
+                found.append((size, off, flags))
+    if not found:
+        return None
+    if len(found) > 1:
+        raise MachOError("more than one __TEXT,__info_plist section")
+    size, off, flags = found[0]
+    if (flags & 0xFF) in _ZEROFILL_SECTION_TYPES or (off == 0 and size != 0):
+        raise MachOError("the __TEXT,__info_plist section has no file content")
+    if off + size > len(sl):
+        raise MachOError("the __TEXT,__info_plist section lies outside the slice")
+    return bytes(sl[off:off + size])
 
 
 def parse_superblob(blob):

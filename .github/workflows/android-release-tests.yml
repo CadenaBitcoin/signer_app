@@ -124,3 +124,11 @@ jobs:
 
       - name: Test the hosted signing workflow behaviour, the archive validator and the dangerous-edit mutations
         run: tool/test_ios_hosted_signing_behavior.sh
+
+      # The IPA verifier (tool/verify_ipa.py, tool/ipa_inspect.py) is the tool that judges a signed IPA; its tests run here, on every pull
+      # request, with synthetic IPAs and the real Apple cloud-signing CMS and embedded Info.plist fixtures of tool/fixtures/. Credential-free,
+      # no network. The script SKIPS (exit 0) when openssl lacks the `cms` command, which must never pass silently in CI.
+      - name: Test the IPA verification tooling (synthetic IPAs, real Apple cloud-signing CMS fixtures, embedded Info.plist seals)
+        run: |
+          openssl cms -help >/dev/null 2>&1 || { echo "::error::openssl with the cms command is required; tool/test_verify_ipa.sh would be skipped"; exit 1; }
+          tool/test_verify_ipa.sh

@@ -1,0 +1,16 @@
+# The embedded Info.plist section of Apple's Swift runtime library, and what its code signature seals.
+#
+# PROVENANCE
+#   Source:   Frameworks/libswift_Concurrency.dylib of the UNSIGNED 1.0.4 (1000035) archive of GitHub Actions run 44834801248
+#             (artifact ios-hosted-unsigned-archive_44834801248-1; archive tar SHA-256
+#             13446eaacec1f0ad7a824072129d5d1192e6d832d53edc1db23c09c8d5d5ecc9). The file is Apple's Swift runtime library,
+#             Apple-signed (Team 59GAB85EFG); its SHA-256 is e2f138a3b868b0de9085fb3e6707906aa16b8f5e7e592c4ef7b4bee0f714aaad.
+#   Extracted: the 591-byte `__TEXT,__info_plist` section (a standard Info.plist: bundle identifier, name, versions), and the two
+#             special slot 1 (Info.plist) hashes of the library's two CodeDirectories, as read by tool/ipa_inspect.py. Nothing
+#             else of the library is kept (the 10 MB file is Apple's and is not stored here).
+#   Use:      tool/test_verify_ipa.sh checks, on this real data, that the Info.plist seal (slot 1) of a Mach-O with an embedded
+#             section is the hash of THAT SECTION with the CodeDirectory's own algorithm (SHA-1 and SHA-256).
+# FORMAT: "section <base64>", then "slot1 <algorithm> <hex of the sealed hash>" lines.
+section PD94bWwgdmVyc2lvbj0iMS4wIiBlbmNvZGluZz0iVVRGLTgiPz4KPCFET0NUWVBFIHBsaXN0IFBVQkxJQyAiLS8vQXBwbGUvL0RURCBQTElTVCAxLjAvL0VOIiAiaHR0cDovL3d3dy5hcHBsZS5jb20vRFREcy9Qcm9wZXJ0eUxpc3QtMS4wLmR0ZCI+CjxwbGlzdCB2ZXJzaW9uPSIxLjAiPgo8ZGljdD4KICAgICAgICA8a2V5PkNGQnVuZGxlSWRlbnRpZmllcjwva2V5PgogICAgICAgIDxzdHJpbmc+Y29tLmFwcGxlLmR0LnJ1bnRpbWUuc3dpZnRDb25jdXJyZW5jeTwvc3RyaW5nPgogICAgICAgIDxrZXk+Q0ZCdW5kbGVJbmZvRGljdGlvbmFyeVZlcnNpb248L2tleT4KICAgICAgICA8c3RyaW5nPjYuMDwvc3RyaW5nPgogICAgICAgIDxrZXk+Q0ZCdW5kbGVOYW1lPC9rZXk+CiAgICAgICAgPHN0cmluZz5zd2lmdF9Db25jdXJyZW5jeTwvc3RyaW5nPgogICAgICAgIDxrZXk+Q0ZCdW5kbGVTaG9ydFZlcnNpb25TdHJpbmc8L2tleT4KICAgICAgICA8c3RyaW5nPjUuNS4yPC9zdHJpbmc+CiAgICAgICAgPGtleT5DRkJ1bmRsZVZlcnNpb248L2tleT4KICAgICAgICA8c3RyaW5nPjUuNy4yLjEzNS41PC9zdHJpbmc+CjwvZGljdD4KPC9wbGlzdD4K
+slot1 sha1 0e09d7fed415fb876948c7ade98bbc3129403cd6
+slot1 sha256 be49af9e7f74e9cc88b232d544005779f3eab1767390265aa258e89bbef93933
