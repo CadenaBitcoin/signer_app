@@ -133,9 +133,9 @@ jobs:
           openssl cms -help >/dev/null 2>&1 || { echo "::error::openssl with the cms command is required; tool/test_verify_ipa.sh would be skipped"; exit 1; }
           tool/test_verify_ipa.sh
 
-      # The DER entitlements diagnostics of Issue #71, Phase 2 (an INACTIVE workflow template under docs/, a probe script and a probe
+      # The DER entitlements diagnostics of Issue #71, Phase 2 (a workflow template under docs/ and, only while it is temporarily activated, the workflow of the same code, a probe script and a probe
       # tool): their static rules, and the script's flow against stub macOS commands. Nothing is run on macOS and nothing is started on GitHub.
-      - name: Test the DER entitlements diagnostics (inactive template; credential-free, ad hoc, disposable program only)
+      - name: Test the DER entitlements diagnostics (template and temporary workflow, both states; credential-free, ad hoc, disposable program only)
         run: tool/test_ios_der_diagnostics.sh
 
       # The offline fixture extractor of Issue #71, Phase 3 preparation: rebuilds the three synthetic fixtures from a SAVED job log and
