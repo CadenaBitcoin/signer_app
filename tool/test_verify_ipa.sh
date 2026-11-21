@@ -395,6 +395,268 @@ if [ "$src" -eq 0 ]; then ok "structure judges no identity (a synthetic producti
 a="$(python3 -I "$verify" analyze-unsigned "$tmp/staging/Runner.app" 2>&1)"; arc=$?
 if [ "$arc" -eq 0 ] && echo "$a" | grep -F "with no signature" >/dev/null && echo "$a" | grep -F "unsigned   Runner" >/dev/null; then ok "analyze-unsigned lists the unsigned executables"; else bad "analyze-unsigned lists the unsigned executables" "rc=$arc"; fi
 
+# ---- 11. Phase 1 repair of the verifier (Issue #71; the first real Apple-signed IPA, run 44834801248) ----------------
+# The forensic audit of that run found defects in how THIS verifier read genuine Apple structures; this section pins the
+# repairs. What is REAL data here and what is SYNTHETIC:
+#   REAL      tool/fixtures/apple_cloud_signing_cms_run44834801248.txt: the 16 CMS signatures Apple's cloud signing service
+#             returned (public data; provenance in the file). tool/fixtures/apple_swift_runtime_embedded_info_plist.txt: the
+#             embedded Info.plist section of Apple's Swift runtime library and the hashes its signature seals (public data).
+#   SYNTHETIC the IPAs of tool/ipa_fixture.py (same structures, our own certificates), which cannot prove that Apple agrees.
+# Not covered here, because no genuine evidence exists yet: the DER entitlements layout and the V8 Info.plist comparison.
+cmsfix="$root/tool/fixtures/apple_cloud_signing_cms_run44834801248.txt"
+swiftfix="$root/tool/fixtures/apple_swift_runtime_embedded_info_plist.txt"
+
+# pyunit ARGS...: runs the python script on stdin; its lines "ok   ..." / "FAIL ..." are counted like the checks above.
+pyunit() {
+  local pout prc line
+  pout="$(python3 -I - "$@" 2>&1)"; prc=$?
+  while IFS= read -r line; do
+    case "$line" in
+      "ok   "*) pass=$((pass + 1)); echo "$line" ;;
+      "FAIL "*) failed=$((failed + 1)); echo "$line" ;;
+      "") ;;
+      *) echo "     $line" ;;
+    esac
+  done <<<"$pout"
+  if [ "$prc" -ne 0 ]; then bad "the python checks ran to completion" "exit $prc"; fi
+}
+
+# 11a. synthetic IPAs. The default fixture already has Apple's real forms: a cdhashes attribute WITHOUT the XML declaration
+# and a loose dylib that carries its own __TEXT,__info_plist section sealed in special slot 1.
+run staging "$tmp/good.ipa" "${common[@]}" --expect-cert-sha256 "$PIN"
+if [ "$rc" -eq 0 ] && grep -F "PASS  Frameworks/libswift_Embedded.dylib: signature intact" <<<"$out" >/dev/null && ! grep -F "NOT CHECKED" <<<"$out" >/dev/null; then
+  ok "Apple's cdhashes form (no XML declaration) and a dylib with an embedded, sealed Info.plist section pass, with nothing left unchecked"
+else
+  bad "Apple's cdhashes form and an embedded, sealed Info.plist section pass" "exit $rc: $(echo "$out" | grep -E 'FAIL|NOT CHECKED' | head -3 | tr '\n' '|')"
+fi
+mk good_xmldecl staging cdhashes-plist-xmldecl
+expect_ok "a cdhashes attribute in the older form, WITH the XML declaration, still passes" staging "$tmp/good_xmldecl.ipa" --expect-cert-sha256 "$PIN"
+mk good_binplist staging cdhashes-plist-binary
+expect_ok "a cdhashes attribute as a binary property list still passes" staging "$tmp/good_binplist.ipa" --expect-cert-sha256 "$PIN"
+mk cdgarbage staging cdhashes-plist-garbage
+expect_fail "a cdhashes attribute that is not a property list is refused" "CMS cdhashes attribute is unreadable" staging "$tmp/cdgarbage.ipa" --expect-cert-sha256 "$PIN"
+mk cdshort staging cdhashes-short
+expect_fail "cdhashes of the wrong length are refused" "CMS cdhashes attribute is unreadable" staging "$tmp/cdshort.ipa" --expect-cert-sha256 "$PIN"
+mk cdempty staging cdhashes-plist-empty-list
+expect_fail "an empty cdhashes list is refused" "CMS cdhashes attribute is unreadable" staging "$tmp/cdempty.ipa" --expect-cert-sha256 "$PIN"
+mk cdomit staging dual cdhashes-omit-first
+expect_fail "a CodeDirectory that the signed cdhashes do not list is refused (the binding is enforced)" "is not bound by the signature" staging "$tmp/cdomit.ipa" --expect-cert-sha256 "$PIN"
+# control flow: a failing CMS stage must neither hide the independent checks nor pass anything by default
+mk cdflow staging cdhashes-plist-garbage der-differs
+run staging "$tmp/cdflow.ipa" "${common[@]}" --expect-cert-sha256 "$PIN"
+if [ "$rc" -eq 1 ] && grep -F "FAIL" <<<"$out" | grep -F "CMS cdhashes attribute is unreadable" >/dev/null \
+   && grep -F "FAIL" <<<"$out" | grep -F "differ from the XML entitlements" >/dev/null \
+   && grep -F "NOT CHECKED" <<<"$out" | grep -F "CodeDirectory is bound" >/dev/null \
+   && ! grep -F "no embedded entitlements" <<<"$out" >/dev/null && ! grep -F "PASS  main executable Runner: signature intact" <<<"$out" >/dev/null; then
+  ok "an unreadable cdhashes attribute fails, the independent entitlement check still runs, the unavailable binding check is named, and nothing passes by default"
+else
+  bad "an unreadable cdhashes attribute fails, the independent checks still run, the dependent one is named unavailable" "exit $rc: $(echo "$out" | grep -E 'FAIL|NOT CHECKED' | head -5 | tr '\n' '|')"
+fi
+# ... and the same when the CMS STRUCTURE itself is unreadable (the original defect: a `continue` here skipped the entitlement checks and
+# produced a misleading "no embedded entitlements")
+mk cmsflow staging spoof-signer der-differs dual cdhashes-omit-first
+run staging "$tmp/cmsflow.ipa" "${common[@]}" --expect-cert-sha256 "$PIN"
+if [ "$rc" -eq 1 ] && grep -F "FAIL" <<<"$out" | grep -F "CMS signature is unreadable" >/dev/null \
+   && grep -F "FAIL" <<<"$out" | grep -F "differ from the XML entitlements" >/dev/null \
+   && grep -F "FAIL" <<<"$out" | grep -F "is not bound by the signature" >/dev/null \
+   && grep -F "NOT CHECKED" <<<"$out" | grep -F "the signer" >/dev/null \
+   && ! grep -F "no embedded entitlements" <<<"$out" >/dev/null && ! grep -F "PASS  main executable Runner: signature intact" <<<"$out" >/dev/null; then
+  ok "an unreadable CMS structure fails, the entitlement and CodeDirectory-binding checks still run, the unavailable signer checks are named, and nothing passes by default"
+else
+  bad "an unreadable CMS structure fails, the independent checks still run, the dependent ones are named unavailable" "exit $rc: $(echo "$out" | grep -E 'FAIL|NOT CHECKED' | head -5 | tr '\n' '|')"
+fi
+mk emb_wrong staging embedded-info-slot-wrong
+expect_fail "a seal that is not the hash of the embedded Info.plist section is refused" "the embedded Info.plist section was changed after signing" staging "$tmp/emb_wrong.ipa" --expect-cert-sha256 "$PIN"
+mk emb_unsealed staging embedded-info-unsealed
+expect_fail "an embedded Info.plist section that the CodeDirectory does not seal is refused" "does not seal the embedded Info.plist section" staging "$tmp/emb_unsealed.ipa" --expect-cert-sha256 "$PIN"
+mk emb_tamper staging tamper-embedded-info
+expect_fail "a modified embedded Info.plist section is refused (the special slot notices it)" "the embedded Info.plist section was changed after signing" staging "$tmp/emb_tamper.ipa" --expect-cert-sha256 "$PIN"
+mk orphan staging slot1-orphan
+expect_fail "a non-zero Info.plist seal with neither a file nor a section is refused, whatever the library is called (libswift_*)" "seals Info.plist, which is absent" staging "$tmp/orphan.ipa" --expect-cert-sha256 "$PIN"
+
+# 11b. REAL data (public signing structures from run 44834801248) and unit checks of the readers
+pyunit "$root" "$cmsfix" "$swiftfix" <<'PY'
+import base64, hashlib, os, plistlib, subprocess, sys, tempfile
+sys.dont_write_bytecode = True
+root, cmsfix, swiftfix = sys.argv[1:4]
+sys.path.insert(0, os.path.join(root, "tool"))
+import ipa_inspect as I
+import ipa_fixture as F
+
+
+def ok(m): print("ok   " + m)
+def bad(m, why=""):
+    print("FAIL " + m)
+    if why: print("     " + why)
+def check(c, m, why=""): ok(m) if c else bad(m, why)
+
+
+def raises(fn, *exc):
+    try:
+        fn()
+    except exc:
+        return True
+    except Exception:
+        return False
+    return False
+
+
+blobs = []
+for line in open(cmsfix):
+    if line.startswith("#") or not line.strip():
+        continue
+    path, digest, b64 = line.split()
+    blobs.append((path, digest, base64.b64decode(b64)))
+check(len(blobs) == 16 and all(hashlib.sha256(d).hexdigest() == h for _p, h, d in blobs), "the 16 real Apple cloud-signing CMS fixtures are intact (recorded SHA-256 of each)")
+
+
+def attrs(der):
+    root_ = I.parse_der(der)
+    sd = root_.children[1].children[0]
+    si = [p for p in sd.children if p.cls == 0 and p.tag == 17][-1].children[0]
+    for k in si.children:
+        if k.cls == 2 and k.tag == 0:
+            return {I.oid_str(a.children[0]): a.children[1].children[0] for a in k.children}
+
+
+texts = [I.octets(attrs(d)[I.OID_APPLE_CDHASHES]) for _p, _h, d in blobs]
+check(all(t.startswith(b"<!DOCTYPE plist") and b"<?xml" not in t for t in texts),
+      "REAL: every cdhashes attribute starts with <!DOCTYPE plist and has no XML declaration (the form that broke automatic detection)")
+parsed = [I.parse_cms(d) for _p, _h, d in blobs]
+check(len({c["signer"]["sha256"] for c in parsed}) == 1 and all(c["digest_oid"] in I.OID_SHA256_FAMILY for c in parsed),
+      "REAL: all 16 CMS structures parse, with one signer certificate and a SHA-256 digest")
+got = [(p, I.cms_cdhashes(d)) for p, _h, d in blobs]
+check(all(len(hs) == (2 if p.endswith("libswift_Concurrency.dylib") else 1) and all(len(h) == 20 for h in hs) for p, hs in got),
+      "REAL: cms_cdhashes reads all 16 attributes (one 20-byte hash each, two for the library with SHA-1 and SHA-256 CodeDirectories)")
+md = {p: I.octets(attrs(d)["1.2.840.113549.1.9.4"]) for p, _h, d in blobs}
+check(all(hs[0] == md[p][:20] for p, hs in got if not p.endswith("libswift_Concurrency.dylib")),
+      "REAL: the listed cdhash is the first 20 bytes of the signed SHA-256 message digest of the CodeDirectory (the binding is consistent)")
+
+exe = I.openssl_path()
+empty = tempfile.NamedTemporaryFile(delete=False)
+empty.close()
+
+
+def sig_ok(der):
+    # the RSA signature over the signed attributes (which include the cdhashes), WITHOUT the content digest comparison: the
+    # CodeDirectory itself is not part of the fixture, so only the signature over the attributes can be checked here
+    with tempfile.TemporaryDirectory() as td:
+        f = os.path.join(td, "s.der")
+        open(f, "wb").write(der)
+        r = subprocess.run([exe, "cms", "-verify", "-inform", "DER", "-in", f, "-noverify", "-no_content_verify", "-binary",
+                            "-content", empty.name, "-signer", os.path.join(td, "signer.pem"), "-out", os.devnull], capture_output=True)
+        return r.returncode == 0
+
+
+check(all(sig_ok(d) for _p, _h, d in blobs), "REAL: the RSA signature over the signed attributes of all 16 verifies with openssl")
+d0 = bytearray(blobs[0][2])
+i = d0.find(b"<data>") + 12
+d0[i] = ord("A") if d0[i] != ord("A") else ord("B")  # one character of the signed cdhash, still a readable property list
+mod = bytes(d0)
+read_mod = I.cms_cdhashes(mod)
+check(read_mod != got[0][1] and not sig_ok(mod),
+      "REAL: a modified cdhash reads fine (parsing alone would accept it) but the CMS signature check REJECTS it")
+d1 = bytearray(blobs[0][2])
+j = d1.find(b"<!DOCTYPE plist")
+d1[j:j + 40] = b"X" * 40
+check(raises(lambda: I.cms_cdhashes(bytes(d1)), I.Asn1Error) and not sig_ok(bytes(d1)),
+      "REAL: a cdhashes attribute replaced by garbage is refused by the reader and by the signature check")
+check(raises(lambda: I.parse_cms(blobs[0][2][:len(blobs[0][2]) // 2]), I.Asn1Error, IndexError, ValueError),
+      "REAL: a truncated CMS structure is refused")
+check(raises(lambda: I.parse_cms(blobs[0][2] + b"\x00\x01"), I.Asn1Error), "REAL: bytes after the CMS structure are refused")
+
+# the property-list reader, in isolation
+good = {"cdhashes": [b"\x01" * 20]}
+x = plistlib.dumps(good, fmt=plistlib.FMT_XML)
+accepted = {
+    "XML with the declaration": x,
+    "XML without the declaration (Apple's cloud signing)": x.split(b"?>\n", 1)[1],
+    "XML without the declaration, after white space": b"\n  " + x.split(b"?>\n", 1)[1],
+    "XML starting at <plist": x.split(b"<plist", 1)[0] and b"<plist" + x.split(b"<plist", 1)[1],
+    "binary property list": plistlib.dumps(good, fmt=plistlib.FMT_BINARY),
+}
+check(all(I.parse_cdhashes_plist(v) == [b"\x01" * 20] for v in accepted.values()), "cdhashes reader: accepts " + ", ".join(accepted))
+body = x.split(b"?>\n", 1)[1]
+refused = {
+    "garbage": b"hello", "empty": b"", "a list, not a dictionary": plistlib.dumps([1], fmt=plistlib.FMT_XML),
+    "no cdhashes key": plistlib.dumps({"x": 1}, fmt=plistlib.FMT_XML), "an empty list": plistlib.dumps({"cdhashes": []}, fmt=plistlib.FMT_XML),
+    "a hash of 19 bytes": plistlib.dumps({"cdhashes": [b"\x01" * 19]}, fmt=plistlib.FMT_XML),
+    "a hash of 32 bytes": plistlib.dumps({"cdhashes": [b"\x01" * 32]}, fmt=plistlib.FMT_XML),
+    "a string element": plistlib.dumps({"cdhashes": ["abc"]}, fmt=plistlib.FMT_XML),
+    "the same hash twice": plistlib.dumps({"cdhashes": [b"\x01" * 20, b"\x01" * 20]}, fmt=plistlib.FMT_XML),
+    "a repeated cdhashes key": body.replace(b"</dict>", b"<key>cdhashes</key><array><data>AQEBAQEBAQEBAQEBAQEBAQEBAQE=</data></array></dict>"),
+    "a DTD that declares entities": b'<!DOCTYPE plist [<!ENTITY a "b">]><plist version="1.0"><dict/></plist>',
+    "an oversized attribute": b"<plist>" + b"x" * 70000, "truncated XML": body[:60], "a truncated binary list": plistlib.dumps(good, fmt=plistlib.FMT_BINARY)[:20],
+}
+bad_ones = [k for k, v in refused.items() if not raises(lambda v=v: I.parse_cdhashes_plist(v), I.Asn1Error)]
+check(not bad_ones, "cdhashes reader: refuses " + ", ".join(refused), "accepted or crashed on: %s" % bad_ones)
+
+# the embedded Info.plist reader and the seal, on REAL data
+fx = {}
+for line in open(swiftfix):
+    if line.startswith("#") or not line.strip():
+        continue
+    k, *v = line.split()
+    fx.setdefault(k, []).append(v)
+emb = base64.b64decode(fx["section"][0][0])
+check(len(emb) == 591 and b"com.apple.dt.runtime.swiftConcurrency" in emb, "REAL: the fixture holds the 591-byte embedded Info.plist section of Apple's Swift runtime library")
+seals = {alg: bytes.fromhex(h) for alg, h in fx["slot1"]}
+check(set(seals) == {"sha1", "sha256"} and all(hashlib.new(a, emb).digest() == h for a, h in seals.items()),
+      "REAL: the Info.plist seal (special slot 1) of BOTH CodeDirectories (SHA-1 and SHA-256) is the hash of that embedded section")
+check(all(hashlib.new(a, emb[:-1] + b"\x00").digest() != h for a, h in seals.items()), "REAL: any change to the embedded section changes the hashes the seals must equal")
+
+# embedded_info_plist on synthetic Mach-O files
+plain = F.make_macho("u1", filetype=6)
+withp = F.make_macho("u2", filetype=6, info_plist=F.EMBEDDED_INFO_PLIST)
+m1, m2 = I.parse_macho_slice(plain, 0, len(plain)), I.parse_macho_slice(withp, 0, len(withp))
+check(I.embedded_info_plist(plain, m1) is None and I.embedded_info_plist(withp, m2) == F.EMBEDDED_INFO_PLIST,
+      "embedded_info_plist: none without the section, exactly its bytes with it (no file name is consulted)")
+SECT2 = 32 + 72 + 80  # the second section header of the synthetic __TEXT segment
+twice = bytearray(withp)
+twice[32 + 72:32 + 72 + 16] = b"__info_plist".ljust(16, b"\0")
+check(raises(lambda: I.embedded_info_plist(bytes(twice), I.parse_macho_slice(bytes(twice), 0, len(twice))), I.MachOError), "embedded_info_plist: two such sections are refused")
+zf = bytearray(withp)
+zf[SECT2 + 64:SECT2 + 68] = (1).to_bytes(4, "little")
+check(raises(lambda: I.embedded_info_plist(bytes(zf), I.parse_macho_slice(bytes(zf), 0, len(zf))), I.MachOError), "embedded_info_plist: a zero-fill section is refused")
+big = bytearray(withp)
+big[SECT2 + 40:SECT2 + 48] = (len(withp) * 2).to_bytes(8, "little")
+check(raises(lambda: I.embedded_info_plist(bytes(big), I.parse_macho_slice(bytes(big), 0, len(big))), I.MachOError), "embedded_info_plist: a section outside the slice is refused")
+other = bytearray(withp)
+other[SECT2 + 16:SECT2 + 32] = b"__DATA".ljust(16, b"\0")
+check(I.embedded_info_plist(bytes(other), I.parse_macho_slice(bytes(other), 0, len(other))) is None, "embedded_info_plist: a section of another segment is not the Info.plist")
+
+# the REAL Apple-signed library, when it is at hand (not in CI: the file is Apple's and is not stored here)
+real = os.environ.get("REAL_SWIFT_DYLIB")
+if real:
+    import verify_ipa as V
+
+    class Rep:
+        def __init__(self): self.fails, self.oks, self.warns = [], [], []
+        def fail(self, m): self.fails.append(m)
+        def ok(self, m): self.oks.append(m)
+        def warn(self, m): self.warns.append(m)
+        def info(self, m): pass
+        def ev(self, k, v): pass
+        def check(self, c, a, b): (self.oks if c else self.fails).append(a if c else b)
+
+    r = Rep()
+    res = V.check_code_signature(r, "REAL libswift_Concurrency.dylib", real, None, "com.app.cadenabitcoin", None, None, False)
+    check(res["ok"] and not r.fails, "REAL FILE: the original Apple-signed Swift runtime library passes check_code_signature (page hashes, slots, CMS, cdhashes)", str(r.fails))
+    data = bytearray(open(real, "rb").read())
+    sl = I.macho_slices(bytes(data))[0]
+    mm = I.parse_macho_slice(bytes(data), sl[1], sl[2])
+    sect = I.embedded_info_plist(bytes(data[sl[1]:sl[1] + sl[2]]), mm)
+    data[bytes(data).find(sect) + 100] ^= 1
+    with tempfile.NamedTemporaryFile(delete=False) as t:
+        t.write(bytes(data))
+    r2 = Rep()
+    res2 = V.check_code_signature(r2, "tampered", t.name, None, "com.app.cadenabitcoin", None, None, False)
+    os.unlink(t.name)
+    check(not res2["ok"] and any("embedded Info.plist section was changed after signing" in f for f in r2.fails),
+          "REAL FILE: one changed byte of the embedded section is refused by the Info.plist seal")
+os.unlink(empty.name)
+PY
+
 # ---- 10. optional: re-sign a REAL unsigned build (synthetic identity) -----------------------------
 if [ -n "${REAL_UNSIGNED_APP:-}" ]; then
   if [ ! -f "$REAL_UNSIGNED_APP/Info.plist" ]; then

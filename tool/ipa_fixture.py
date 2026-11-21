@@ -152,7 +152,23 @@ def cms_for_codedirectory(cd0, cdhashes, leaf_pem, key, chain_pems):
     """A CMS SignedData over CodeDirectory `cd0` with Apple's cdhashes attribute, signed with `key`."""
     leaf = pem_to_der(leaf_pem)
     cert = I.parse_certificate(leaf)
-    plist = plistlib.dumps({"cdhashes": list(cdhashes)}, fmt=plistlib.FMT_XML)
+    hashes = list(cdhashes)
+    if "cdhashes-omit-first" in MUT:
+        hashes = hashes[1:]
+    if "cdhashes-short" in MUT:
+        hashes = [h[:19] for h in hashes]
+    plist = plistlib.dumps({"cdhashes": hashes}, fmt=plistlib.FMT_XML)
+    if "cdhashes-plist-binary" in MUT:
+        plist = plistlib.dumps({"cdhashes": hashes}, fmt=plistlib.FMT_BINARY)
+    elif "cdhashes-plist-xmldecl" not in MUT:
+        # Apple's cloud-managed signing service writes the XML list WITHOUT the `<?xml ...?>` declaration, starting
+        # with `<!DOCTYPE plist` (the 16 real responses of run 44834801248); that is the default here. The older form
+        # with the declaration stays testable (`cdhashes-plist-xmldecl`), as does the binary form.
+        plist = plist.split(b"?>\n", 1)[1]
+    if "cdhashes-plist-garbage" in MUT:
+        plist = b"this is not a property list"
+    if "cdhashes-plist-empty-list" in MUT:
+        plist = plistlib.dumps({"cdhashes": []}, fmt=plistlib.FMT_XML).split(b"?>\n", 1)[1]
     attrs = [
         d_seq(d_oid("1.2.840.113549.1.9.3"), d_set(d_oid(OID_DATA))),
         d_seq(d_oid("1.2.840.113549.1.9.4"), d_set(d_octet(hashlib.sha256(cd0).digest()))),
@@ -238,16 +254,32 @@ def pseudo(seed, n):
     return out[:n]
 
 
-def make_macho(seed, filetype=2, text_len=0x3C00, minos=14 << 16, cpu=0x0100000C):
-    """A tiny but structurally valid arm64 Mach-O with __TEXT, __LINKEDIT and a build version."""
-    sect = (b"__text".ljust(16, b"\0") + b"__TEXT".ljust(16, b"\0") + struct.pack("<QQIIIIIIII", 0x100000400, text_len, 0x400, 2, 0, 0, 0x80000400, 0, 0, 0))
-    text = struct.pack("<II16sQQQQiiII", 0x19, 72 + 80, b"__TEXT".ljust(16, b"\0"), 0x100000000, 0x4000, 0, 0x4000, 5, 5, 1, 0) + sect
+EMBEDDED_INFO_PLIST = (b'<?xml version="1.0" encoding="UTF-8"?>\n<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">\n'
+                       b'<plist version="1.0">\n<dict>\n\t<key>CFBundleIdentifier</key>\n\t<string>org.example.runtime.embedded</string>\n'
+                       b'\t<key>CFBundleName</key>\n\t<string>embedded</string>\n\t<key>CFBundleVersion</key>\n\t<string>1</string>\n</dict>\n</plist>\n')
+
+
+def make_macho(seed, filetype=2, text_len=0x3C00, minos=14 << 16, cpu=0x0100000C, info_plist=None):
+    """A tiny but structurally valid arm64 Mach-O with __TEXT, __LINKEDIT and a build version.
+
+    With `info_plist` (bytes) the __TEXT segment carries a second section, `__info_plist`, with those bytes, laid out
+    like the Apple-signed Swift runtime library of the real archive (the section sits inside __TEXT, after __text)."""
+    pad = ((len(info_plist) + 15) & ~15) if info_plist is not None else 0
+    main_len = text_len - pad
+    sect = (b"__text".ljust(16, b"\0") + b"__TEXT".ljust(16, b"\0") + struct.pack("<QQIIIIIIII", 0x100000400, main_len, 0x400, 2, 0, 0, 0x80000400, 0, 0, 0))
+    if info_plist is not None:
+        sect += (b"__info_plist".ljust(16, b"\0") + b"__TEXT".ljust(16, b"\0")
+                 + struct.pack("<QQIIIIIIII", 0x100000400 + main_len, len(info_plist), 0x400 + main_len, 0, 0, 0, 0, 0, 0, 0))
+    text = struct.pack("<II16sQQQQiiII", 0x19, 72 + 80 * (2 if info_plist is not None else 1), b"__TEXT".ljust(16, b"\0"), 0x100000000, 0x4000, 0, 0x4000, 5, 5,
+                       2 if info_plist is not None else 1, 0) + sect
     link = struct.pack("<II16sQQQQiiII", 0x19, 72, b"__LINKEDIT".ljust(16, b"\0"), 0x100004000, 0x4000, 0x4000, 0x100, 1, 1, 0, 0)
     build = struct.pack("<IIIIII", 0x32, 24, 2, minos, 26 << 16 | 2 << 8, 0)
     cmds = text + link + build
     header = struct.pack("<IIIIIIII", 0xFEEDFACF, cpu, 0, filetype, 3, len(cmds), 0x200085, 0)
     body = header + cmds
-    body = body.ljust(0x400, b"\0") + pseudo(seed + "t", text_len)
+    body = body.ljust(0x400, b"\0") + pseudo(seed + "t", main_len)
+    if info_plist is not None:
+        body += info_plist.ljust(pad, b"\0")
     body = body.ljust(0x4000, b"\0") + pseudo(seed + "l", 0x100)
     return body
 
@@ -334,6 +366,9 @@ def sign_slice(sl, ident, team, specials, ents_xml, dual, adhoc, certs, main):
     text_limit = 0x4000
     flags = I.CS_ADHOC if adhoc else 0
     sp = dict(specials)
+    embedded = I.embedded_info_plist(sl, m)
+    if embedded is not None and 1 not in sp and "embedded-info-unsealed" not in MUT:
+        sp[1] = embedded + b"\0" if "embedded-info-slot-wrong" in MUT else embedded
     req = struct.pack(">III", I.CSMAGIC_REQUIREMENTS, 12, 0)
     sp[2] = req
     ents_blob = der_blob = None
@@ -470,6 +505,8 @@ def make_unsigned_app(directory, env, seed="1", version=None):
         f.write('{"assets": []}\n')
     with open(os.path.join(app, "Frameworks", "libswift_Synthetic.dylib"), "wb") as f:
         f.write(make_macho("dylib" + seed, filetype=6))
+    with open(os.path.join(app, "Frameworks", "libswift_Embedded.dylib"), "wb") as f:  # carries its own __TEXT,__info_plist
+        f.write(make_macho("embedded" + seed, filetype=6, info_plist=EMBEDDED_INFO_PLIST))
     with open(os.path.join(app, "Base.lproj", "Main.storyboardc"), "wb") as f:
         f.write(b"compiled-storyboard-placeholder")
     print("synthetic unsigned app: %s (%s, %s)" % (app, env, app_id))
@@ -557,7 +594,8 @@ def sign_app(app_in, out_ipa, certdir, team, mutations):
             sign_macho_file(os.path.join(full, exe), "org.example." + exe.lower(), nteam, {1: info_b, 3: res_b}, None, dual,
                             False, nested_certs, False)
         elif fw.endswith(".dylib"):
-            sign_macho_file(full, fw[:-len(".dylib")], team, {}, None, dual, False, certs, False)
+            dylib_specials = {1: b"orphan seal"} if ("slot1-orphan" in mut and fw == "libswift_Synthetic.dylib") else {}
+            sign_macho_file(full, fw[:-len(".dylib")], team, dylib_specials, None, dual, False, certs, False)
     # the profile
     exp = datetime.datetime(2027, 6, 1)
     if "expired-profile" in mut:
@@ -630,6 +668,15 @@ def sign_app(app_in, out_ipa, certdir, team, mutations):
             b = f.read(1)
             f.seek(0x1000)
             f.write(bytes([b[0] ^ 0xFF]))
+    if "tamper-embedded-info" in mut:  # one byte of the embedded __TEXT,__info_plist section, after signing
+        p = os.path.join(app, "Frameworks", "libswift_Embedded.dylib")
+        with open(p, "rb") as f:
+            blob = bytearray(f.read())
+        at = blob.find(EMBEDDED_INFO_PLIST)
+        assert at > 0 and blob.count(EMBEDDED_INFO_PLIST) == 1
+        blob[at + 200] ^= 0x01
+        with open(p, "wb") as f:
+            f.write(bytes(blob))
     if "tamper-resource" in mut:
         with open(os.path.join(app, "Frameworks", "App.framework", "flutter_assets", "AssetManifest.json"), "a") as f:
             f.write("tampered\n")
