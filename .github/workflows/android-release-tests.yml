@@ -137,3 +137,8 @@ jobs:
       # tool): their static rules, and the script's flow against stub macOS commands. Nothing is run on macOS and nothing is started on GitHub.
       - name: Test the DER entitlements diagnostics (inactive template; credential-free, ad hoc, disposable program only)
         run: tool/test_ios_der_diagnostics.sh
+
+      # The offline fixture extractor of Issue #71, Phase 3 preparation: rebuilds the three synthetic fixtures from a SAVED job log and
+      # rejects anything inconsistent. It reads files on the runner only: no network, no execution of what it extracts, no upload.
+      - name: Test the offline DER fixture extractor (standard library only; writes only into a new directory)
+        run: tool/test_extract_probe_fixtures.sh

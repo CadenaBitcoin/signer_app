@@ -12,7 +12,9 @@
 #   1. it compiles a tiny DISPOSABLE executable (a C program that does nothing), once for iOS arm64 and once for macOS;
 #   2. for each of a set of explicit XML entitlements (the keys of the real app, then every value type) it makes a copy
 #      and signs it AD HOC (`codesign -s -`, no identity, no keychain, no timestamp server) with --generate-entitlement-der,
-#      once plainly and once with the flags Xcode used for the real app (see Packaging.log of run 44834801248);
+#      in up to three variants (see section 3): PLAIN, XCODELIKE (a controlled variant: the flags Xcode used for the real app
+#      with the certificate-dependent requirement removed and the identifier set; it is NOT the command Xcode ran) and LOGREF
+#      (the Packaging.log call itself with substituted team and certificate-name values; exploratory, never blocking);
 #   3. it asks Apple's own `codesign` to verify and display the result, and prints, with tool/der_entitlements_probe.py, the file
 #      identity, the CodeDirectory facts, the special-slot seals, the DER blob (size, digest, bytes in hex), an ASN.1 outline that
 #      assumes no layout, and, for THREE chosen cases only, the whole signed file (base64) for use as a test fixture. Raw output
@@ -113,10 +115,11 @@ ent real '<key>com.example.real</key><real>1.5</real>'
 ent data '<key>com.example.data</key><data>AAECAw==</data>'
 ent date '<key>com.example.date</key><date>2026-01-02T03:04:05Z</date>'
 cases="runner booleans strings integers arrays dicts unsorted many duplicate real data date"
-# The signed file is printed in full (base64, at most 64 KiB) for these three cases only: the Xcode-like call on the real app's four
-# entitlements for iOS, the plain call on them for macOS, and the Xcode-like call on the richest value case for iOS. Every case
-# still gets its file identity, CodeDirectory facts, special-slot seals, DER size, digest and ASN.1 structure, and its DER hex.
-dump_cases="runner-ios-xcode runner-mac-plain arrays-ios-xcode"
+# The signed file is printed in full (base64, at most 64 KiB) for these three cases only (the REQUIRED cases): the XCODELIKE call on
+# the real app's four entitlements for iOS, the PLAIN call on them for macOS, and the XCODELIKE call on the richest value case for iOS.
+# Every case still gets its file identity, CodeDirectory facts, special-slot seals, DER size, digest and ASN.1 structure, and its DER hex.
+# No LOGREF case is ever a required case: it is the exploratory reference call (see below) and its result never fails the script.
+dump_cases="runner-ios-xcodelike runner-mac-plain arrays-ios-xcodelike"
 
 # ---- 3. sign ad hoc with Apple's codesign, verify with it, and print what was written ------------------------------------
 # Four DIFFERENT things are told apart for every case, and only the last two decide whether DER evidence was obtained:
@@ -130,6 +133,20 @@ dump_cases="runner-ios-xcode runner-mac-plain arrays-ios-xcode"
 #   fixture   = for the three dump_cases only: the COMPLETE signed executable was actually emitted (BEGIN-FILE with its size and
 #               SHA-256, the base64 data, END-FILE) and this script decoded it and found the size and digest to agree. Complete DER
 #               evidence without its requested dump is NOT a success: the dump is the fixture the investigation needs.
+# THE THREE VARIANTS (the name of a case is CASE-TARGET-VARIANT):
+#   plain      codesign -f -s - -i IDENT --timestamp=none --entitlements E --generate-entitlement-der   (every case; REQUIRED for
+#              runner-mac-plain, supporting otherwise);
+#   xcodelike  a CONTROLLED variant of the flags Xcode used for the real app: the same ad-hoc call with --signature-size,
+#              --preserve-metadata, --omit-adhoc-flag, --team-identifier, --strip-disallowed-xattrs and -vvv, but with the identifier
+#              set explicitly (-i IDENT) and WITHOUT the certificate-dependent designated requirement (only for the cases runner and
+#              arrays; REQUIRED for runner-ios and arrays-ios, supporting otherwise). It is NOT the command Xcode ran,
+#              and it is not claimed to reproduce Xcode's Distribution process. The requirement is removed because an ad-hoc
+#              signature cannot satisfy a requirement anchored in Apple's certificate chain, which would make Apple's own
+#              `codesign --verify` (a condition of DER evidence) fail for a reason unrelated to the DER entitlements;
+#   logref     the call as the Packaging.log of run 44834801248 shows it, with a made-up team and a made-up certificate name and
+#              WITHOUT -i, INCLUDING its certificate-dependent designated requirement (only for runner and arrays; EXPLORATORY:
+#              kept as reference evidence of what Apple's tool does with that call on an ad-hoc signature; whether it signs, whether
+#              it verifies and what it writes is a result, and a failure of it never fails the script).
 # A case counts as DER evidence only if signing, verify and evidence all succeeded. A REQUIRED case (the three dump_cases) is a
 # SUCCESS only if, in addition, its fixture dump is complete; the script exits 0 only if every required case succeeded. The other
 # cases are supporting or exploratory: their results and diagnostics are printed in full, but a failure of one does not fail the
@@ -166,23 +183,36 @@ ok_cases=" "
 n_dump_cases="$(echo $dump_cases | wc -w | tr -d ' ')"
 for target in $targets; do
   for case in $cases; do
-    for variant in plain xcode; do
-      # the Xcode flavour is only needed for the real application's own entitlements and one rich case
-      if [ "$variant" = "xcode" ] && [ "$case" != "runner" ] && [ "$case" != "arrays" ]; then continue; fi
+    for variant in plain xcodelike logref; do
+      # the Xcode-derived variants are only needed for the real application's own entitlements and one rich case
+      if [ "$variant" != "plain" ] && [ "$case" != "runner" ] && [ "$case" != "arrays" ]; then continue; fi
       name="$case-$target-$variant"
       mkdir "$work/out/$name"
       exe="$work/out/$name/$IDENT"
       cp "$work/bin/$target/$IDENT" "$exe"
-      if [ "$variant" = "plain" ]; then
-        codesign -f -s - -i "$IDENT" --timestamp=none --entitlements "$work/ents/$case.plist" --generate-entitlement-der "$exe" > "$work/out/$name.codesign.txt" 2>&1
-      else
-        # the arguments of the codesign call Xcode made for the real app (Packaging.log, run 44834801248), with a made-up team
-        # and a made-up certificate name in the requirement text (it is only text here: the signature is ad hoc)
-        codesign -f -s - --timestamp=none --signature-size 16000 --entitlements "$work/ents/$case.plist" \
-          --requirements "=designated => anchor apple generic and identifier \"$IDENT\" and certificate leaf[subject.CN] = \"Disposable Test Signer ($TEAM)\" and certificate 1[field.1.2.840.113635.100.6.2.1] /* exists */" \
-          --preserve-metadata=identifier,flags,runtime,launch-constraints,library-constraints --omit-adhoc-flag \
-          --team-identifier "$TEAM" --generate-entitlement-der --strip-disallowed-xattrs -vvv "$exe" > "$work/out/$name.codesign.txt" 2>&1
-      fi
+      case "$variant" in
+        plain)
+          codesign -f -s - -i "$IDENT" --timestamp=none --entitlements "$work/ents/$case.plist" --generate-entitlement-der "$exe" > "$work/out/$name.codesign.txt" 2>&1
+          ;;
+        xcodelike)
+          # CONTROLLED variant (not the command Xcode ran): the flags of the Packaging.log call, with the identifier set explicitly
+          # (-i) and with no designated requirement (no --requirements): an ad-hoc signature cannot satisfy a requirement anchored in
+          # Apple's certificate chain, and Apple's own `codesign --verify` is a condition of DER evidence
+          codesign -f -s - -i "$IDENT" --timestamp=none --signature-size 16000 --entitlements "$work/ents/$case.plist" \
+            --preserve-metadata=identifier,flags,runtime,launch-constraints,library-constraints --omit-adhoc-flag \
+            --team-identifier "$TEAM" --generate-entitlement-der --strip-disallowed-xattrs -vvv "$exe" > "$work/out/$name.codesign.txt" 2>&1
+          ;;
+        logref)
+          # EXPLORATORY reference: the arguments of the codesign call Xcode made for the real app (Packaging.log, run 44834801248),
+          # with a made-up team and a made-up certificate name in the requirement text, and no -i, as in the log. Its designated
+          # requirement is anchored in Apple's certificate chain, which an ad-hoc signature cannot satisfy: whether Apple's tool signs
+          # and verifies it is exactly what this case records. It is never a required case.
+          codesign -f -s - --timestamp=none --signature-size 16000 --entitlements "$work/ents/$case.plist" \
+            --requirements "=designated => anchor apple generic and identifier \"$IDENT\" and certificate leaf[subject.CN] = \"Disposable Test Signer ($TEAM)\" and certificate 1[field.1.2.840.113635.100.6.2.1] /* exists */" \
+            --preserve-metadata=identifier,flags,runtime,launch-constraints,library-constraints --omit-adhoc-flag \
+            --team-identifier "$TEAM" --generate-entitlement-der --strip-disallowed-xattrs -vvv "$exe" > "$work/out/$name.codesign.txt" 2>&1
+          ;;
+      esac
       rc=$?
       if [ "$rc" -ne 0 ]; then
         echo "RESULT $name: signing=FAILED (exit $rc) verify=not-run evidence=NONE fixture_dump=not-run parser=n/a: $(tr '\n' ' ' < "$work/out/$name.codesign.txt" | cut -c1-240)"
@@ -190,6 +220,16 @@ for target in $targets; do
       fi
       n_signed=$((n_signed + 1))
       echo "::group::$name"
+      role="supporting (reported in full, never blocks the run)"
+      for c in $dump_cases; do [ "$c" = "$name" ] && role="REQUIRED (the run fails unless it has DER evidence and its fixture dump)"; done
+      case "$variant" in
+        plain) vnote="plain ad-hoc call with the identifier set" ;;
+        xcodelike) vnote="CONTROLLED Xcode-like variant: the Packaging.log flags with -i and WITHOUT the certificate-dependent designated requirement; NOT the command Xcode ran" ;;
+        logref) vnote="REFERENCE: the Packaging.log call with substituted team and certificate name, INCLUDING its certificate-dependent designated requirement; exploratory, never required" ;;
+      esac
+      [ "$variant" = "logref" ] && role="EXPLORATORY (a failure here is a result, never an error of the run)"
+      echo "--- role: $role"
+      echo "--- variant: $vnote"
       echo "--- codesign -v --strict -vvv"
       vout="$(codesign -v --strict -vvv "$exe" 2>&1)"; vrc=$?
       printf '%s\n' "$vout" | sed 's/^/  /'

@@ -58,14 +58,52 @@ grep -F "WITHOUT A SEPARATE, EXPLICIT AUTHORIZATION" "$wf" >/dev/null; chk "temp
 scode="$(grep -vE '^[[:space:]]*#' "$script")"
 ! grep -iE 'security |keychain|identity|p12|p8|mobileprovision|provisioning|altool|notarytool|curl|wget|gh |git |ssh|upload|exportArchive|xcodebuild (-exportArchive|-archive)|Runner\.app|\.ipa|xcarchive' >/dev/null <<<"$scode"; chk "script: no keychain, identity, profile, Apple service, network, upload, application, archive or IPA reference" $?
 grep -E 'codesign .*-s - ' >/dev/null <<<"$scode" && ! grep -E 'codesign .*-s [^- ]|codesign .*--sign [^-]' >/dev/null <<<"$scode"; chk "script: codesign is only ever called with the ad-hoc identity (-s -)" $?
-[ "$(grep -c -- '--timestamp=none' <<<"$scode")" -ge 2 ] && ! grep -E -- '--timestamp([^=]|$)' >/dev/null <<<"$scode"; chk "script: codesign never contacts a timestamp server (--timestamp=none)" $?
-[ "$(grep -c 'generate-entitlement-der' <<<"$scode")" -ge 2 ]; chk "script: both codesign variants ask for the DER entitlements" $?
+[ "$(grep -c -- '--timestamp=none' <<<"$scode")" -ge 3 ] && ! grep -E -- '--timestamp([^=]|$)' >/dev/null <<<"$scode"; chk "script: codesign never contacts a timestamp server (--timestamp=none)" $?
+[ "$(grep -c 'generate-entitlement-der' <<<"$scode")" -ge 3 ]; chk "script: all three codesign variants ask for the DER entitlements" $?
 grep -F 'trap '"'"'rm -rf "$work"'"'"' EXIT' >/dev/null <<<"$scode"; chk "script: removes its work directory on exit" $?
 grep -F '[ -e "$work" ]' >/dev/null <<<"$scode"; chk "script: refuses a work directory that already exists (it never reuses or overwrites files)" $?
 grep -F "SUCCESS HERE DOES NOT PROVE APPLE DISTRIBUTION COMPATIBILITY" "$script" >/dev/null; chk "script: states that success does not prove Apple distribution compatibility" $?
 [ "$(grep -E '^dump_cases=' "$script" | tr -d '"' | sed 's/^dump_cases=//' | wc -w | tr -d ' ')" -eq 3 ]; chk "script: the whole signed file is dumped for exactly three chosen cases" $?
 [ "$(grep -c -- '--dump-file' <<<"$scode")" -eq 1 ] && grep -F -- '--synthetic-identifier "$IDENT"' >/dev/null <<<"$scode"; chk "script: --dump-file is given in one place only (the chosen cases) and the probe is always told the synthetic identifier" $?
 bash -n "$script"; chk "script: is syntactically valid" $?
+
+# ---- Task A: the three variants of the codesign call (plain; xcodelike = a CONTROLLED variant; logref = the Packaging.log reference) ----
+variant_code() { awk -v v="$1" '{ s = $0; gsub(/^[ \t]+|[ \t]+$/, "", s) } s == v ")" {on = 1; next} on && s == ";;" {exit} on {print}' <<<"$scode"; }
+has() { grep -F -e "$2" >/dev/null <<<"$1"; }
+vp="$(variant_code plain)"; vx="$(variant_code xcodelike)"; vl="$(variant_code logref)"
+[ -n "$vp" ] && [ -n "$vx" ] && [ -n "$vl" ]; chk "script: the three variants (plain, xcodelike, logref) are separate, named codesign calls" $?
+ok_common=0
+for v in "$vp" "$vx" "$vl"; do
+  has "$v" "codesign -f -s - " && has "$v" "--timestamp=none" && has "$v" "--generate-entitlement-der" && has "$v" '--entitlements "$work/ents/$case.plist"' || ok_common=1
+done
+[ "$ok_common" -eq 0 ]; chk "script: every variant is ad hoc (-s -), takes no timestamp, asks for the DER entitlements and signs the explicit entitlements file" $?
+has "$vx" '-i "$IDENT"'; chk "script: the controlled xcodelike variant sets the expected CodeDirectory identifier explicitly (-i)" $?
+! has "$vx" "--requirements" && ! has "$vx" "anchor apple" && ! has "$vx" "certificate"; chk "script: the controlled xcodelike variant has NO designated requirement and no certificate reference (an ad-hoc signature cannot satisfy one)" $?
+has "$vx" "--preserve-metadata=identifier,flags,runtime,launch-constraints,library-constraints" && has "$vx" "--omit-adhoc-flag" && has "$vx" "--signature-size 16000" && has "$vx" "--strip-disallowed-xattrs"; chk "script: the xcodelike variant keeps the other flags of the Packaging.log call" $?
+has "$vp" '-i "$IDENT"' && ! has "$vp" "--requirements"; chk "script: the plain variant sets the identifier and has no requirement" $?
+has "$vl" "--requirements" && has "$vl" "anchor apple generic" && ! has "$vl" '-i "$IDENT"'; chk "script: the logref reference keeps the Packaging.log call as it is: its certificate-dependent requirement, and no -i" $?
+[ "$(grep -c -- '--requirements' <<<"$scode")" -eq 1 ]; chk "script: --requirements occurs once in the whole script, in the exploratory logref call only" $?
+dc="$(grep -E '^dump_cases=' "$script")"
+! has "$dc" "logref" && has "$dc" "runner-ios-xcodelike" && has "$dc" "arrays-ios-xcodelike" && has "$dc" "runner-mac-plain"; chk "script: the three required cases are the xcodelike and plain ones; the exploratory logref reference is never a required case" $?
+grep -F "NOT the command Xcode ran" "$script" >/dev/null && grep -F "EXPLORATORY" "$script" >/dev/null && grep -F "not claimed to reproduce Xcode's Distribution process" "$script" >/dev/null; chk "script: documents that xcodelike is NOT the command Xcode ran, is not claimed to reproduce Xcode's process, and that logref is exploratory" $?
+
+# ---- Task A and C documentation: the variants, the narrow logging exception, the public log, the recovery tool ----
+doc="$root/docs/IOS_SIGNING.md"
+docx="$(sed -n '/^### 3.1b /,/^### 3.2 /p' "$doc")"
+[ -n "$docx" ]; chk "docs: IOS_SIGNING.md has the Phase 3 section 3.1b" $?
+for needle in "NOT the command Xcode ran" "not claimed to reproduce Xcode's Distribution process" "**Mandatory** for \`runner-ios-xcodelike\` and \`arrays-ios-xcodelike\`" "**Exploratory**" "never a required case" "without** the certificate-dependent designated requirement" "not an observation"; do
+  grep -F -e "$needle" >/dev/null <<<"$docx"; chk "docs 3.1b: says: $needle" $?
+done
+grep -F "runner-ios-xcodelike" >/dev/null <<<"$docx" && grep -F "runner-mac-plain" >/dev/null <<<"$docx" && grep -F "arrays-ios-xcodelike" >/dev/null <<<"$docx"; chk "docs 3.1b: names the three mandatory cases" $?
+grep -F "separate from the exhausted Apple Distribution Authorizations A, B and C" >/dev/null <<<"$docx"; chk "docs 3.1b: says the experiment is separate from the exhausted Authorizations A, B and C" $?
+for needle in "narrow exception" "disposable executable generated specifically for this experiment" "explicitly designated synthetic input" "the three approved fixture-capture cases" "a production or staging application" "a real IPA or archive" "a signing credential or certificate" "a provisioning profile" "a secret or any authentication material" "any arbitrary binary given to the probe" "publicly accessible" "There is no general-purpose exception"; do
+  grep -F -e "$needle" >/dev/null <<<"$docx"; chk "docs 3.1b (logging exception): says: $needle" $?
+done
+grep -F "No IPA, profile, certificate or key in an artifact, Release, comment or log." "$doc" >/dev/null && grep -F "Derived values (a decoded profile, a base64 string) are never printed" "$doc" >/dev/null; chk "docs section 7: the original prohibition on printing base64 and signing material is still in place, word for word" $?
+grep -F "The only exception is the narrow one for the disposable synthetic fixtures of the DER experiment, section 3.1b; it is not a general exception." "$doc" >/dev/null; chk "docs section 7: points to the one narrow exception and says it is not general" $?
+grep -F "tool/extract_probe_fixtures.py" >/dev/null <<<"$docx" && grep -F "Never execute an extracted file" >/dev/null <<<"$docx" && grep -F "default branch" >/dev/null <<<"$docx"; chk "docs 3.1b: gives the evidence-recovery procedure, says never to execute the files, and the default-branch fact for activation" $?
+grep -F "NOT the command Xcode ran" "$wf" >/dev/null && grep -F "EXPLORATORY" "$wf" >/dev/null && grep -F "publicly readable" "$wf" >/dev/null && grep -F "tool/extract_probe_fixtures.py" "$wf" >/dev/null; chk "template: names the controlled and the exploratory variants, the public log and the extractor" $?
+grep -F "test_extract_probe_fixtures.sh" "$root/.github/workflows/android-release-tests.yml" >/dev/null; chk "CI: the extractor tests run in the iOS signing security job" $?
 python3 -I -c "import ast,sys;ast.parse(open(sys.argv[1]).read())" "$probe"; chk "probe: der_entitlements_probe.py is valid Python" $?
 ! grep -E '^\s*(import|from)\s+(socket|urllib|http|requests|ssl|ftplib|smtplib)' "$probe" >/dev/null; chk "probe: imports nothing that could reach a network" $?
 
@@ -102,6 +140,10 @@ if case in os.environ.get("STUB_FAIL_CASES", "").split():
     print("stub codesign: refusing %s" % case)
     sys.exit(1)
 ents = args[args.index("--entitlements") + 1]
+# A MODEL, not Apple's behaviour (which has not been observed): a file signed with a designated requirement anchored in Apple's
+# certificate chain fails `codesign --verify` because an ad-hoc signature cannot satisfy it. The shell wrapper reads this marker.
+if "--requirements" in args:
+    open(exe + ".req", "w").write("requirement")
 ident = args[args.index("-i") + 1] if "-i" in args else os.path.basename(exe)
 if mode == "other-ident":   # a valid, sealed executable whose CodeDirectory identifier is not the disposable program's
     ident = "com.example.other"
@@ -168,7 +210,7 @@ printf '#!/bin/sh\nif [ "$3" = "--show-sdk-path" ]; then echo /stub/sdk; exit 0;
 printf '#!/bin/sh\nout=""\nwhile [ "$#" -gt 0 ]; do if [ "$1" = "-o" ]; then out="$2"; fi; shift; done\n"%s" -I "%s" "%s/tool" "$out"\n' "$real_py" "$tmp/stubmacho.py" "$root" > "$tmp/stub/clang"
 # verification and display are answered by the shell itself (fast); only signing runs Python. A fault is looked up by the name
 # of the case, which is the name of the directory that holds the executable (the last argument).
-printf '#!/bin/sh\necho "stub codesign $*" >> "$STUB_LOG"\nfor last in "$@"; do :; done\ncase "$(basename "$(dirname "$last")")" in *) c="$(basename "$(dirname "$last")")" ;; esac\ncase "$1" in\n  -v) case " ${STUB_FAULTS:-} " in *" $c=verify-fails "*) echo "stub: a verification failure"; exit 1 ;; esac; echo "valid on disk"; exit 0 ;;\n  -d) echo "Identifier=stub"; exit 0 ;;\nesac\nexec "%s" -I "%s" "%s/tool" "$@"\n' "$real_py" "$tmp/stubcodesign.py" "$root" > "$tmp/stub/codesign"
+printf '#!/bin/sh\necho "stub codesign $*" >> "$STUB_LOG"\nfor last in "$@"; do :; done\ncase "$(basename "$(dirname "$last")")" in *) c="$(basename "$(dirname "$last")")" ;; esac\ncase "$1" in\n  -v) [ -n "${STUB_REQ_FAILS:-}" ] && [ -e "$last.req" ] && { echo "stub (a MODEL of the suspected behaviour, not the real tool): code failed to satisfy its designated requirement"; exit 3; }; case " ${STUB_FAULTS:-} " in *" $c=verify-fails "*) echo "stub: a verification failure"; exit 1 ;; esac; echo "valid on disk"; exit 0 ;;\n  -d) echo "Identifier=stub"; exit 0 ;;\nesac\nexec "%s" -I "%s" "%s/tool" "$@"\n' "$real_py" "$tmp/stubcodesign.py" "$root" > "$tmp/stub/codesign"
 printf '#!/bin/sh\necho "Xcode 26.3"\necho "Build version stub"\n' > "$tmp/stub/xcodebuild"
 # python3: the real one, except for the PROBE on a case that carries a fault: probe-crash makes it crash; dump-no-end, dump-no-begin,
 # dump-short and dump-badsha let it run and then damage its file dump (the probe itself reports a complete dump; only a script that
@@ -205,7 +247,7 @@ n_run=0
 runmode() {
   n_run=$((n_run + 1))
   : > "$STUB_LOG"
-  out="$(STUB_FAULTS="${1:-}" STUB_FAIL_CASES="${2:-}" PATH="$tmp/stub:$PATH" bash "$script" "$tmp/work$n_run" 2>&1)"; rc=$?
+  out="$(STUB_FAULTS="${1:-}" STUB_FAIL_CASES="${2:-}" STUB_REQ_FAILS="${STUB_REQ_FAILS:-}" PATH="$tmp/stub:$PATH" bash "$script" "$tmp/work$n_run" 2>&1)"; rc=$?
 }
 count() { grep -c -- "$1" <<<"$out"; }
 # Here-strings, not pipes: under "pipefail" a reader that stops early (grep, awk exit) would make the writing side fail with EPIPE.
@@ -213,32 +255,40 @@ block() { awk -v n="::group::$1" '$0 == n {on=1} on {print} $0 == "::endgroup::"
 all_cases=""
 for t in ios mac; do
   for c in runner booleans strings integers arrays dicts unsorted many duplicate real data date; do all_cases="$all_cases $c-$t-plain"; done
-  all_cases="$all_cases runner-$t-xcode arrays-$t-xcode"
+  all_cases="$all_cases runner-$t-xcodelike arrays-$t-xcodelike runner-$t-logref arrays-$t-logref"
 done
-required="runner-ios-xcode runner-mac-plain arrays-ios-xcode"
+required="runner-ios-xcodelike runner-mac-plain arrays-ios-xcodelike"
 others=""
 for c in $all_cases; do case " $required " in *" $c "*) ;; *) others="$others $c" ;; esac; done
 without() { local r="" c; for c in $others; do [ "$c" = "$1" ] || r="$r $c"; done; echo "$r"; }
 
 runmode ""
 [ "$rc" -eq 0 ]; chk "script (stub run): exits 0 when every case yields DER evidence" $?
-[ "$(count '=> DER evidence obtained')" -eq 28 ]; chk "script (stub run): 28 cases (2 targets x (12 plain + 2 Xcode-like)) each count as DER evidence (found $(count '=> DER evidence obtained'))" $?
-grep -F "RESULT summary: signing succeeded for 28 case(s); Apple's codesign verified 28; DER evidence obtained for 28" >/dev/null <<<"$out"; chk "script (stub run): the summary tells signing, verification and DER evidence apart" $?
+[ "$(count '=> DER evidence obtained')" -eq 32 ]; chk "script (stub run): 32 cases (2 targets x (12 plain + 2 xcodelike + 2 logref)) each count as DER evidence (found $(count '=> DER evidence obtained'))" $?
+grep -F "RESULT summary: signing succeeded for 32 case(s); Apple's codesign verified 32; DER evidence obtained for 32" >/dev/null <<<"$out"; chk "script (stub run): the summary tells signing, verification and DER evidence apart" $?
 grep -F "RESULT OK: DER evidence and the fixture dump were obtained for every required case" >/dev/null <<<"$out"; chk "script (stub run): says so when every required case produced evidence" $?
 [ ! -e "$tmp/work1" ]; chk "script (stub run): the work directory is removed" $?
-[ "$(grep -c -- '--generate-entitlement-der' "$STUB_LOG")" -eq 28 ] && [ "$(grep -c -- ' -s - ' "$STUB_LOG")" -eq 28 ]; chk "script (stub run): every codesign call is ad hoc and asks for the DER entitlements" $?
+[ "$(grep -c -- '--generate-entitlement-der' "$STUB_LOG")" -eq 32 ] && [ "$(grep -c -- ' -s - ' "$STUB_LOG")" -eq 32 ]; chk "script (stub run): every codesign call is ad hoc and asks for the DER entitlements" $?
 ! grep -E -- '--keychain|--sign [^-]|-s [^- ]' "$STUB_LOG" >/dev/null; chk "script (stub run): no codesign call names an identity or a keychain" $?
 grep -F "PROBE file " >/dev/null <<<"$out" && grep -F "PROBE-RESULT der_evidence=complete parser=accepted" >/dev/null <<<"$out"; chk "script (stub run): the probe is run on what was signed and reports its evidence status" $?
 [ "$(count 'BEGIN-FILE')" -eq 3 ]; chk "script (stub run): the whole signed file is printed for exactly three cases (found $(count 'BEGIN-FILE'))" $?
-[ "$(count 'fixture_dump=ok parser=accepted => DER evidence obtained')" -eq 3 ] && [ "$(count '^RESULT .* fixture_dump=not-requested ')" -eq 25 ]; chk "script (stub run): exactly the three required cases report fixture_dump=ok; the other 25 report not-requested" $?
+[ "$(count 'fixture_dump=ok parser=accepted => DER evidence obtained')" -eq 3 ] && [ "$(count '^RESULT .* fixture_dump=not-requested ')" -eq 29 ]; chk "script (stub run): exactly the three required cases report fixture_dump=ok; the other 29 report not-requested" $?
 grep -F "requested fixture dumps complete for 3 of 3" >/dev/null <<<"$out"; chk "script (stub run): the summary says the requested fixture dumps are complete (3 of 3)" $?
+
+# (only the SIGNING calls: the log also holds the verify and display calls on the same paths)
+xl="$(grep -E ' -f -s - .*/[a-z]+-(ios|mac)-xcodelike/' "$STUB_LOG")"; ll="$(grep -E ' -f -s - .*/[a-z]+-(ios|mac)-logref/' "$STUB_LOG")"
+[ "$(grep -c . <<<"$xl")" -eq 4 ] && [ "$(grep -c -- ' -i com.example.disposable ' <<<"$xl")" -eq 4 ] && ! grep -F -- '--requirements' >/dev/null <<<"$xl"; chk "script (stub run): the four xcodelike calls set -i to the disposable identifier and carry no --requirements" $?
+[ "$(grep -c . <<<"$ll")" -eq 4 ] && [ "$(grep -c -- '--requirements' <<<"$ll")" -eq 4 ] && ! grep -F -- ' -i ' >/dev/null <<<"$ll"; chk "script (stub run): the four logref calls carry the Packaging.log requirement and no -i" $?
+blk="$(block runner-ios-xcodelike)"; grep -F -e "--- role: REQUIRED" <<<"$blk" >/dev/null && grep -F -e "NOT the command Xcode ran" <<<"$blk" >/dev/null; chk "script (stub run): a required xcodelike case says it is REQUIRED and that it is not the command Xcode ran" $?
+blk="$(block runner-ios-logref)"; grep -F -e "--- role: EXPLORATORY" <<<"$blk" >/dev/null && grep -F -e "exploratory, never required" <<<"$blk" >/dev/null; chk "script (stub run): a logref case says it is EXPLORATORY and never required" $?
+blk="$(block strings-mac-plain)"; grep -F -e "--- role: supporting" <<<"$blk" >/dev/null; chk "script (stub run): a supporting case says it never blocks the run" $?
 
 # Faults in SUPPORTING cases, one fault per case, in one run: each is named, none is counted, and none fails the script.
 # The current parser's refusal (parser-rejects) is NOT a fault: it is still DER evidence.
 matrix="booleans-ios-plain=garbage strings-ios-plain=unsigned integers-ios-plain=no-der dicts-ios-plain=empty-der unsorted-ios-plain=bad-asn1 many-ios-plain=trailing-asn1 duplicate-ios-plain=two-elements real-ios-plain=bad-length data-ios-plain=bad-magic date-ios-plain=der-seal-mismatch booleans-mac-plain=xml-seal-mismatch strings-mac-plain=verify-fails integers-mac-plain=probe-crash dicts-mac-plain=parser-rejects"
 runmode "$matrix"
-[ "$rc" -eq 0 ] && [ "$(count '=> DER evidence obtained')" -eq 15 ] && [ "$(count 'NOT DER evidence')" -eq 13 ]; chk "script (stub run): 13 faulty supporting cases are reported and NOT counted (15 evidence), and the script still exits 0 (exit $rc)" $?
-grep -F "RESULT summary: signing succeeded for 28 case(s); Apple's codesign verified 27; DER evidence obtained for 15 (the current parser accepted 14 and rejected 1 of those)" >/dev/null <<<"$out"; chk "script (stub run): the summary counts 28 signed, 27 verified, 15 evidence, parser accepted 14 / rejected 1" $?
+[ "$rc" -eq 0 ] && [ "$(count '=> DER evidence obtained')" -eq 19 ] && [ "$(count 'NOT DER evidence')" -eq 13 ]; chk "script (stub run): 13 faulty supporting cases are reported and NOT counted (19 evidence), and the script still exits 0 (exit $rc)" $?
+grep -F "RESULT summary: signing succeeded for 32 case(s); Apple's codesign verified 31; DER evidence obtained for 19 (the current parser accepted 18 and rejected 1 of those)" >/dev/null <<<"$out"; chk "script (stub run): the summary counts 32 signed, 31 verified, 19 evidence, parser accepted 18 / rejected 1" $?
 expect() { # CASE FRAGMENT-OF-ITS-OUTPUT DESCRIPTION
   blk="$(block "$1")"; grep -F -e "$2" <<<"$blk" >/dev/null; chk "script (stub run): $1 $3" $?
 }
@@ -260,18 +310,37 @@ grep -F "RESULT dicts-mac-plain: signing=ok verify=ok evidence=ok fixture_dump=n
 
 # A fault in a REQUIRED case fails the script, whatever else succeeded. (All supporting cases are made to fail fast, to keep the run short.)
 for pair in garbage unsigned no-der empty-der bad-asn1 trailing-asn1 bad-length der-seal-mismatch xml-seal-mismatch verify-fails probe-crash; do
-  runmode "runner-ios-xcode=$pair" "$others"
-  [ "$rc" -eq 1 ] && grep -F "RESULT FAILED: no suitable DER evidence and fixture dump for the required case(s): runner-ios-xcode" >/dev/null <<<"$out" && [ "$(count '=> DER evidence obtained')" -eq 2 ]
-  chk "script (stub run): the required case runner-ios-xcode with fault '$pair' fails the script although codesign succeeded (exit $rc)" $?
+  runmode "runner-ios-xcodelike=$pair" "$others"
+  [ "$rc" -eq 1 ] && grep -F "RESULT FAILED: no suitable DER evidence and fixture dump for the required case(s): runner-ios-xcodelike" >/dev/null <<<"$out" && [ "$(count '=> DER evidence obtained')" -eq 2 ]
+  chk "script (stub run): the required case runner-ios-xcodelike with fault '$pair' fails the script although codesign succeeded (exit $rc)" $?
+done
+
+# Task A: the EXPLORATORY logref reference may fail in every way (signing, verification, garbage, no DER blob) without failing the run
+runmode "runner-ios-logref=garbage arrays-ios-logref=no-der runner-mac-logref=verify-fails" "arrays-mac-logref"
+[ "$rc" -eq 0 ] && [ "$(count 'signing=FAILED')" -eq 1 ] && [ "$(count 'NOT DER evidence')" -eq 3 ] && [ "$(count '=> DER evidence obtained')" -eq 28 ] \
+  && grep -F "requested fixture dumps complete for 3 of 3" >/dev/null <<<"$out" && grep -F "RESULT OK: DER evidence and the fixture dump were obtained for every required case" >/dev/null <<<"$out"
+chk "script (stub run): four failing exploratory logref cases are reported as results (1 signing failure, 3 not evidence) and the run still succeeds (exit $rc)" $?
+# a MODEL (not Apple's behaviour, which has not been observed) of the suspected problem: a file signed with a certificate-anchored
+# requirement fails Apple's verification. The controlled variants (no requirement) pass; the logref reference fails; the run succeeds.
+STUB_REQ_FAILS=1 runmode ""
+[ "$rc" -eq 0 ] && [ "$(count 'verify=FAILED(exit 3)')" -eq 4 ] && [ "$(count '^RESULT .*-logref: signing=ok verify=FAILED(exit 3) evidence=ok .* => NOT DER evidence')" -eq 4 ] \
+  && grep -F "RESULT summary: signing succeeded for 32 case(s); Apple's codesign verified 28; DER evidence obtained for 28" >/dev/null <<<"$out" \
+  && grep -F "requested fixture dumps complete for 3 of 3" >/dev/null <<<"$out"
+chk "script (stub run): if a certificate-anchored requirement breaks verification (modelled), the four logref cases are NOT evidence, the controlled variants still are, and the run succeeds (exit $rc)" $?
+# the other required cases fail the run when their verification fails
+for c in arrays-ios-xcodelike runner-mac-plain; do
+  runmode "$c=verify-fails" "$others"
+  [ "$rc" -eq 1 ] && grep -F "RESULT FAILED: no suitable DER evidence and fixture dump for the required case(s): $c" >/dev/null <<<"$out" && [ "$(count '=> DER evidence obtained')" -eq 2 ]
+  chk "script (stub run): the required case $c with a failing verification fails the run although codesign signed it (exit $rc)" $?
 done
 # R3: complete DER evidence WITHOUT its requested fixture dump is not a success for a required case
 r3() { # DESCRIPTION FAULT EXPECTED-FRAGMENT-OF-THE-CASE-BLOCK
-  runmode "runner-ios-xcode=$2" "$others"
-  [ "$rc" -eq 1 ] && [ "$(count 'RESULT runner-ios-xcode: signing=ok verify=ok evidence=ok fixture_dump=INCOMPLETE parser=accepted => NOT a success: DER evidence obtained, but the requested fixture dump is INCOMPLETE')" -eq 1 ] \
-    && grep -F "RESULT FAILED: no suitable DER evidence and fixture dump for the required case(s): runner-ios-xcode" >/dev/null <<<"$out" \
+  runmode "runner-ios-xcodelike=$2" "$others"
+  [ "$rc" -eq 1 ] && [ "$(count 'RESULT runner-ios-xcodelike: signing=ok verify=ok evidence=ok fixture_dump=INCOMPLETE parser=accepted => NOT a success: DER evidence obtained, but the requested fixture dump is INCOMPLETE')" -eq 1 ] \
+    && grep -F "RESULT FAILED: no suitable DER evidence and fixture dump for the required case(s): runner-ios-xcodelike" >/dev/null <<<"$out" \
     && [ "$(count '=> DER evidence obtained')" -eq 2 ] && grep -F "requested fixture dumps complete for 2 of 3" >/dev/null <<<"$out"
   chk "script (stub run): $1: the DER evidence is complete but the requested dump is not, so the required case FAILS the script (exit $rc)" $?
-  if [ -n "${3:-}" ]; then blk="$(block runner-ios-xcode)"; grep -F -e "$3" <<<"$blk" >/dev/null; chk "script (stub run): ...and the output says why: $3" $?; fi
+  if [ -n "${3:-}" ]; then blk="$(block runner-ios-xcodelike)"; grep -F -e "$3" <<<"$blk" >/dev/null; chk "script (stub run): ...and the output says why: $3" $?; fi
 }
 r3 "a valid sealed executable with an unexpected CodeDirectory identifier" other-ident "the requested file dump was not produced: not designated synthetic input"
 r3 "a valid sealed executable larger than 64 KiB" oversized "larger than the 65536-byte limit"
@@ -286,15 +355,15 @@ for fault in other-ident oversized; do
   chk "script (stub run): a supporting case with fault '$fault' has complete evidence and no dump is requested for it (exit $rc)" $?
 done
 # a required case whose dump is fine and whose evidence is not (the existing distinction), and a parser refusal with a good dump
-runmode "runner-ios-xcode=parser-rejects" "$others"
+runmode "runner-ios-xcodelike=parser-rejects" "$others"
 [ "$rc" -eq 0 ] && grep -F "evidence=ok fixture_dump=ok parser=rejected => DER evidence obtained" >/dev/null <<<"$out"; chk "script (stub run): a required case the current parser refuses still succeeds when its evidence and dump are complete (exit $rc)" $?
 
 runmode "" "$required $others"
-[ "$rc" -eq 1 ] && [ "$(count 'signing=FAILED')" -eq 28 ] && grep -F "RESULT summary: signing succeeded for 0 case(s)" >/dev/null <<<"$out" && grep -F "codesign" >/dev/null <<<"$out"; chk "script (stub run): a codesign that fails everywhere is reported case by case and the script fails (exit $rc)" $?
+[ "$rc" -eq 1 ] && [ "$(count 'signing=FAILED')" -eq 32 ] && grep -F "RESULT summary: signing succeeded for 0 case(s)" >/dev/null <<<"$out" && grep -F "codesign" >/dev/null <<<"$out"; chk "script (stub run): a codesign that fails everywhere is reported case by case and the script fails (exit $rc)" $?
 runmode "" "$others"
-[ "$rc" -eq 0 ] && [ "$(count 'signing=FAILED')" -eq 25 ] && [ "$(count '=> DER evidence obtained')" -eq 3 ]; chk "script (stub run): when only the 3 required cases are signed (25 exploratory and supporting cases fail) the script exits 0 (exit $rc)" $?
-runmode "" "runner-ios-xcode runner-mac-plain $others"
-[ "$rc" -eq 1 ] && grep -F "required case(s): runner-ios-xcode runner-mac-plain" >/dev/null <<<"$out"; chk "script (stub run): every missing required case is named (exit $rc)" $?
+[ "$rc" -eq 0 ] && [ "$(count 'signing=FAILED')" -eq 29 ] && [ "$(count '=> DER evidence obtained')" -eq 3 ]; chk "script (stub run): when only the 3 required cases are signed (29 exploratory and supporting cases fail) the script exits 0 (exit $rc)" $?
+runmode "" "runner-ios-xcodelike runner-mac-plain $others"
+[ "$rc" -eq 1 ] && grep -F "required case(s): runner-ios-xcodelike runner-mac-plain" >/dev/null <<<"$out"; chk "script (stub run): every missing required case is named (exit $rc)" $?
 
 out="$(PATH="$tmp/stub:$PATH" bash "$script" "$tmp" 2>&1)"; rc=$?
 [ "$rc" -eq 2 ] && grep -F "already exists" >/dev/null <<<"$out"; chk "script (stub run): an existing work directory is refused (and not removed)" $?
