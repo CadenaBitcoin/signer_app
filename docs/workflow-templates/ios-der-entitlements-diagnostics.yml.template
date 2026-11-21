@@ -1,15 +1,21 @@
 # THIS FILE IS A TEMPLATE, NOT A WORKFLOW. GitHub does not read it: it lives under docs/ and has no `.yml` name, so nothing in this
-# repository can start it. It is kept for review only (Issue #71, Phase 2 of the verifier repair).
+# repository can start it. It is the reviewed reference copy (Issue #71, Phase 2 of the verifier repair) and STAYS in the repository
+# when the temporary workflow made from it is removed.
 #
-# TO ACTIVATE IT, all of the following are needed, none of which has happened:
-#   1. a separate, explicit authorization (the CTO's written decision) to run the experiment;
-#   2. a reviewed pull request that copies this file to .github/workflows/ios-der-entitlements-diagnostics.yml, after a fresh
-#      review of this file, tool/probe_der_entitlements.sh and tool/der_entitlements_probe.py as they are then;
-#   3. only then may anyone with write access start it by hand (workflow_dispatch), and it would run from the branch it is started on.
-#      That last point is why the workflow is not kept in .github/workflows/ meanwhile: a workflow there can be started without any gate.
+# THE ACTIVATION COPY (Phase 4 of Issue #71). Everything below the header, comments aside, is copied verbatim into
+# .github/workflows/ios-der-entitlements-diagnostics.yml by a reviewed pull request; tool/test_ios_der_diagnostics.sh fails if the two
+# differ in anything but comments. Activating it needs ALL of the following, and each RUN needs its own:
+#   1. a separate, explicit authorization (the CTO's written decision) to run the experiment, naming that one run;
+#   2. the reviewed activation pull request, merged into the default branch (GitHub starts a workflow_dispatch workflow only from a
+#      file that exists there), after a fresh review of this file, tool/probe_der_entitlements.sh and tool/der_entitlements_probe.py;
+#   3. only then may anyone with write access start it by hand (workflow_dispatch). A workflow file in .github/workflows/ can be
+#      started without any gate, which is why the activation copy is temporary: one authorized run, then a reviewed pull request
+#      removes it (docs/IOS_SIGNING.md, section 3.1c).
 #
 # iOS DER ENTITLEMENTS DIAGNOSTICS (Issue #71, Phase 2 of the verifier repair). PREPARED FOR REVIEW; NOT TO BE STARTED
-# WITHOUT A SEPARATE, EXPLICIT AUTHORIZATION. It is not a build, a release, a signing run or an upload.
+# WITHOUT A SEPARATE, EXPLICIT AUTHORIZATION. It DOES perform signing, of one narrow kind: AD-HOC signing (Apple's own `codesign -s -`) of
+# DISPOSABLE SYNTHETIC executables that it builds itself. It is not an application build, not a production signing operation,
+# not an Apple Distribution signing operation, not a release and not an upload, and it accesses no Apple signing credential.
 #
 # Question: what does a DER entitlements blob written by Apple's own `codesign --generate-entitlement-der` really look like?
 # tool/ipa_inspect.py parse_der_entitlements assumes a layout (the dictionary as an ASN.1 SET) from public descriptions. On the
@@ -78,6 +84,17 @@ jobs:
     runs-on: macos-15
     timeout-minutes: 20
     steps:
+      - name: Refuse anything but the first attempt of a manual run on the default branch
+        # Only the runner's own variables are read; nothing from the event or the repository reaches the shell. This does not make a
+        # modified copy of the file on another branch safe (such a copy has no guard): it stops the reviewed file being run by
+        # accident from a feature branch or re-run from the Actions page, and it records WHICH commit ran, so that the commit can be
+        # compared with the one the authorization names.
+        run: |
+          echo "commit $GITHUB_SHA, run $GITHUB_RUN_ID, attempt $GITHUB_RUN_ATTEMPT, event $GITHUB_EVENT_NAME"
+          [ "$GITHUB_EVENT_NAME" = "workflow_dispatch" ] || { echo "::error::Only a manual start is allowed."; exit 1; }
+          [ "$GITHUB_REF" = "refs/heads/development" ] || { echo "::error::Only the development branch may run this workflow."; exit 1; }
+          [ "$GITHUB_RUN_ATTEMPT" = "1" ] || { echo "::error::A re-run is not authorized: start a new run only with a new written authorization."; exit 1; }
+
       - name: Checkout this revision (the repository's own tools)
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
@@ -103,15 +120,22 @@ jobs:
           {
             echo "## iOS DER entitlements diagnostics (NOT a release)"
             echo ""
-            echo "Apple's \`codesign\` was asked to sign a **disposable program** ad hoc (no identity, no signing material, no Apple service)."
-            echo "Whether DER evidence was obtained is decided by the previous step, not by this summary: that step fails unless the required cases passed"
-            echo "signing, Apple's verification and the probe's evidence checks (lines starting with \`RESULT\` in its log; the current parser's verdict is reported apart)."
-            echo "The DER blobs, their ASN.1 outline and, for the three required cases, the signed disposable file (base64) are in that log, lines starting with \`PROBE\`."
-            echo "This repository is public, so the log is publicly readable: only synthetic data is printed. The three fixtures are rebuilt offline with \`tool/extract_probe_fixtures.py\` from a saved log (docs/IOS_SIGNING.md, section 3.1b)."
+            echo "This summary is written whether or not the earlier steps ran or passed. It reports no result: it does not say that signing happened,"
+            echo "or that DER evidence or fixture dumps exist. Read the job log for that."
+            echo ""
+            echo "What the workflow is for: its probe step ad-hoc signs disposable synthetic executables (Apple's \`codesign -s -\`) and prints what"
+            echo "Apple's tool wrote. It is not an application build, a production signing operation, an Apple Distribution signing operation, a release"
+            echo "or an upload, and it accesses no Apple signing credential. It has no upload step and references no secret."
+            echo ""
+            echo "What happened is in the job log, step by step: the guard, checkout and Xcode steps must have passed before the probe step ran at all."
+            echo "Only if the probe step passed, and its log ends with \`RESULT OK: DER evidence and the fixture dump were obtained for every required case\`,"
+            echo "does the log hold DER evidence and the three fixture dumps (lines starting with \`RESULT\` give each case's verdict; lines starting with"
+            echo "\`PROBE\` hold the details). If the probe step failed, its log shows which case and why; if it did not run, there is nothing to read."
+            echo "The log of this public repository is publicly readable: only synthetic data is printed. The three fixtures are rebuilt offline with"
+            echo "\`tool/extract_probe_fixtures.py\` from a saved log (docs/IOS_SIGNING.md, section 3.1b)."
             echo ""
             echo "**Success here does not prove Apple distribution compatibility.** It shows the format Apple's tool writes; Xcode makes the same"
-            echo "kind of ad-hoc local call for a Distribution signature and attaches a CMS signature from Apple's cloud service, which this run does not exercise."
-            echo "Nothing was uploaded and no credential was used."
+            echo "kind of ad-hoc local call for a Distribution signature and attaches a CMS signature from Apple's cloud service, which this workflow does not exercise."
             echo ""
-            echo "Xcode: $(xcodebuild -version | head -1)"
+            echo "Xcode selected on the runner when this summary was written: $(xcodebuild -version 2>/dev/null | head -1)"
           } >> "$GITHUB_STEP_SUMMARY"

@@ -1,15 +1,18 @@
 #!/usr/bin/env bash
-# Static tests of the DER entitlements diagnostics of Issue #71 (Phase 2 of the verifier repair): the workflow TEMPLATE
-# docs/workflow-templates/ios-der-entitlements-diagnostics.yml.template (it is NOT a workflow: GitHub does not read it),
-# tool/probe_der_entitlements.sh and tool/der_entitlements_probe.py.
+# Static tests of the DER entitlements diagnostics of Issue #71 (Phases 2 to 4 of the verifier repair): the workflow TEMPLATE
+# docs/workflow-templates/ios-der-entitlements-diagnostics.yml.template (it is NOT a workflow: GitHub does not read it), the temporary
+# workflow .github/workflows/ios-der-entitlements-diagnostics.yml when it exists, tool/probe_der_entitlements.sh and
+# tool/der_entitlements_probe.py.
 # They read the files and run the script's own flow against STUB macOS commands; they run nothing on macOS and start
 # nothing on GitHub.
 #
 #   tool/test_ios_der_diagnostics.sh
 #
-# What they protect: the experiment must be INACTIVE (no executable workflow can start it), and, if it is ever activated,
-# stay manual, input-free, credential-free, upload-free, without contact to Apple services, limited to a disposable program,
-# bounded in what it prints, and say that success does not prove Apple distribution compatibility.
+# What they protect: the experiment is either INACTIVE (no file that GitHub reads refers to it) or ACTIVE only as the one temporary
+# workflow that equals the reviewed template (Phase 4); in both states the template, and the workflow when it exists, stay manual,
+# input-free, credential-free (contents: read, no OIDC, no secret), upload-free, without contact to Apple services, limited to a
+# disposable program, guarded against a re-run or a start from another branch, bounded in what they print, and say that success does
+# not prove Apple distribution compatibility. Adding or removing the temporary workflow needs no change to these tests.
 # (No `grep -q` at the end of a pipeline: under pipefail an early-closed pipe is a SIGPIPE failure.)
 # Exit 0 only if every check passes.
 set -uo pipefail
@@ -26,34 +29,100 @@ chk() { # DESCRIPTION CONDITION(0 = good)
   if [ "$2" -eq 0 ]; then ok "$1"; else bad "$1"; fi
 }
 
-# the experiment is inactive: no file that GitHub reads refers to it
-[ ! -e "$root/.github/workflows/ios-der-entitlements-diagnostics.yml" ]; chk "inactive: there is no workflow of that name under .github/workflows/" $?
-[ -z "$(grep -rlE 'probe_der_entitlements|der_entitlements_probe|ios-der-entitlements-diagnostics' "$root/.github" 2>/dev/null || true)" ]; chk "inactive: nothing under .github/ (workflows, actions, templates) refers to the probe or to the template" $?
-[ -z "$(grep -rl -- 'generate-entitlement-der' "$root/.github" 2>/dev/null || true)" ]; chk "inactive: nothing under .github/ asks Apple's codesign for DER entitlements" $?
-case "$wf" in *.yml|*.yaml) false ;; */docs/workflow-templates/*.template) true ;; *) false ;; esac; chk "inactive: the template is under docs/workflow-templates/ and its name is not .yml or .yaml" $?
+# ---- the two states of the experiment, both fully asserted ----
+# INACTIVE: no file that GitHub reads refers to it (the state of the repository before and after the temporary run).
+# ACTIVE: the temporary workflow file exists. It must be the ONLY file under .github/ that refers to the experiment and must equal the
+# reviewed template (comments aside), so removing it needs no change to these tests and adding an altered copy fails them.
+act="$root/.github/workflows/ios-der-entitlements-diagnostics.yml"
+if [ -e "$act" ]; then state=active; else state=inactive; fi
+echo "state of the DER experiment in this tree: $state (both states are checked)"
+refs="$(grep -rlE 'probe_der_entitlements|der_entitlements_probe|ios-der-entitlements-diagnostics' "$root/.github" 2>/dev/null | sort | tr '\n' ' ')"
+if [ "$state" = inactive ]; then
+  [ -z "$refs" ]; chk "inactive: nothing under .github/ (workflows, actions, templates) refers to the probe or to the template (found: ${refs:-none})" $?
+else
+  [ "$refs" = "$act " ]; chk "active: the temporary workflow is the ONLY file under .github/ that refers to the probe or to the template (found: $refs)" $?
+  [ "$(find "$root/.github/workflows" -maxdepth 1 -type f \( -name 'ios-der-entitlements-diagnostics*' -o -name '*der-entitlements*' \) | wc -l | tr -d ' ')" -eq 1 ]; chk "active: exactly one workflow file belongs to the experiment (no second copy under another name)" $?
+  diff <(grep -vE '^[[:space:]]*#' "$wf") <(grep -vE '^[[:space:]]*#' "$act") >/dev/null; chk "active: the workflow equals the reviewed template in everything but comments (the template is what was reviewed)" $?
+  grep -F "TEMPORARY WORKFLOW" "$act" >/dev/null && grep -F "section 3.1c" "$act" >/dev/null && grep -F "ONCE by hand" "$act" >/dev/null && grep -F "separate written CTO authorization" "$act" >/dev/null && grep -F "removed by a second reviewed pull request" "$act" >/dev/null; chk "active: its header says it is temporary, started once after a separate written authorization, and removed by a second reviewed pull request" $?
+fi
+der_hits=""
+while IFS= read -r f; do
+  if grep -vE '^[[:space:]]*#' "$f" | grep -F -- 'generate-entitlement-der' >/dev/null; then der_hits="$der_hits $f"; fi
+done < <(find "$root/.github" -type f)
+[ -z "$der_hits" ]; chk "both states: no workflow CODE under .github/ asks Apple's codesign for DER entitlements (only the script does; comments may name it) (found:${der_hits:- none})" $?
+case "$wf" in *.yml|*.yaml) false ;; */docs/workflow-templates/*.template) true ;; *) false ;; esac; chk "both states: the template is under docs/workflow-templates/ and its name is not .yml or .yaml (it stays when the workflow is removed)" $?
 grep -F "THIS FILE IS A TEMPLATE, NOT A WORKFLOW" "$wf" >/dev/null && grep -F "a separate, explicit authorization" "$wf" >/dev/null; chk "template: says it is not a workflow and what activating it needs" $?
-wfcode="$(grep -vE '^[[:space:]]*#' "$wf")"
-on_block="$(echo "$wfcode" | sed -n '/^on:/,/^permissions:/p')"
-triggers="$(grep -E '^  [a-z_]+:' <<<"$on_block" | tr -d ' :' | tr '\n' ' ')"
-[ "$triggers" = "workflow_dispatch " ]; chk "template (if activated): starts only by hand (workflow_dispatch), not on push, pull request or schedule (found: $triggers)" $?
-! grep -E 'inputs:' >/dev/null <<<"$on_block"; chk "template (if activated): has no inputs (nothing is chosen by whoever starts it)" $?
-perm="$(echo "$wfcode" | sed -n '/^permissions:/,/^concurrency:/p' | grep -E '^  [a-z-]+:' | tr -d ' ' | tr '\n' ' ')"
-[ "$perm" = "contents:read " ]; chk "template (if activated): permissions are exactly contents: read (found: $perm)" $?
-! grep -E 'secrets\.|environment:|upload-artifact|download-artifact|id-token|workflow_run|pull_request|github\.token|GH_TOKEN' >/dev/null <<<"$wfcode"; chk "template (if activated): no secret, environment, artifact upload/download, OIDC or API token, or pull-request trigger" $?
-! grep -iE 'altool|notarytool|testflight|appstoreconnect|app-store-connect|developer\.apple|exportArchive|\.p8|AuthKey|\.mobileprovision|provisioning|keychain|p12|security import' >/dev/null <<<"$wfcode"; chk "template (if activated): no Apple service, export, API-key, provisioning-profile, keychain or certificate reference" $?
-! grep -E '\$\{\{' >/dev/null <<<"$wfcode"; chk "template (if activated): no expression reaches a shell (no input, no script injection)" $?
-bad_uses="$(grep -E '^[[:space:]]*-?[[:space:]]*uses:' <<<"$wfcode" | grep -vE '@[0-9a-f]{40}( |$)' || true)"
-[ -z "$bad_uses" ]; chk "template (if activated): every action is pinned to a full commit SHA" $?
-grep -F "runs-on: macos-15" >/dev/null <<<"$wfcode"; chk "template (if activated): runs on macos-15" $?
-for key in XCODE_APP EXPECTED_XCODE; do
-  a="$(grep -E "^  $key:" "$wf" | head -1 | sed 's/[[:space:]]*#.*//')"
-  b="$(grep -E "^  $key:" "$root/.github/workflows/ios-ci-validation.yml" | head -1 | sed 's/[[:space:]]*#.*//')"
-  [ -n "$a" ] && [ "$a" = "$b" ]; chk "template (if activated): $key equals the pin of the iOS validation workflow" $?
-done
-grep -E '^    timeout-minutes: [0-9]+' >/dev/null <<<"$wfcode"; chk "template (if activated): the job has a timeout" $?
-[ "$(grep -c 'bash tool/probe_der_entitlements.sh' <<<"$wfcode")" -eq 1 ]; chk "template (if activated): runs the probe script exactly once and nothing else of substance" $?
-grep -F "SUCCESS HERE DOES NOT PROVE APPLE DISTRIBUTION COMPATIBILITY" "$wf" >/dev/null && grep -F "does not prove Apple distribution compatibility" "$wf" >/dev/null; chk "template (if activated): states that success does not prove Apple distribution compatibility (header and report)" $?
-grep -F "WITHOUT A SEPARATE, EXPLICIT AUTHORIZATION" "$wf" >/dev/null; chk "template (if activated): says it is not to be started without a separate authorization" $?
+
+# The same assertions for the template and, when it exists, the temporary workflow: manual only, no credential, least privilege.
+guard_run() { # FILE-CODE EVENT REF ATTEMPT -> runs ONLY the guard step's shell (no macOS, no GitHub) with that environment
+  local code="$1" ev="$2" ref="$3" att="$4" body
+  body="$(awk '/- name: Refuse anything but the first attempt/{f=1;next} f&&/^      - name:/{exit} f&&/run: \|/{r=1;next} f&&r{sub(/^          /,"");print}' <<<"$code")"
+  if [ -z "$att" ]; then env -i PATH="$PATH" GITHUB_SHA=0123456789abcdef0123456789abcdef01234567 GITHUB_RUN_ID=1 GITHUB_EVENT_NAME="$ev" GITHUB_REF="$ref" bash -c "$body" >/dev/null 2>&1
+  else env -i PATH="$PATH" GITHUB_SHA=0123456789abcdef0123456789abcdef01234567 GITHUB_RUN_ID=1 GITHUB_RUN_ATTEMPT="$att" GITHUB_EVENT_NAME="$ev" GITHUB_REF="$ref" bash -c "$body" >/dev/null 2>&1; fi
+}
+check_workflow() { # FILE LABEL
+  local f="$1" label="$2" wfcode on_block triggers perm a b bad_uses
+  wfcode="$(grep -vE '^[[:space:]]*#' "$f")"
+  on_block="$(echo "$wfcode" | sed -n '/^on:/,/^permissions:/p')"
+  triggers="$(grep -E '^  [a-z_]+:' <<<"$on_block" | tr -d ' :' | tr '\n' ' ')"
+  [ "$triggers" = "workflow_dispatch " ]; chk "$label: starts only by hand (workflow_dispatch), not on push, pull request or schedule (found: $triggers)" $?
+  ! grep -E 'inputs:' >/dev/null <<<"$on_block"; chk "$label: has no inputs (nothing is chosen by whoever starts it)" $?
+  perm="$(echo "$wfcode" | sed -n '/^permissions:/,/^concurrency:/p' | grep -E '^  [a-z-]+:' | tr -d ' ' | tr '\n' ' ')"
+  [ "$perm" = "contents:read " ]; chk "$label: permissions are exactly contents: read, so every other scope (OIDC id-token included) is none (found: $perm)" $?
+  [ "$(grep -cE '^permissions:' <<<"$wfcode")" -eq 1 ] && ! grep -E '^    permissions:' >/dev/null <<<"$wfcode"; chk "$label: one top-level permissions block and no job-level override" $?
+  ! grep -E 'secrets\.|environment:|upload-artifact|download-artifact|id-token|workflow_run|pull_request|github\.token|GH_TOKEN' >/dev/null <<<"$wfcode"; chk "$label: no secret, environment, artifact upload/download, OIDC or API token, or pull-request trigger" $?
+  ! grep -iE 'altool|notarytool|testflight|appstoreconnect|app-store-connect|developer\.apple|exportArchive|\.p8|AuthKey|\.mobileprovision|provisioning|keychain|p12|security import' >/dev/null <<<"$wfcode"; chk "$label: no Apple service, export, API-key, provisioning-profile, keychain or certificate reference" $?
+  ! grep -E '\$\{\{' >/dev/null <<<"$wfcode"; chk "$label: no expression reaches a shell (no input, no script injection)" $?
+  bad_uses="$(grep -E '^[[:space:]]*-?[[:space:]]*uses:' <<<"$wfcode" | grep -vE '@[0-9a-f]{40}( |$)' || true)"
+  [ -z "$bad_uses" ]; chk "$label: every action is pinned to a full commit SHA" $?
+  [ "$(grep -cE '^[[:space:]]*-?[[:space:]]*uses:' <<<"$wfcode")" -eq 1 ] && grep -E 'uses: actions/checkout@' >/dev/null <<<"$wfcode"; chk "$label: the only action is actions/checkout" $?
+  grep -E '^          persist-credentials: false$' >/dev/null <<<"$wfcode"; chk "$label: checkout keeps no GitHub credential (persist-credentials: false)" $?
+  grep -F "runs-on: macos-15" >/dev/null <<<"$wfcode"; chk "$label: runs on macos-15" $?
+  [ "$(grep -c 'runs-on:' <<<"$wfcode")" -eq 1 ] && [ "$(grep -cE '^  [a-z_-]+:$' <<<"$(sed -n '/^jobs:/,$p' <<<"$wfcode")")" -eq 1 ]; chk "$label: exactly one job on one runner" $?
+  for key in XCODE_APP EXPECTED_XCODE; do
+    a="$(grep -E "^  $key:" "$f" | head -1 | sed 's/[[:space:]]*#.*//')"
+    b="$(grep -E "^  $key:" "$root/.github/workflows/ios-ci-validation.yml" | head -1 | sed 's/[[:space:]]*#.*//')"
+    [ -n "$a" ] && [ "$a" = "$b" ]; chk "$label: $key equals the pin of the iOS validation workflow (Xcode 26.3)" $?
+  done
+  grep -F 'xcodebuild -version | sed' >/dev/null <<<"$wfcode" && grep -F '"$actual" != "$EXPECTED_XCODE"' >/dev/null <<<"$wfcode"; chk "$label: fails unless xcodebuild reports exactly the expected Xcode (the availability check)" $?
+  grep -E '^    timeout-minutes: [0-9]+' >/dev/null <<<"$wfcode"; chk "$label: the job has a timeout" $?
+  [ "$(grep -c 'bash tool/probe_der_entitlements.sh' <<<"$wfcode")" -eq 1 ]; chk "$label: runs the probe script exactly once and nothing else of substance" $?
+  ! grep -E '(^|[[:space:]])(gh |git (push|commit|tag|config)|curl |wget |scp |ssh |rsync |aws |gsutil |nc )' >/dev/null <<<"$wfcode"; chk "$label: no GitHub, network or remote-copy command in any step" $?
+  grep -F "SUCCESS HERE DOES NOT PROVE APPLE DISTRIBUTION COMPATIBILITY" "$f" >/dev/null && grep -F "does not prove Apple distribution compatibility" "$f" >/dev/null; chk "$label: states that success does not prove Apple distribution compatibility (header and report)" $?
+  grep -F "WITHOUT A SEPARATE, EXPLICIT AUTHORIZATION" "$f" >/dev/null; chk "$label: says it is not to be started without a separate authorization" $?
+  # P4-R1: the description of what the experiment is must say that it DOES sign (ad hoc, disposable), and what it is not
+  local hdr; hdr="$(grep -E '^[[:space:]]*#' "$f")"   # the comment header only: the Report text must not satisfy these by itself
+  grep -F "It DOES perform signing" >/dev/null <<<"$hdr" && grep -F "AD-HOC signing" >/dev/null <<<"$hdr" && grep -F "DISPOSABLE SYNTHETIC executables" >/dev/null <<<"$hdr" && grep -F "not a production signing operation" >/dev/null <<<"$hdr" && grep -F "not an Apple Distribution signing operation" >/dev/null <<<"$hdr" && grep -F "and it accesses no Apple signing credential" >/dev/null <<<"$hdr"; chk "$label: its header says it performs ad-hoc signing of disposable synthetic executables, and that it is no application build, production or Distribution signing, release or upload, and uses no Apple signing credential" $?
+  ! grep -F "not a build, a release, a signing run or an upload" "$f" >/dev/null; chk "$label: no longer says that it is not a signing run" $?
+  # P4-R2: the Report step runs after ANY failure (if: always()), so it must be neutral and conditional. Run its shell with a stub xcodebuild.
+  local rep sumf stub
+  rep="$(awk '/^      - name: Report$/{f=1;next} f&&/run: \|/{r=1;next} f&&r{sub(/^          /,"");print}' <<<"$wfcode")"
+  [ "$(grep -E '^      - name:' <<<"$wfcode" | tail -1)" = "      - name: Report" ] && grep -E '^        if: always\(\)$' >/dev/null <<<"$wfcode"; chk "$label: the Report step is the last step and still runs after any failure (if: always())" $?
+  stub="$(mktemp -d)"; printf '#!/bin/sh\nexit 1\n' > "$stub/xcodebuild"; chmod 755 "$stub/xcodebuild"
+  for variant in early-failure xcode-ok; do
+    sumf="$(mktemp)"
+    [ "$variant" = xcode-ok ] && printf '#!/bin/sh\necho "Xcode 26.3"\necho "Build version 17C529"\n' > "$stub/xcodebuild"
+    env -i PATH="$stub:$PATH" GITHUB_STEP_SUMMARY="$sumf" bash -e -c "$rep" >/dev/null 2>&1; rrc=$?
+    [ "$rrc" -eq 0 ] && [ -s "$sumf" ]; chk "$label: the Report step writes its summary and succeeds when the earlier steps failed and xcodebuild fails or works ($variant)" $?
+    ! grep -E 'was asked to sign|signing succeeded|DER evidence was obtained|were produced|Nothing was uploaded and no credential was used|all required cases passed' >/dev/null "$sumf"; chk "$label: the report ($variant) makes no claim that signing happened or that evidence exists" $?
+    ! grep -F "were obtained" "$sumf" | grep -vF 'RESULT OK: DER evidence and the fixture dump were obtained for every required case' >/dev/null; chk "$label: the report ($variant) mentions obtained evidence only as the condition 'the probe log ends with RESULT OK'" $?
+    grep -F "It reports no result" "$sumf" >/dev/null && grep -F "does not say that signing happened" "$sumf" >/dev/null && grep -F "or that DER evidence or fixture dumps exist" "$sumf" >/dev/null; chk "$label: the report ($variant) says that it reports no result and claims neither signing nor evidence" $?
+    grep -F "must have passed before the probe step ran at all" "$sumf" >/dev/null && grep -F "Only if the probe step passed" "$sumf" >/dev/null && grep -F "RESULT OK: DER evidence and the fixture dump were obtained for every required case" "$sumf" >/dev/null && grep -F "if it did not run, there is nothing to read" "$sumf" >/dev/null; chk "$label: the report ($variant) points to the probe step and its RESULT verdict lines, and to the earlier steps" $?
+    grep -F "does not prove Apple distribution compatibility" "$sumf" >/dev/null && grep -F "NOT a release" "$sumf" >/dev/null; chk "$label: the report ($variant) keeps that success does not prove Apple distribution compatibility" $?
+    grep -F '`codesign -s -`' "$sumf" >/dev/null && grep -F "accesses no Apple signing credential" "$sumf" >/dev/null && grep -F "no upload step and references no secret" "$sumf" >/dev/null; chk "$label: the report ($variant) states what the workflow is (ad hoc, no credential, no upload) with its markdown intact" $?
+    rm -f "$sumf"
+  done
+  rm -rf "$stub"
+  # the guard: the first step, shell only, refuses anything but a manual first attempt on development
+  [ "$(grep -E '^      - name:' <<<"$wfcode" | head -1)" = "      - name: Refuse anything but the first attempt of a manual run on the default branch" ]; chk "$label: the guard is the FIRST step (before checkout and before any tool runs)" $?
+  guard_run "$wfcode" workflow_dispatch refs/heads/development 1; chk "$label: the guard passes a manual first attempt on development" $?
+  ! guard_run "$wfcode" push refs/heads/development 1; chk "$label: the guard refuses any event but workflow_dispatch" $?
+  ! guard_run "$wfcode" workflow_dispatch refs/heads/issue/71-x 1; chk "$label: the guard refuses a feature branch" $?
+  ! guard_run "$wfcode" workflow_dispatch refs/heads/development-2 1 && ! guard_run "$wfcode" workflow_dispatch refs/tags/development 1 && ! guard_run "$wfcode" workflow_dispatch "refs/heads/development " 1; chk "$label: the guard matches the branch exactly (not a prefix, a tag or a trailing space)" $?
+  ! guard_run "$wfcode" workflow_dispatch refs/heads/development 2 && ! guard_run "$wfcode" workflow_dispatch refs/heads/development 10 && ! guard_run "$wfcode" workflow_dispatch refs/heads/development ""; chk "$label: the guard refuses a re-run (attempt 2 or more) and a missing attempt number" $?
+}
+check_workflow "$wf" "template (if activated)"
+[ "$state" = active ] && check_workflow "$act" "ACTIVE workflow"
 
 scode="$(grep -vE '^[[:space:]]*#' "$script")"
 ! grep -iE 'security |keychain|identity|p12|p8|mobileprovision|provisioning|altool|notarytool|curl|wget|gh |git |ssh|upload|exportArchive|xcodebuild (-exportArchive|-archive)|Runner\.app|\.ipa|xcarchive' >/dev/null <<<"$scode"; chk "script: no keychain, identity, profile, Apple service, network, upload, application, archive or IPA reference" $?
@@ -102,7 +171,16 @@ done
 grep -F "No IPA, profile, certificate or key in an artifact, Release, comment or log." "$doc" >/dev/null && grep -F "Derived values (a decoded profile, a base64 string) are never printed" "$doc" >/dev/null; chk "docs section 7: the original prohibition on printing base64 and signing material is still in place, word for word" $?
 grep -F "The only exception is the narrow one for the disposable synthetic fixtures of the DER experiment, section 3.1b; it is not a general exception." "$doc" >/dev/null; chk "docs section 7: points to the one narrow exception and says it is not general" $?
 grep -F "tool/extract_probe_fixtures.py" >/dev/null <<<"$docx" && grep -F "Never execute an extracted file" >/dev/null <<<"$docx" && grep -F "default branch" >/dev/null <<<"$docx"; chk "docs 3.1b: gives the evidence-recovery procedure, says never to execute the files, and the default-branch fact for activation" $?
-grep -F "NOT the command Xcode ran" "$wf" >/dev/null && grep -F "EXPLORATORY" "$wf" >/dev/null && grep -F "publicly readable" "$wf" >/dev/null && grep -F "tool/extract_probe_fixtures.py" "$wf" >/dev/null; chk "template: names the controlled and the exploratory variants, the public log and the extractor" $?
+doc31c="$(sed -n '/^### 3.1c /,/^### 3.2 /p' "$doc")"
+[ -n "$doc31c" ]; chk "docs: IOS_SIGNING.md has the Phase 4 section 3.1c (temporary activation)" $?
+for needle in "separate written CTO authorization for that one run" "Authorizations A, B and C" "Manual only, no inputs" "\`permissions: contents: read\`" "OIDC" "persist-credentials: false" "Guard (first step)" "refs/heads/development" "run attempt 1" "Lifecycle (one run)" "Review and approve the activation pull request" "Dispatch once" "Preserve the log and validate the three fixture dumps" "deletes only" "Only then" "Failure handling" "Approval for any further dispatch" "new written CTO authorization" "no linter has read the workflow" "Anyone with write access can start the workflow, from any branch" "does not stop a deliberately altered copy" "The log is public" "What enforces what" "GitHub's technical restrictions" "The workflow's execution guard" "The CTO's written governance authorization" "does not technically enforce it" "can dispatch the workflow, from any branch, as often as they like" "rejects re-run attempts" "does not prevent independently dispatched new runs" "One authorization permits exactly one dispatch" "consumed by that dispatch even if the guard, the checkout or the Xcode selection then fails" "Any subsequent dispatch needs a new written CTO authorization" "binds people, not GitHub" "does **not** stop a new, independently dispatched run"; do
+  grep -F -e "$needle" >/dev/null <<<"$doc31c"; chk "docs 3.1c: says: $needle" $?
+done
+! grep -F "Start again from \`development\` only if the authorization allows" "$doc" >/dev/null; chk "docs 3.1c: no longer suggests that a refused or failed dispatch can be repeated without a new authorization" $?
+grep -F "Prepared; temporary activation copy prepared in Phase 4, never run" "$doc" >/dev/null && ! grep -F "Prepared, INACTIVE" "$doc" >/dev/null; chk "docs: the status row describes the temporary activation copy and no longer claims the experiment is inactive" $?
+for f in "$wf" $([ "$state" = active ] && echo "$act"); do
+  grep -F "NOT the command Xcode ran" "$f" >/dev/null && grep -F "EXPLORATORY" "$f" >/dev/null && grep -F "publicly readable" "$f" >/dev/null && grep -F "tool/extract_probe_fixtures.py" "$f" >/dev/null; chk "$(basename "$f"): names the controlled and the exploratory variants, the public log and the extractor" $?
+done
 grep -F "test_extract_probe_fixtures.sh" "$root/.github/workflows/android-release-tests.yml" >/dev/null; chk "CI: the extractor tests run in the iOS signing security job" $?
 python3 -I -c "import ast,sys;ast.parse(open(sys.argv[1]).read())" "$probe"; chk "probe: der_entitlements_probe.py is valid Python" $?
 ! grep -E '^\s*(import|from)\s+(socket|urllib|http|requests|ssl|ftplib|smtplib)' "$probe" >/dev/null; chk "probe: imports nothing that could reach a network" $?
