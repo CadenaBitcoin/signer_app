@@ -27,6 +27,7 @@ import shutil
 import struct
 import subprocess
 import tempfile
+import unicodedata
 import xml.parsers.expat
 
 # ---- ASN.1 / BER (enough for CMS and X.509; indefinite lengths included) ---------------------
@@ -691,6 +692,341 @@ def parse_der_entitlements(blob):
     return _der_entitlement_dict(body)
 
 
+# ---- output sanitization (Phase 2 hardening) ---------------------------------------------------------------------
+# Everything that reaches a log or an evidence file may come from an IPA that someone else built: member names, property
+# list keys and values, entitlement strings, certificate fields. These functions are applied ONLY at the point of output.
+# The values that are hashed, compared or verified are never replaced by their escaped form.
+
+_ESCAPE_CATEGORIES = frozenset(("Cc", "Cf", "Cs", "Zl", "Zp"))  # controls, format (bidi, zero width), surrogates, line/paragraph separators
+MAX_LINE_CHARS = 4000
+
+
+def escape_text(text, backslash=False, limit=None):
+    """`text` made safe for ONE line of a log or evidence file.
+
+    Every control character (newline, carriage return, ESC and the C1 range that terminals read as escape sequences,
+    DEL), every format character (bidirectional overrides, zero-width characters, the byte order mark), every surrogate and
+    the Unicode line and paragraph separators is written as a backslash escape (x, u or U followed by hex digits). A line
+    therefore never ends early, never starts
+    with `::` (a GitHub workflow command is only read at the start of a line) and never carries a terminal escape sequence.
+    With backslash=True a backslash is written as two, which makes the encoding reversible: two different texts never give
+    the same result (used for evidence). `limit` cuts the result and says how much was cut."""
+    if isinstance(text, (bytes, bytearray)):
+        text = bytes(text).decode("utf-8", "backslashreplace")
+    elif not isinstance(text, str):
+        text = str(text)
+    out = []
+    for ch in text:
+        cp = ord(ch)
+        if ch == "\\" and backslash:
+            out.append("\\\\")
+        elif cp < 0x20 or cp == 0x7F or (cp > 0x7E and unicodedata.category(ch) in _ESCAPE_CATEGORIES):
+            out.append("\\x%02x" % cp if cp <= 0xFF else "\\u%04x" % cp if cp <= 0xFFFF else "\\U%08x" % cp)
+        else:
+            out.append(ch)
+    res = "".join(out)
+    if limit is not None and len(res) > limit:
+        res = res[:limit] + "...[%d more character(s)]" % (len(res) - limit)
+    return res
+
+
+_EVIDENCE_KEY_OK = frozenset("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789._-")
+
+
+def evidence_key(key):
+    """An evidence key that can never contain `=`, a space, a line break or anything else a reader could mistake for structure.
+    Letters, digits, `.`, `_` and `-` stay as they are; every other character becomes %XX per UTF-8 byte (and so does `%`).
+    The encoding is reversible, so two different identifiers never share a key (replacing `/` by `_` would). An empty key is `%`."""
+    key = key if isinstance(key, str) else str(key)
+    out = []
+    for ch in key:
+        out.append(ch if ch in _EVIDENCE_KEY_OK else "".join("%%%02X" % b for b in ch.encode("utf-8", "surrogatepass")))
+    return "".join(out) or "%"
+
+
+def read_capped(path, cap):
+    """The bytes of a file, or None when it is larger than `cap`. At most cap + 1 bytes are ever read into memory."""
+    with open(path, "rb") as f:
+        data = f.read(cap + 1)
+    return None if len(data) > cap else data
+
+
+# ---- diagnostics (Phase 2 of the verifier repair): what a blob or a property list actually contains ------------
+# Nothing below decides anything. These functions only DESCRIBE data that a check has already judged, in bounded,
+# credential-free text, so that a failure leaves the evidence needed to understand it. No acceptance rule uses them.
+
+_ASN1_CLASSES = ("UNIVERSAL", "APPLICATION", "CONTEXT", "PRIVATE")
+_ASN1_UNIVERSAL = {1: "BOOLEAN", 2: "INTEGER", 4: "OCTET STRING", 5: "NULL", 6: "OID", 12: "UTF8String", 16: "SEQUENCE",
+                   17: "SET", 19: "PrintableString", 22: "IA5String", 23: "UTCTime", 24: "GeneralizedTime"}
+DER_DIAG_MAX_BYTES = 4096  # the entitlements of a real app are a few hundred bytes; never print more than this
+
+
+def _asn1_label(node):
+    if node.cls == 0:
+        name = _ASN1_UNIVERSAL.get(node.tag, "tag %d" % node.tag)
+    else:
+        name = "%s %d" % (_ASN1_CLASSES[node.cls], node.tag)
+    return name + (" constructed" if node.constructed else "")
+
+
+def describe_asn1(data, max_depth=6, max_nodes=80, show_text=False):
+    """An outline of an ASN.1 element that assumes NO layout: class, tag, form and length, and the content of small
+    BOOLEAN and INTEGER values (their encoding is part of the structure). The content of strings and of every other
+    primitive element is NOT shown, unless show_text is true, which only the probe for DISPOSABLE SYNTHETIC input
+    uses. -> list of text lines; never raises."""
+    lines, budget = [], [max_nodes]
+
+    def show(node, depth):
+        if budget[0] <= 0:
+            return
+        budget[0] -= 1
+        text = "%s%s, %d byte(s)" % ("  " * depth, _asn1_label(node), len(node.value))
+        if not node.constructed:
+            v = node.value
+            if node.cls == 0 and node.tag in (1, 2) and len(v) <= 8:
+                text += ": 0x" + v.hex()
+            elif show_text:
+                if node.cls == 0 and node.tag == 12 and len(v) <= 60 and all(32 <= b < 127 for b in v):
+                    text += ": %r" % v.decode("ascii")
+                elif len(v) <= 16:
+                    text += ": 0x" + v.hex()
+        lines.append(text)
+        if node.constructed:
+            if depth >= max_depth:
+                lines.append("%s..." % ("  " * (depth + 1)))
+                return
+            for child in node.children:
+                show(child, depth + 1)
+
+    try:
+        pos = 0
+        while pos < len(data) and budget[0] > 0:
+            node = parse_node(data, pos, len(data))
+            show(node, 0)
+            pos = node.end
+        if pos < len(data) and budget[0] > 0:
+            lines.append("(%d trailing byte(s))" % (len(data) - pos))
+        if budget[0] <= 0:
+            lines.append("... (outline truncated)")
+    except (Asn1Error, IndexError, ValueError, RecursionError) as e:
+        lines.append("(not readable as ASN.1 from here: %s)" % e)
+    return lines
+
+
+def der_blob_diagnostic(blob, raw=False):
+    """What a DER entitlements blob (magic 0xfade7172) looks like, with no layout assumed.
+
+    STRUCTURE (always): its size and SHA-256, the header and an ASN.1 outline (classes, tags, lengths, the small
+    BOOLEAN and INTEGER values; no string content). That is enough to see the layout.
+    RAW (only with raw=True, which the probe passes for DISPOSABLE SYNTHETIC input and nothing else does): the string
+    content in the outline and the bytes in hex, at most DER_DIAG_MAX_BYTES of them. A real IPA's blob is never printed
+    raw by the verifier."""
+    out = {"length": len(blob), "sha256": hashlib.sha256(blob).hexdigest(), "header": None, "outline": [], "hex": None,
+           "hex_truncated": False, "raw": bool(raw)}
+    if len(blob) >= 8:
+        magic, length = struct.unpack(">II", blob[:8])
+        out["header"] = "magic 0x%08x, declared length %d, actual length %d" % (magic, length, len(blob))
+        out["outline"] = describe_asn1(blob[8:], show_text=raw)
+    else:
+        out["header"] = "shorter than the 8-byte blob header"
+    if raw:
+        out["hex"] = blob[:DER_DIAG_MAX_BYTES].hex()
+        out["hex_truncated"] = len(blob) > DER_DIAG_MAX_BYTES
+    return out
+
+
+class _UniqueKeyDict(dict):
+    def __setitem__(self, key, value):
+        if key in self:
+            raise ValueError("duplicate key %r" % (key,))
+        dict.__setitem__(self, key, value)
+
+
+MAX_PLIST_DIFF_BYTES = 4 * 1024 * 1024
+
+
+def read_plist_exact(data):
+    """A property list read with an EXPLICIT format (binary or XML; never automatic detection), refusing repeated
+    keys, entity declarations and oversized input. -> (object, "binary"|"xml"). Raises ValueError."""
+    if len(data) > MAX_PLIST_DIFF_BYTES:
+        raise ValueError("larger than %d bytes" % MAX_PLIST_DIFF_BYTES)
+    head = data.lstrip(b" \t\r\n")
+    if head.startswith(b"bplist00"):
+        fmt, name = plistlib.FMT_BINARY, "binary"
+    elif head.startswith((b"<?xml", b"<!DOCTYPE plist", b"<plist")):
+        fmt, name = plistlib.FMT_XML, "xml"
+        if b"<!ENTITY" in data:
+            raise ValueError("declares entities")
+    else:
+        raise ValueError("neither a binary nor an XML property list")
+    try:
+        return plistlib.loads(data, fmt=fmt, dict_type=_UniqueKeyDict), name
+    except (ValueError, xml.parsers.expat.ExpatError, struct.error, OverflowError, RecursionError) as e:
+        raise ValueError("unreadable: %s" % e)
+
+
+def plist_type_name(v):
+    if isinstance(v, bool):
+        return "bool"
+    for t, n in ((int, "integer"), (float, "real"), (str, "string"), (bytes, "data"), (bytearray, "data"),
+                 (list, "array"), (dict, "dict"), (plistlib.UID, "uid")):
+        if isinstance(v, t):
+            return n
+    import datetime
+    if isinstance(v, datetime.datetime):
+        return "date"
+    return type(v).__name__
+
+
+def plist_equal_strict(a, b):
+    """Equal in value AND in type, all the way down. Python's own == is not enough for a security comparison:
+    True == 1 and 1 == 1.0. Dictionaries are equal without regard to key order (a property list dictionary has
+    none); arrays are equal only in the same order."""
+    if plist_type_name(a) != plist_type_name(b):
+        return False
+    if isinstance(a, dict):
+        return a.keys() == b.keys() and all(plist_equal_strict(a[k], b[k]) for k in a)
+    if isinstance(a, list):
+        return len(a) == len(b) and all(plist_equal_strict(x, y) for x, y in zip(a, b))
+    if isinstance(a, float):
+        return struct.pack(">d", a) == struct.pack(">d", b)
+    if isinstance(a, plistlib.UID):
+        return a.data == b.data
+    return a == b
+
+
+# Keys that carry the identity, version, platform or privileges of an app. A change to one of them is LABELLED in the
+# diagnostics; it is not treated differently otherwise (any difference is a failure of the comparison).
+PLIST_SENSITIVE_KEYS = frozenset((
+    "CFBundleIdentifier", "CFBundleExecutable", "CFBundlePackageType", "CFBundleShortVersionString", "CFBundleVersion",
+    "CFBundleDisplayName", "CFBundleName", "DTPlatformName", "DTSDKName", "MinimumOSVersion", "CFBundleSupportedPlatforms",
+    "UIRequiredDeviceCapabilities", "UIDeviceFamily", "UIBackgroundModes", "BGTaskSchedulerPermittedIdentifiers",
+    "NSAppTransportSecurity", "CFBundleURLTypes", "LSApplicationQueriesSchemes", "ITSAppUsesNonExemptEncryption"))
+PLIST_SENSITIVE_PREFIXES = ("NS", "UI", "LS", "BG", "ITS")
+
+# DISPLAY allowlist. Only these top-level keys may show a value, and only in a restricted form; for every other key the
+# diagnostics give the path, the kind of change, the value type and a size, and NEVER the content. A key name that does
+# not look like a credential proves nothing about its value, so there is no deny-list: what is not approved is not shown.
+# (Display only. No acceptance rule reads this list.)
+PLIST_DISPLAY_KEYS = frozenset((
+    "BuildMachineOSBuild", "CFBundleDevelopmentRegion", "CFBundleExecutable", "CFBundleIdentifier",
+    "CFBundleInfoDictionaryVersion", "CFBundlePackageType", "CFBundleShortVersionString", "CFBundleSignature",
+    "CFBundleVersion", "DTAppStoreToolsBuild", "DTCompiler", "DTPlatformBuild", "DTPlatformName", "DTPlatformVersion",
+    "DTSDKBuild", "DTSDKName", "DTXcode", "DTXcodeBuild", "ITSAppUsesNonExemptEncryption", "LSRequiresIPhoneOS",
+    "MinimumOSVersion"))
+PLIST_DISPLAY_ARRAY_KEYS = frozenset(("CFBundleSupportedPlatforms", "UIBackgroundModes", "UIDeviceFamily", "UIRequiredDeviceCapabilities"))
+_DISPLAY_STRING = re.compile(r"[A-Za-z0-9._+ -]{0,64}")
+_ARRAY_ELEMENT = re.compile(r"([A-Za-z0-9]+)\[[0-9]{1,4}\]")
+PLIST_PATH_LIMIT = 120
+
+
+def plist_sensitive(path):
+    top = path.split(".")[0].split("[")[0]
+    return top in PLIST_SENSITIVE_KEYS or top.startswith(PLIST_SENSITIVE_PREFIXES)
+
+
+def plist_displayable(path, v):
+    """May the VALUE at this path be shown? Only an approved top-level key (or an element of an approved array key), and
+    only a boolean, an integer, a real number or a short string of letters, digits and `. _ + -` and space."""
+    m = _ARRAY_ELEMENT.fullmatch(path)
+    approved = path in PLIST_DISPLAY_KEYS or (m is not None and m.group(1) in PLIST_DISPLAY_ARRAY_KEYS)
+    if not approved:
+        return False
+    t = plist_type_name(v)
+    if t == "string":
+        return _DISPLAY_STRING.fullmatch(v) is not None
+    return t in ("bool", "integer", "real") and len(repr(v)) <= 24
+
+
+def plist_show(path, v):
+    """One line about a value: the value itself only where plist_displayable allows it; otherwise its type and size
+    ("value not shown"). Never an arbitrary string, a digest or a prefix of the content."""
+    if plist_displayable(path, v):
+        return repr(v)
+    t = plist_type_name(v)
+    if t == "string":
+        return "<string, %d character(s), %d byte(s) in UTF-8; value not shown>" % (len(v), len(v.encode("utf-8", "surrogatepass")))
+    if t == "data":
+        return "<data, %d byte(s); value not shown>" % len(v)
+    if t == "array":
+        return "<array of %d; elements not shown>" % len(v)
+    if t == "dict":
+        return "<dict of %d key(s); content not shown>" % len(v)
+    return "<%s; value not shown>" % t
+
+
+def plist_difference(old_bytes, new_bytes, max_items=60):
+    """How two property list files differ. Reports only; it accepts nothing.
+
+    -> {"identical_bytes", "old_format", "new_format", "readable", "error", "semantic" ("identical" | "different" |
+    None), "serialization_only" (the bytes differ but the content is equal in value AND type), "counts" (the EXACT number
+    of added, removed and changed entries found), "added", "removed", "changed" (lists of (path, type text, old value
+    text, new value text), each holding at most max_items entries), "truncated" (True when any list is shorter than its
+    count)}
+
+    Every difference is COUNTED, so the totals are exact; only the first max_items of each kind are kept and rendered.
+    Counting costs time proportional to the input, which the caller bounds before it reads the file (MAX_PLIST_DIFF_BYTES)."""
+    res = {"identical_bytes": old_bytes == new_bytes, "old_format": None, "new_format": None, "readable": False,
+           "error": None, "semantic": None, "serialization_only": False,
+           "counts": {"added": 0, "removed": 0, "changed": 0}, "added": [], "removed": [], "changed": [],
+           "truncated": False}
+    try:
+        old, res["old_format"] = read_plist_exact(old_bytes)
+        new, res["new_format"] = read_plist_exact(new_bytes)
+    except ValueError as e:
+        res["error"] = str(e)
+        return res
+    res["readable"] = True
+    counts = {"added": 0, "removed": 0, "changed": 0}
+    kept = {"added": [], "removed": [], "changed": []}
+
+    def note(kind, path, what, old_text, new_text):
+        counts[kind] += 1
+        if len(kept[kind]) < max_items:  # the bound applies to every kind, in every container
+            kept[kind].append((path, what, old_text, new_text))
+
+    def walk(path, a, b):
+        if plist_type_name(a) != plist_type_name(b):
+            note("changed", path, "%s -> %s" % (plist_type_name(a), plist_type_name(b)),
+                 plist_show(path, a) if len(kept["changed"]) < max_items else None,
+                 plist_show(path, b) if len(kept["changed"]) < max_items else None)
+        elif isinstance(a, dict):
+            for k in sorted(set(a) | set(b), key=str):
+                p = "%s.%s" % (path, k) if path else str(k)
+                if k not in b:
+                    note("removed", p, plist_type_name(a[k]), plist_show(p, a[k]) if len(kept["removed"]) < max_items else None, None)
+                elif k not in a:
+                    note("added", p, plist_type_name(b[k]), None, plist_show(p, b[k]) if len(kept["added"]) < max_items else None)
+                else:
+                    walk(p, a[k], b[k])
+        elif isinstance(a, list):
+            if len(a) != len(b):
+                note("changed", path, "array of %d -> array of %d" % (len(a), len(b)),
+                     plist_show(path, a) if len(kept["changed"]) < max_items else None,
+                     plist_show(path, b) if len(kept["changed"]) < max_items else None)
+            else:
+                for i, (x, y) in enumerate(zip(a, b)):
+                    walk("%s[%d]" % (path, i), x, y)
+        elif not plist_equal_strict(a, b):
+            note("changed", path, "%s value" % plist_type_name(a),
+                 plist_show(path, a) if len(kept["changed"]) < max_items else None,
+                 plist_show(path, b) if len(kept["changed"]) < max_items else None)
+
+    try:
+        walk("", old, new)
+        res["semantic"] = "identical" if plist_equal_strict(old, new) else "different"
+    except (RecursionError, MemoryError):
+        res["readable"], res["error"] = False, "too deeply nested or too large to compare"
+        return res
+    res["serialization_only"] = (not res["identical_bytes"]) and res["semantic"] == "identical"
+    res["counts"] = counts
+    for kind in ("added", "removed", "changed"):
+        res[kind] = kept[kind]
+        if counts[kind] > len(kept[kind]):
+            res["truncated"] = True
+    return res
+
+
 def read_signature(path):
     """Everything the signature of one Mach-O file (every architecture slice) says.
 
@@ -756,6 +1092,12 @@ def read_signature(path):
                 item["der_entitlements"] = parse_der_entitlements(item["der_entitlements_blob"])
             except (Asn1Error, IndexError, ValueError, struct.error) as e:
                 item["problems"].append("DER entitlements are unreadable: %s" % e)
+                # The check above still fails. This only keeps what the blob really looks like, so the failure
+                # can be understood from its own report (Phase 2: the layout was never seen on real Apple data).
+                try:
+                    item["der_diag"] = der_blob_diagnostic(item["der_entitlements_blob"])
+                except Exception as diag_error:  # observational only: it must never replace the failure recorded above
+                    item["der_diag"] = {"error": type(diag_error).__name__}
         if SLOT_REQUIREMENTS in slots:
             item["requirements_blob"] = slots[SLOT_REQUIREMENTS]
         if SLOT_CMS in slots:

@@ -121,8 +121,11 @@ def d_dict(d):
     return d_set(*[d_seq(der(0x0C, k.encode()), d_value(v)) for k, v in sorted(d.items())])
 
 
-def der_entitlements_blob(ents):
-    body = der(0x70, d_int(b"\x01") + d_dict(ents))
+def der_entitlements_blob(ents, version=b"\x01"):
+    # NOTE: this is the layout tool/ipa_inspect.py parse_der_entitlements ASSUMES (the dictionary as a SET). It was never
+    # compared with a blob written by Apple's codesign (Phase 2 of the verifier repair, docs/IOS_SIGNING.md); until that
+    # evidence exists the fixture can only agree with the parser, not prove it. `version` exists for the negative test.
+    body = der(0x70, d_int(version) + d_dict(ents))
     return struct.pack(">II", I.CSMAGIC_DER_ENTITLEMENTS, 8 + len(body)) + body
 
 
@@ -379,7 +382,7 @@ def sign_slice(sl, ident, team, specials, ents_xml, dual, adhoc, certs, main):
             ents = plistlib.loads(ents_xml)
             if "der-differs" in MUT:
                 ents = dict(ents, **{"get-task-allow": True})
-            der_blob = der_entitlements_blob(ents)
+            der_blob = der_entitlements_blob(ents, b"\x02" if "der-version2" in MUT else b"\x01")
             sp[7] = der_blob
     blobs = {}
     algs = ["sha1", "sha256"] if dual else ["sha256"]
