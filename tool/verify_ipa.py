@@ -68,6 +68,14 @@ NOT_VERIFIED = [
 ]
 
 
+def emit(text, file=None):
+    """Every line this tool writes goes through here. The text may contain things from the IPA being judged (member names,
+    property list keys, certificate fields, exception texts): control characters are written as escapes and an absurdly long
+    line is cut, so a hostile IPA cannot end a line early, start one with a GitHub workflow command (`::`) or send a
+    terminal escape sequence. The checks themselves never see the escaped text."""
+    print(I.escape_text(text, limit=I.MAX_LINE_CHARS), file=file if file is not None else sys.stdout)
+
+
 class Report(object):
     def __init__(self):
         self.failed = 0
@@ -77,29 +85,32 @@ class Report(object):
 
     def ok(self, text):
         self.passed += 1
-        print("  PASS  " + text)
+        emit("  PASS  " + text)
 
     def fail(self, text):
         self.failed += 1
-        print("  FAIL  " + text)
+        emit("  FAIL  " + text)
 
     def warn(self, text):
         self.warned += 1
-        print("  WARN  " + text)
+        emit("  WARN  " + text)
 
     def info(self, text):
-        print("  INFO  " + text)
+        emit("  INFO  " + text)
 
     def check(self, cond, ok_text, bad_text):
         (self.ok if cond else self.fail)(ok_text if cond else bad_text)
         return bool(cond)
 
     def ev(self, key, value):
-        self.evidence.append((key, "" if value is None else str(value)))
+        # An evidence record is ONE `key=value` line. The key is encoded so that it can hold no `=`, no space and no line break
+        # and two different identifiers never share a key; the value has its control characters and its backslashes escaped, so
+        # that the escaping is reversible. Fixed keys and ordinary values are unchanged.
+        self.evidence.append((I.evidence_key(key), "" if value is None else I.escape_text(value, backslash=True, limit=I.MAX_LINE_CHARS)))
 
 
 def die(text, code=2):
-    print("verify_ipa: %s" % text, file=sys.stderr)
+    emit("verify_ipa: %s" % text, file=sys.stderr)
     sys.exit(code)
 
 
@@ -223,6 +234,34 @@ def entitlement_allowed(key, value, granted):
     return have == value
 
 
+def contained(rep, what, fn, *args):
+    """Run an OBSERVATIONAL diagnostic. Whatever it does, the verification outcome is unchanged: an exception inside it is
+    reported as "diagnostics unavailable" and nothing else (no counter, no verdict, no earlier finding is touched; the checks that
+    already ran have already reported). KeyboardInterrupt and SystemExit are not caught."""
+    try:
+        fn(*args)
+    except Exception as e:
+        try:
+            rep.info("%s: diagnostics unavailable (%s)" % (what, type(e).__name__))
+        except Exception:
+            pass
+
+
+def describe_der_failure(rep, tag, diag):
+    """The DER entitlements of one executable could not be read: report what the blob looks like (bounded). STRUCTURE only: its
+    size and SHA-256, its header and an ASN.1 outline of classes, tags and lengths; never the bytes and never string content of
+    a real IPA (the probe prints those for disposable synthetic input only). INFO lines only: the failure itself was already
+    reported and stays a failure."""
+    if "error" in diag:
+        rep.info("%s: the DER entitlements blob could not be described (%s)" % (tag, diag["error"]))
+        return
+    rep.info("%s: the DER entitlements blob is %d byte(s), sha256 %s; %s" % (tag, diag["length"], diag["sha256"], diag["header"]))
+    for line in diag["outline"]:
+        rep.info("%s: DER outline: %s" % (tag, line))
+    if not diag.get("raw"):
+        rep.info("%s: the bytes of a real IPA's DER blob are not printed" % tag)
+
+
 def check_code_signature(rep, label, path, bundle_dir, bundle_id, team_id, expect_identifier, is_main):
     """Verify one Mach-O file's signature. Returns {"signer": cert|None, "ents": dict|None, "ok": bool}."""
     result = {"signer": None, "ents": None, "ok": True, "cdhash": None, "cms_certs": None}
@@ -241,6 +280,8 @@ def check_code_signature(rep, label, path, bundle_dir, bundle_id, team_id, expec
         for p in s["problems"]:
             rep.fail("%s: %s" % (tag, p))
             result["ok"] = False
+        if s.get("der_diag"):
+            contained(rep, "%s: DER diagnostic" % tag, describe_der_failure, rep, tag, s["der_diag"])
         if s["cpu"] != I.CPU_ARM64:
             rep.fail("%s is not built for arm64 (cpu type 0x%x)" % (tag, s["cpu"]))
             result["ok"] = False
@@ -418,7 +459,7 @@ def verify(args):
     _raw, want_version, want_build = BM.load_pubspec(repo)
     team = args.team_id
 
-    print("verify_ipa: %s (%s)" % (os.path.basename(args.ipa), env))
+    emit("verify_ipa: %s (%s)" % (os.path.basename(args.ipa), env))
     if not os.path.isfile(args.ipa):
         die("%s is not a file" % args.ipa)
     ipa_sha = sha256_path(args.ipa)
@@ -730,6 +771,70 @@ def provenance(rep, args, app_dir, env, bundle_id, info, ipa_sha, tmp):
         rep.warn("no --unsigned-app: whether the IPA is the built code plus signatures only was not checked")
 
 
+MAX_PLIST_REPORTS = 3
+MAX_PLIST_REPORT_LINES = 40
+
+
+def describe_plist_differences(rep, differing):
+    """For each property list that differs between the unsigned build and the IPA, say HOW it differs: keys added, removed or
+    changed (with the value types and sizes), and whether the content is equal in value and type (a difference of serialization
+    only). Diagnostics only: the comparison has already failed on these files and stays failed; nothing here excuses a
+    difference. A value is shown only for an approved low-risk key (tool/ipa_inspect.py PLIST_DISPLAY_KEYS); for every other
+    key only the path, the kind of change, the type and a size are given. A file larger than the cap is not read at all
+    beyond the cap, and one that cannot be described is reported as such; a failure here never touches the verdict."""
+    for rel, a, b in differing[:MAX_PLIST_REPORTS]:
+        contained(rep, "%s: description of the difference" % rel, describe_one_plist, rep, rel, a, b)
+    if len(differing) > MAX_PLIST_REPORTS:
+        rep.info("%d further property list(s) differ and are not described" % (len(differing) - MAX_PLIST_REPORTS))
+
+
+def describe_one_plist(rep, rel, a, b):
+    try:
+        old = I.read_capped(a, I.MAX_PLIST_DIFF_BYTES)
+        new = I.read_capped(b, I.MAX_PLIST_DIFF_BYTES)
+    except OSError as e:
+        rep.info("%s: cannot be read for a description of the difference: %s" % (rel, type(e).__name__))
+        return
+    key = "plist_difference_" + rel
+    if old is None or new is None:
+        rep.info("%s differs from the unsigned build; a file is larger than %d bytes and is not described" % (rel, I.MAX_PLIST_DIFF_BYTES))
+        rep.ev(key, "not_described_too_large")
+        return
+    d = I.plist_difference(old, new)
+    head = "%s differs from the unsigned build: %d byte(s) -> %d byte(s)" % (rel, len(old), len(new))
+    if not d["readable"]:
+        rep.info("%s; not readable as a property list (%s)" % (head, d["error"]))
+        rep.ev(key, "unreadable")
+        return
+    verdict = ("same content in value and type, different serialization only (%s -> %s)" % (d["old_format"], d["new_format"])
+               if d["serialization_only"] else
+               "DIFFERENT CONTENT: %d added, %d removed, %d changed (%s -> %s)" % (d["counts"]["added"], d["counts"]["removed"], d["counts"]["changed"], d["old_format"], d["new_format"]))
+    rep.info("%s; %s" % (head, verdict))
+    lines = []
+    for kind, items in (("added", d["added"]), ("removed", d["removed"]), ("changed", d["changed"])):
+        for path, what, old_v, new_v in items:
+            label = " [identity, version, platform or privilege key]" if I.plist_sensitive(path) else ""
+            shown = I.escape_text(path, backslash=True, limit=I.PLIST_PATH_LIMIT)
+            if kind == "added":
+                lines.append("+ %s (%s) = %s%s" % (shown, what, new_v, label))
+            elif kind == "removed":
+                lines.append("- %s (%s) was %s%s" % (shown, what, old_v, label))
+            else:
+                lines.append("~ %s (%s): %s -> %s%s" % (shown, what, old_v, new_v, label))
+    for line in lines[:MAX_PLIST_REPORT_LINES]:
+        rep.info("%s: %s" % (rel, line))
+    total = d["counts"]["added"] + d["counts"]["removed"] + d["counts"]["changed"]
+    shown = min(len(lines), MAX_PLIST_REPORT_LINES)
+    incomplete = shown < total
+    if incomplete:
+        # the totals above are exact; the listing is not complete
+        rep.info("%s: LISTING INCOMPLETE: %d of %d differences listed" % (rel, shown, total))
+    # the counts are exact totals; only the listing is cut, which is said apart from them
+    rep.ev(key, "serialization_only" if d["serialization_only"] else
+           "added=%d removed=%d changed=%d%s" % (d["counts"]["added"], d["counts"]["removed"], d["counts"]["changed"],
+                                                 " listing_incomplete=1" if incomplete else ""))
+
+
 def same_code_check(rep, unsigned, signed):
     def added_ok(r):
         # signing adds the profile at the top and one CodeResources seal per bundle; nothing else
@@ -741,6 +846,7 @@ def same_code_check(rep, unsigned, signed):
     missing = sorted(uf - sf)
     extra = sorted(r for r in sf - uf if not added_ok(r))
     changed, same_macho, same_plain = [], 0, 0
+    differing_plists = []  # (relative path, unsigned file, signed file): described below, never excused
     for rel in sorted(uf & sf):
         a, b = os.path.join(unsigned, rel), os.path.join(signed, rel)
         if os.path.islink(a) or os.path.islink(b):
@@ -764,6 +870,8 @@ def same_code_check(rep, unsigned, signed):
             continue
         else:
             changed.append(rel)
+            if rel.endswith(".plist"):
+                differing_plists.append((rel, a, b))
     rep.ev("same_code_macho_files", same_macho)
     rep.ev("same_code_other_files", same_plain)
     rep.check(not missing, "no file of the unsigned build is missing from the IPA",
@@ -772,14 +880,15 @@ def same_code_check(rep, unsigned, signed):
               "files added to the IPA: %s" % ", ".join(extra[:8]))
     rep.check(not changed, "the IPA is the unsigned build plus signatures only (%d executables identical apart from the signature, %d other files byte-identical)" % (same_macho, same_plain),
               "files that differ from the unsigned build: %s" % "; ".join(changed[:6]))
+    describe_plist_differences(rep, differing_plists)
 
 
 def finish(rep, args, unverified=True):
-    print("")
+    emit("")
     if unverified:
-        print("NOT VERIFIED by this tool (needs a real Apple-signed IPA, Apple's trust anchors or Apple):")
+        emit("NOT VERIFIED by this tool (needs a real Apple-signed IPA, Apple's trust anchors or Apple):")
         for t in NOT_VERIFIED:
-            print("  - " + t)
+            emit("  - " + t)
     rep.ev("checks_passed", rep.passed)
     rep.ev("checks_failed", rep.failed)
     rep.ev("checks_warned", rep.warned)
@@ -788,11 +897,11 @@ def finish(rep, args, unverified=True):
         with open(args.evidence, "w", encoding="utf-8") as f:
             for k, v in rep.evidence:
                 f.write("%s=%s\n" % (k, v))
-    print("")
+    emit("")
     if rep.failed:
-        print("verify_ipa: %d check(s) FAILED, %d passed, %d warning(s)" % (rep.failed, rep.passed, rep.warned))
+        emit("verify_ipa: %d check(s) FAILED, %d passed, %d warning(s)" % (rep.failed, rep.passed, rep.warned))
         return 1
-    print("verify_ipa: all %d checks passed (%d warning(s))" % (rep.passed, rep.warned))
+    emit("verify_ipa: all %d checks passed (%d warning(s))" % (rep.passed, rep.warned))
     return 0
 
 
@@ -814,7 +923,7 @@ def certificate(args):
     embedded profile says, so that the fingerprint can be recorded and later pinned with
     `verify --expect-cert-sha256`. It reads public data only; no private key exists in an IPA."""
     rep = Report()
-    print("verify_ipa certificate: %s" % os.path.basename(args.target.rstrip("/")))
+    emit("verify_ipa certificate: %s" % os.path.basename(args.target.rstrip("/")))
     with tempfile.TemporaryDirectory(prefix="verify_ipa_") as tmp:
         target = args.target
         if os.path.isfile(target):
@@ -880,7 +989,7 @@ def certificate(args):
         for k, v in (("subject", dn_text(sg["subject"])), ("issuer", dn_text(sg["issuer"])), ("serial", sg["serial"]),
                      ("not_before", sg["not_before"]), ("not_after", sg["not_after"]),
                      ("sha256", sg["sha256"]), ("sha1", sg["sha1"])):
-            print("  %-10s %s" % (k, v))
+            emit("  %-10s %s" % (k, v))
             rep.ev("signer_" + k, v)
         rep.check(len(signers) == 1, "all %d signed executable(s) carry this one certificate" % sum(len(v[1]) for v in signers.values()),
                   "the bundle is signed by %d different certificates (an App Store build needs one): %s" % (
@@ -926,14 +1035,14 @@ def certificate(args):
             with open(args.pem, "w", encoding="ascii") as f:
                 f.write(pem_of(sg["der"]))
             rep.info("wrote the PUBLIC certificate to %s" % args.pem)
-        print("")
+        emit("")
         if not rep.failed:
-            print("RECORD (a public value; the pin for `verify --expect-cert-sha256`): %s" % sg["sha256"])
-            print("This command pins and approves nothing: a fingerprint read from the artifact it will later")
-            print("judge is evidence only after the release coordinator has recorded it and it agrees with an")
-            print("independent source (trust anchors, the profile, the Apple account).")
+            emit("RECORD (a public value; the pin for `verify --expect-cert-sha256`): %s" % sg["sha256"])
+            emit("This command pins and approves nothing: a fingerprint read from the artifact it will later")
+            emit("judge is evidence only after the release coordinator has recorded it and it agrees with an")
+            emit("independent source (trust anchors, the profile, the Apple account).")
         else:
-            print("Nothing to record: the checks above failed.")
+            emit("Nothing to record: the checks above failed.")
     return finish(rep, args, unverified=False)
 
 
@@ -946,7 +1055,7 @@ def structure(args):
     ID, no certificate policy, no profile. It is for reading what Apple's own codesign wrote (a
     throwaway identity, no Apple account) and comparing the result with Apple's `codesign --verify`."""
     rep = Report()
-    print("verify_ipa structure: %s" % os.path.basename(args.target.rstrip("/")))
+    emit("verify_ipa structure: %s" % os.path.basename(args.target.rstrip("/")))
     with tempfile.TemporaryDirectory(prefix="verify_ipa_") as tmp:
         target = args.target
         if os.path.isfile(target):
@@ -987,7 +1096,7 @@ def compare(args):
     rep = Report()
     if not os.path.isdir(args.unsigned):
         die("%s is not a directory" % args.unsigned)
-    print("verify_ipa compare: %s  vs  %s" % (os.path.basename(args.unsigned.rstrip("/")), os.path.basename(args.signed.rstrip("/"))))
+    emit("verify_ipa compare: %s  vs  %s" % (os.path.basename(args.unsigned.rstrip("/")), os.path.basename(args.signed.rstrip("/"))))
     with tempfile.TemporaryDirectory(prefix="verify_ipa_") as tmp:
         signed = args.signed
         if os.path.isfile(signed):
@@ -1014,8 +1123,8 @@ def analyze_unsigned(args):
         die("%s has no Info.plist (pass the Runner.app directory)" % app)
     with open(plist_path, "rb") as f:
         info = plistlib.load(f)
-    print("analyze-unsigned: %s" % app)
-    print("  bundle id %s, version %s+%s, minimum iOS %s, SDK %s" % (
+    emit("analyze-unsigned: %s" % app)
+    emit("  bundle id %s, version %s+%s, minimum iOS %s, SDK %s" % (
         info.get("CFBundleIdentifier"), info.get("CFBundleShortVersionString"), info.get("CFBundleVersion"),
         info.get("MinimumOSVersion"), info.get("DTSDKName")))
     unsigned, adhoc, signed_other, other = [], [], [], []
@@ -1041,22 +1150,22 @@ def analyze_unsigned(args):
                             who = "unreadable"
                     signed_other.append((rel, cds[0]["team_id"] if cds else "", who))
     unsigned, adhoc = sorted(set(unsigned)), sorted(set(adhoc))
-    print("  Mach-O files: %d with no signature, %d ad-hoc signed, %d signed by an identity"
+    emit("  Mach-O files: %d with no signature, %d ad-hoc signed, %d signed by an identity"
           % (len(unsigned), len(adhoc), len(signed_other)))
     for rel in unsigned:
-        print("    unsigned   %s" % rel)
+        emit("    unsigned   %s" % rel)
     for rel in adhoc:
-        print("    ad-hoc     %s (must be re-signed with --force)" % rel)
+        emit("    ad-hoc     %s (must be re-signed with --force)" % rel)
     for rel, team, who in signed_other:
-        print("    signed     %s  team %s  by %s (must be re-signed with --force: App Store builds need ONE identity)" % (rel, team or "-", who))
+        emit("    signed     %s  team %s  by %s (must be re-signed with --force: App Store builds need ONE identity)" % (rel, team or "-", who))
     for rel, err in other:
-        print("    unreadable %s: %s" % (rel, err))
-    print("  sealed bundles: %s" % ", ".join(sorted(
+        emit("    unreadable %s: %s" % (rel, err))
+    emit("  sealed bundles: %s" % ", ".join(sorted(
         d for d in os.listdir(os.path.join(app, "Frameworks"))
         if os.path.isfile(os.path.join(app, "Frameworks", d, "_CodeSignature", "CodeResources")))) or "none")
-    print("  has embedded.mobileprovision: %s; has _CodeSignature: %s" % (
+    emit("  has embedded.mobileprovision: %s; has _CodeSignature: %s" % (
         os.path.exists(os.path.join(app, "embedded.mobileprovision")), os.path.isdir(os.path.join(app, "_CodeSignature"))))
-    print("  entitlements file embedded: none (nothing is signed, so none exists)")
+    emit("  entitlements file embedded: none (nothing is signed, so none exists)")
     notes = []
     if "ITSAppUsesNonExemptEncryption" not in info:
         notes.append("Info.plist has no ITSAppUsesNonExemptEncryption (export-compliance question at upload)")
@@ -1067,7 +1176,7 @@ def analyze_unsigned(args):
     if not os.path.isfile(os.path.join(app, "PrivacyInfo.xcprivacy")):
         notes.append("the app has no PrivacyInfo.xcprivacy (frameworks with one: %s)" % (", ".join(privacy) or "none"))
     for n in notes:
-        print("  NOTE  " + n)
+        emit("  NOTE  " + n)
     return 0
 
 
@@ -1127,9 +1236,9 @@ def main(argv):
         except SystemExit:
             raise
         except Exception as e:  # fail closed: an unexpected error is a failed verification, never a pass
-            print("  FAIL  internal error while verifying (%s: %s); the IPA is NOT verified" % (type(e).__name__, e))
-            print("")
-            print("verify_ipa: verification aborted, treated as FAILED")
+            emit("  FAIL  internal error while verifying (%s: %s); the IPA is NOT verified" % (type(e).__name__, e))
+            emit("")
+            emit("verify_ipa: verification aborted, treated as FAILED")
             return 1
     if args.cmd == "analyze-unsigned":
         return analyze_unsigned(args)
@@ -1143,7 +1252,7 @@ def main(argv):
         except SystemExit:
             raise
         except Exception as e:
-            print("  FAIL  internal error while reading the certificate (%s: %s)" % (type(e).__name__, e))
+            emit("  FAIL  internal error while reading the certificate (%s: %s)" % (type(e).__name__, e))
             return 1
     if args.cmd == "structure":
         try:
@@ -1151,7 +1260,7 @@ def main(argv):
         except SystemExit:
             raise
         except Exception as e:
-            print("  FAIL  internal error while reading the structure (%s: %s)" % (type(e).__name__, e))
+            emit("  FAIL  internal error while reading the structure (%s: %s)" % (type(e).__name__, e))
             return 1
     if args.cmd == "compare":
         try:
@@ -1159,7 +1268,7 @@ def main(argv):
         except SystemExit:
             raise
         except Exception as e:
-            print("  FAIL  internal error while comparing (%s: %s)" % (type(e).__name__, e))
+            emit("  FAIL  internal error while comparing (%s: %s)" % (type(e).__name__, e))
             return 1
     ap.print_help()
     return 2

@@ -1,0 +1,109 @@
+# THIS FILE IS A TEMPLATE, NOT A WORKFLOW. GitHub does not read it: it lives under docs/ and has no `.yml` name, so nothing in this
+# repository can start it. It is kept for review only (Issue #71, Phase 2 of the verifier repair).
+#
+# TO ACTIVATE IT, all of the following are needed, none of which has happened:
+#   1. a separate, explicit authorization (the CTO's written decision) to run the experiment;
+#   2. a reviewed pull request that copies this file to .github/workflows/ios-der-entitlements-diagnostics.yml, after a fresh
+#      review of this file, tool/probe_der_entitlements.sh and tool/der_entitlements_probe.py as they are then;
+#   3. only then may anyone with write access start it by hand (workflow_dispatch), and it would run from the branch it is started on.
+#      That last point is why the workflow is not kept in .github/workflows/ meanwhile: a workflow there can be started without any gate.
+#
+# iOS DER ENTITLEMENTS DIAGNOSTICS (Issue #71, Phase 2 of the verifier repair). PREPARED FOR REVIEW; NOT TO BE STARTED
+# WITHOUT A SEPARATE, EXPLICIT AUTHORIZATION. It is not a build, a release, a signing run or an upload.
+#
+# Question: what does a DER entitlements blob written by Apple's own `codesign --generate-entitlement-der` really look like?
+# tool/ipa_inspect.py parse_der_entitlements assumes a layout (the dictionary as an ASN.1 SET) from public descriptions. On the
+# first Apple-signed IPA (Authorization C, run 44834801248) it refused Apple's real blob ("unsupported DER entitlements version
+# or layout") and that blob was not kept, so the layout has never been seen on real Apple data. A macOS runner is the only place
+# where Apple's tool can be run, and no repository tool can write the answer for it.
+#
+# What it does, on a GitHub-hosted macos-15 runner with Xcode 26.3 (the pins of the other iOS workflows), by running
+# tool/probe_der_entitlements.sh:
+#   1. compiles a tiny DISPOSABLE C program (it does nothing) for iOS arm64 and for macOS;
+#   2. signs copies of it AD HOC (`codesign -s -`: no identity, no keychain, no timestamp server) with explicit XML
+#      entitlements and --generate-entitlement-der: the four keys of the real app, then every value type, in a plain and an
+#      Xcode-like variant (the flags of the codesign call Xcode made for the real app);
+#   3. prints Apple's own `codesign` verdict and display of each, and with tool/der_entitlements_probe.py the file identity, the
+#      CodeDirectory facts and special-slot seals, the DER blob (size, digest, bytes in hex) and an ASN.1 outline that assumes no
+#      layout, as text in the job log; the whole signed file (base64, at most 64 KiB) only for three chosen cases;
+#   4. tells apart, for every case, that signing succeeded, that Apple's `codesign --verify` succeeded, that DER evidence was
+#      extracted (readable Mach-O, signed, DER and XML blobs present, a valid container with ONE ASN.1 element, both blobs sealed
+#      by the CodeDirectory) and whether the CURRENT parser accepts the DER (reported, never required: it is the subject of the
+#      investigation), and, for the three required cases, whether the complete signed executable was emitted as a fixture (decoded and
+#      checked for size and SHA-256). The step FAILS unless every required case produced DER evidence AND its fixture dump, so a run in which `codesign` "succeeded"
+#      but wrote nothing usable is a failed run, not a successful one.
+#
+# What it must never do, and this workflow is kept to it (tool/test_ios_der_diagnostics.sh checks the files):
+#   - use a certificate, provisioning profile, App Store Connect key, password or any stored credential, or sign anything but
+#     the disposable program; touch the application, an archive or an IPA;
+#   - read the repository's secret store, select an environment, or use the OIDC token;
+#   - contact or authenticate to any Apple service; upload anything (there is no artifact upload: the evidence is the log);
+#   - run on a push, a pull request or a schedule: it is started by hand (workflow_dispatch) only, and has no inputs.
+#
+# SUCCESS HERE DOES NOT PROVE APPLE DISTRIBUTION COMPATIBILITY. An ad-hoc signature written by Apple's tool is genuine evidence of
+# the format Apple's codesign writes. The Packaging.log of run 44834801248 shows that Xcode's own local call for every item, the
+# main app included, is an ad-hoc call (`codesign -f -s - ... --generate-entitlement-der`), that the cloud service receives only the
+# CodeDirectory digest, and that its CMS signature is attached afterwards (`--edit-cms`): the blob of a cloud-signed IPA is written
+# by a call of the kind made here. That is strong evidence of its layout, not a proof about that IPA. See docs/IOS_SIGNING.md.
+
+name: iOS DER entitlements diagnostics (credential-free, not a release)
+
+on:
+  workflow_dispatch:
+
+# Least privilege: the job only reads this repository. No write access of any kind, no token for other services.
+permissions:
+  contents: read
+
+concurrency:
+  group: ios-der-entitlements-diagnostics
+  cancel-in-progress: false
+
+env:
+  # The pins of ios-ci-validation.yml and build-variants.yml (tool/verify_ios_toolchain.sh compares those two files only).
+  XCODE_APP: /Applications/Xcode_26.3.app
+  EXPECTED_XCODE: "26.3"
+
+jobs:
+  probe:
+    name: Ad-hoc sign a disposable program with Apple's codesign and read the DER entitlements
+    # macos-15 is the arm64 image. Not macos-latest.
+    runs-on: macos-15
+    timeout-minutes: 20
+    steps:
+      - name: Checkout this revision (the repository's own tools)
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+
+      - name: Select Xcode 26.3
+        run: |
+          sudo xcode-select -s "$XCODE_APP/Contents/Developer"
+          xcodebuild -version
+          actual="$(xcodebuild -version | sed -n '1s/^Xcode //p')"
+          if [ "$actual" != "$EXPECTED_XCODE" ]; then
+            echo "::error::Expected Xcode $EXPECTED_XCODE at $XCODE_APP but xcodebuild reports '$actual'."
+            exit 1
+          fi
+
+      - name: Sign the disposable program ad hoc and print the DER entitlements
+        run: |
+          bash tool/probe_der_entitlements.sh "$RUNNER_TEMP/der-probe"
+
+      - name: Report
+        if: always()
+        run: |
+          {
+            echo "## iOS DER entitlements diagnostics (NOT a release)"
+            echo ""
+            echo "Apple's \`codesign\` was asked to sign a **disposable program** ad hoc (no identity, no signing material, no Apple service)."
+            echo "Whether DER evidence was obtained is decided by the previous step, not by this summary: that step fails unless the required cases passed"
+            echo "signing, Apple's verification and the probe's evidence checks (lines starting with \`RESULT\` in its log; the current parser's verdict is reported apart)."
+            echo "The DER blobs, their ASN.1 outline and, for three chosen cases, the signed file (base64) are in that log, lines starting with \`PROBE\`."
+            echo ""
+            echo "**Success here does not prove Apple distribution compatibility.** It shows the format Apple's tool writes; Xcode makes the same"
+            echo "kind of ad-hoc local call for a Distribution signature and attaches a CMS signature from Apple's cloud service, which this run does not exercise."
+            echo "Nothing was uploaded and no credential was used."
+            echo ""
+            echo "Xcode: $(xcodebuild -version | head -1)"
+          } >> "$GITHUB_STEP_SUMMARY"
