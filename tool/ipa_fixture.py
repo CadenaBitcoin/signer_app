@@ -399,6 +399,25 @@ def sign_slice(sl, ident, team, specials, ents_xml, dual, adhoc, certs, main):
                 inner = I.parse_der(d_dict(ents)).value
                 body = der(0x70, d_int(b"\x01") + der(0x31, inner))
                 der_blob = struct.pack(">II", I.CSMAGIC_DER_ENTITLEMENTS, 8 + len(body)) + body
+            # Phase 6C-B: blobs that are NOT canonical DER, in ONE respect each, for the end-to-end tests (each must be refused as unreadable
+            # while every other check still runs). Each patches the well-formed blob built above; the XML entitlements are untouched.
+            if "der-bool01" in MUT:  # a BOOLEAN FALSE written as 01 (BER reads that as TRUE)
+                at = der_blob.find(b"\x01\x01\x00")
+                assert at > 8, "no BOOLEAN FALSE to patch"
+                der_blob = der_blob[:at] + b"\x01\x01\x01" + der_blob[at + 3:]
+            if "der-root-extra" in MUT or "der-indefinite" in MUT or "der-deep" in MUT:
+                root = I.parse_der(der_blob[8:])
+                inner = der_blob[8:][root.vstart:root.vend]
+                if "der-root-extra" in MUT:  # a third element in the root (a hidden entitlement for a reader that looks past the dictionary)
+                    body = der(0x70, inner + der(5, b""))
+                elif "der-indefinite" in MUT:  # the root with an indefinite length (BER, not DER)
+                    body = bytes([0x70, 0x80]) + inner + b"\0\0"
+                else:  # an entitlement nested far deeper than any real one (dictionaries inside dictionaries)
+                    deepv = der(1, b"\xff")
+                    for _ in range(300):
+                        deepv = der(0xB0, der(0x30, der(0x0C, b"a") + deepv))
+                    body = der(0x70, d_int(b"\x01") + der(0xB0, I.parse_der(d_dict(ents)).value + der(0x30, der(0x0C, b"zzz") + deepv)))
+                der_blob = struct.pack(">II", I.CSMAGIC_DER_ENTITLEMENTS, 8 + len(body)) + body
             sp[7] = der_blob
     blobs = {}
     algs = ["sha1", "sha256"] if dual else ["sha256"]

@@ -203,8 +203,8 @@ Phase 1 repaired what the first Apple-signed IPA (Authorization C, run `44834801
 remained and **no acceptance rule was changed for either of them in Phase 2**: there was not yet genuine evidence to change them on.
 Each conclusion below is labelled **confirmed**, **probable** or **unresolved**.
 
-**Current contract for the DER entitlements (Phase 6B; this supersedes the Phase 2 table below, which is kept as the history of what was
-assumed and why).** Observed on the output of Apple's own `codesign --generate-entitlement-der` (Authorization D1, run `44956044650`: seven
+**Current contract for the DER entitlements (Phases 6B and 6C-B; this supersedes the Phase 2 table below, which is kept as the history of what
+was assumed and why).** Observed on the output of Apple's own `codesign --generate-entitlement-der` (Authorization D1, run `44956044650`: seven
 distinct blobs, the same on iOS and macOS targets), and parsed by `parse_der_entitlements` (`tool/ipa_inspect.py`):
 
 ```
@@ -219,7 +219,7 @@ value = BOOLEAN (00 or ff) | INTEGER (shortest two's complement) | UTF8String
       | [CONTEXT 16] { SEQUENCE { UTF8String key, value } ... }   (a nested dictionary: the same encoding as the root, also inside an array)
 ```
 
-Apple writes the entries of every dictionary sorted bytewise by key. The parser refuses the obsolete `SET` layout everywhere, checks the
+The root holds exactly these two elements. Apple writes the entries of every dictionary sorted bytewise by key. The parser refuses the obsolete `SET` layout everywhere, checks the
 class, tag and constructed flag of every element it reads, and keeps the version requirement and the refusal of duplicate keys, malformed
 entries and unsupported values. The seven Apple blobs are committed byte for byte, with their SHA-256 digests, as independent test vectors
 (`tool/fixtures/apple_der_entitlements_d1_run44956044650.txt`, `tool/test_verify_ipa.sh` section 14); the synthetic writer in
@@ -227,7 +227,26 @@ entries and unsupported values. The seven Apple blobs are committed byte for byt
 entitlements in value **and type** (`plist_equal_strict`: a BOOLEAN is not an INTEGER), and so must the entitlements of every slice of a
 universal executable.
 
-Not part of the contract: the parser does not enforce key order, rejects no non-minimal BER encoding, and has no nesting limit (all deferred).
+**Strict DER (Phase 6C-B).** `parse_der_entitlements` reads the blob with a strict DER reader of its own (`_der_strict_node`; the lenient BER
+reader that CMS verification needs is unchanged). DER has exactly one encoding for every value, so refusing the others removes specific
+encoding ambiguities and **reduces the risk of a parser differential** with the kernel's reader. It does **not** establish that the two
+readers are equivalent: Apple's reader has not been examined, and what it accepts or refuses beyond DER is unknown.
+
+What the reader refuses, naming the rule and the byte offset. *Because ASN.1 DER forbids it:* an indefinite length; a length that is not
+minimal (the long form for a value below 128, or a leading zero octet) or that takes more than four octets (the four-octet bound is a
+practical limit of this reader); a tag number in the high-tag form below 31 or with a leading zero; a BOOLEAN that is not exactly one octet,
+`00` or `ff` (BER reads any non-zero octet as TRUE, so `01` would be ambiguous); an INTEGER that is empty or not in its shortest
+two's-complement form. *Because of this application, not because DER requires it:* a root with other than exactly two elements (the layout
+Apple's output shows: version, dictionary), and nesting deeper than `MAX_DER_ENTITLEMENTS_DEPTH` = 32 levels (the root being level 0, each
+nested dictionary adding two levels and each nested array one; Apple's deepest observed blob has 7, a blob at the limit needs about 35 stack
+frames).
+
+Every refusal is a recorded problem of the verification (`DER entitlements are unreadable: ...`): the other checks still run and the evidence
+is still written, a `RecursionError` included. All seven Apple blobs satisfy every rule. The synthetic cases are in `tool/test_verify_ipa.sh`
+section 15.
+
+Not part of the contract (still deferred): key order, empty or NUL keys, non-ASCII keys, Unicode normalisation, and limits on the size of a
+value or on the number of entries.
 Not observed: non-ASCII keys, integers wider than 32 bits, `real`, `data` and `date` values (Apple's XML parser rejected those shapes, and
 duplicate keys, before any DER was written), and whether the blob of a **Distribution** signature equals that of an ad-hoc one.
 
