@@ -65,7 +65,7 @@ PY
 }
 for pair in "authorize|Validate the inputs|vin_a" "build|Validate the inputs|vin_b" "sign|Validate the inputs|vin_s" \
             "authorize|Check the release record|gate" "sign|Re-check the authorization|recheck" \
-            "sign|Export and sign|secret" "sign|Seal the evidence|seal" "sign|Check the archive digest|archive" "sign|Enforce the authorized dlc_wallet|dlc" "sign|Report (job summary)|report" "sign|Native library identity|v9"; do
+            "sign|Export and sign|secret" "sign|Seal the evidence|seal" "sign|Check the archive digest|archive" "sign|Enforce the authorized dlc_wallet|dlc" "sign|Report (job summary)|report" "sign|Native library identity|v9" "sign|Capture the Info.plist|capture"; do
   IFS='|' read -r j n v <<<"$pair"
   f="$(sf "$j" "$n")" && eval "STEP_$v=\"$f\"" || { bad "the workflow has exactly one step '$n' in job $j"; eval "STEP_$v=/nonexistent"; }
 done
@@ -109,7 +109,7 @@ pre = [s for s in sign if sec_i and s["i"] < sec_i[0]]
 post = [s for s in sign if sec_i and s["i"] > sec_i[0]]
 # no code of the approved commit, of the archive or of the hand-over is executed anywhere in the signing job
 INTERP = re.compile(r"(?:^|[;&|(`]|\$\()\s*(?:sudo\s+)?(bash|/bin/bash|sh|/bin/sh|zsh|source|\.|python3?|perl|ruby|node|osascript|swift|make|xcrun|env)\s+((?:-\S+\s+)*)(\S+)", re.M)
-OK_TARGET = re.compile(r'^"?(tools/tool/[A-Za-z_]+\.(py|sh)|\$RUNNER_TEMP/redact\.py|\$\{RUNNER_TEMP\}/redact\.py|-u|-)"?$')
+OK_TARGET = re.compile(r'^"?(tools/tool/[A-Za-z_]+\.(py|sh)|\$RUNNER_TEMP/(redact|findlog)\.py|\$\{RUNNER_TEMP\}/(redact|findlog)\.py|-u|-)"?$')   # redact.py and findlog.py are written by the secret step itself (heredocs), never read from a checkout
 bad_exec = []
 for s in sign:
     txt = "\n".join(l for l in (s["run"] or "").splitlines() if not l.strip().startswith("#"))
@@ -124,7 +124,7 @@ for s in sign:
     stripped = txt.replace("approved/pubspec.yaml", "").replace("git -C approved", "")
     if re.search(r"""(^|[\s"'=:/])(\./)?approved/|cd\s+approved""", stripped):
         bad_exec.append((s["name"], "uses a path of the approved checkout beyond its pubspec.yaml / git rev-parse"))
-chk("the signing job executes no script of the approved commit, of the archive or of the hand-over (interpreter targets are tools/tool/*, redact.py)", not bad_exec, str(bad_exec))
+chk("the signing job executes no script of the approved commit, of the archive or of the hand-over (interpreter targets are tools/tool/*, redact.py, findlog.py)", not bad_exec, str(bad_exec))
 cmd_exec = []
 for s in sign:
     for ln in (s["run"] or "").splitlines():
@@ -399,6 +399,110 @@ run_seal "plain text evidence"; [ "$SEAL_RC" -eq 0 ] && [ -f "$SEAL/evidence/SHA
 run_seal "leak $FAKEJWT"; [ "$SEAL_RC" -ne 0 ] && [ ! -e "$SEAL/evidence/note.txt" ]; chk "seal: a JWT-shaped token anywhere in the evidence refuses and removes the evidence" $?
 run_seal "-----BEGIN PRIVATE KEY-----"; [ "$SEAL_RC" -ne 0 ] && [ ! -e "$SEAL/evidence/note.txt" ]; chk "seal: a private-key marker refuses and removes the evidence" $?
 
+# ============================================================================================================================
+# 5b. Phase 7C: the evidence capture step and the failed-export distribution log
+# ============================================================================================================================
+P7="$tmp/p7c"; mkdir -p "$P7/st"
+FX="$root/tool/ipa_fixture.py"
+python3 -I "$FX" certs "$P7/certs" >/dev/null 2>&1 && python3 -I "$FX" unsigned "$P7/st" --env staging >/dev/null 2>&1
+python3 -I "$FX" sign "$P7/st/Runner.app" "$P7/same.ipa" --certs "$P7/certs" --team SYNTH12345 >/dev/null 2>&1
+python3 -I "$FX" sign "$P7/st/Runner.app" "$P7/reorder.ipa" --certs "$P7/certs" --team SYNTH12345 --mutate info-reorder >/dev/null 2>&1
+python3 -I "$FX" sign "$P7/st/Runner.app" "$P7/secret.ipa" --certs "$P7/certs" --team SYNTH12345 --mutate info-secret >/dev/null 2>&1
+[ -s "$P7/same.ipa" ] && [ -s "$P7/reorder.ipa" ] && [ -s "$P7/secret.ipa" ]; chk "capture step: the synthetic IPAs for the tests exist" $?
+printf 'garbage' > "$P7/corrupt.ipa"
+CAP=""
+run_capture() { # EXPORT_EXIT(0|70|none) IPA_ENV(path|none) [FIND_IPA(path)]
+  CAP="$(mktemp -d -p "$tmp")"; mkdir -p "$CAP/evidence" "$CAP/tmp/export" "$CAP/tools"; ln -s "$root/tool" "$CAP/tools/tool"
+  [ "$1" = none ] || printf 'xcodebuild_exportArchive_exit=%s\n' "$1" > "$CAP/evidence/export-result.txt"
+  printf 'earlier evidence of an earlier step\n' > "$CAP/evidence/v7-ipa-verify-output.txt"
+  [ -z "${3:-}" ] || cp "$3" "$CAP/tmp/export/signer.ipa"
+  local ipa_env=(); [ "$2" = none ] || ipa_env=(IPA="$2")
+  ( cd "$CAP" && env -i PATH="$PATH" HOME="$HOME" TMPDIR="$CAP/tmp" RUNNER_TEMP="$CAP/tmp" GITHUB_RUN_ID=4242 GITHUB_RUN_ATTEMPT=1 GITHUB_SHA="$WFSHA" \
+      BASELINE_APP="$P7/st/Runner.app" "${ipa_env[@]}" bash -e "$STEP_capture" > "$CAP/stdout" 2>&1 ); CAP_RC=$?
+}
+cap_status() { sed -n "s/^$1=//p" "$CAP/evidence/v8-capture/status.txt" 2>/dev/null | head -1; }
+grep -q 'secrets\.\|APPLE_API' "$STEP_capture"; [ $? -ne 0 ]; chk "capture step: it touches no secret (no secrets reference, no APPLE_API variable)" $?
+run_capture 0 "$P7/same.ipa"
+[ "$CAP_RC" -eq 0 ] && [ "$(cap_status state)" = export-succeeded ] && [ "$(cap_status infoplist_ipa)" = kept ] && [ "$(cap_status der)" = kept ] && [ -s "$CAP/evidence/v8-capture/ipa-Info.plist.b64" ]; chk "capture step: a successful export gives the evidence files (exit 0)" $? "rc=$CAP_RC $(cat "$CAP/stdout" | head -3)"
+run_capture 0 "$P7/reorder.ipa"
+[ "$CAP_RC" -eq 0 ] && grep -q 'serialization_only=yes' "$CAP/evidence/v8-capture/infoplist-summary.txt" && grep -q 'bytes_identical=NO' "$CAP/evidence/v8-capture/infoplist-summary.txt"; chk "capture step: an exported Info.plist that V8 would refuse still yields the evidence, and the capture itself is not a failure (it decides nothing)" $?
+run_capture 70 none
+[ "$CAP_RC" -eq 0 ] && [ "$(cap_status state)" = export-failed ] && [ ! -e "$CAP/evidence/v8-capture/ipa-Info.plist.b64" ] && [ -z "$(ls "$CAP/evidence/v8-capture" | grep '\.hex$')" ]; chk "capture step: after a failed export nothing is invented, and the step does not add a failure of its own" $? "rc=$CAP_RC"
+run_capture 0 "$CAP/missing.ipa"
+[ "$CAP_RC" -ne 0 ] && [ "$(cap_status state)" = ipa-missing-after-export ]; chk "capture step: an IPA missing after an export that succeeded FAILS the step (a diagnostic failure, not a silent skip)" $?
+run_capture none none
+[ "$CAP_RC" -eq 0 ] && [ "$(cap_status state)" = export-not-reached ]; chk "capture step: when the export step never ran, that is said, and the step does not fail" $?
+run_capture 0 "$P7/corrupt.ipa"
+[ "$CAP_RC" -ne 0 ] && grep -q 'the IPA cannot be read' "$CAP/evidence/v8-capture/status.txt"; chk "capture step: an unreadable IPA after a successful export FAILS the step (evidence collection failure is never silent)" $?
+run_capture 0 none "$P7/same.ipa"
+[ "$CAP_RC" -eq 0 ] && [ "$(cap_status infoplist_ipa)" = kept ]; chk "capture step: without IPA in the environment the exported IPA is found in the export directory" $?
+run_capture 0 "$P7/same.ipa"
+[ "$(cat "$CAP/evidence/v7-ipa-verify-output.txt")" = "earlier evidence of an earlier step" ]; chk "capture step: the evidence of earlier steps is not touched" $?
+( cd "$CAP" && find . -type f | sort ) > "$CAP/after.list"
+[ -z "$(grep -vE '^\./(evidence/(v8-capture/.*|export-result\.txt|v7-ipa-verify-output\.txt)|stdout|after\.list)$' "$CAP/after.list" | grep -v '^./tools/')" ]; chk "capture step: it writes nothing outside evidence/v8-capture (and keeps no IPA)" $?
+[ -z "$(find "$CAP/tmp" -maxdepth 1 -name 'verify_ipa_cap_*')" ] && [ ! -e "$CAP/evidence/v8-capture/signer.ipa" ] && [ -z "$(find "$CAP/evidence" -name '*.ipa')" ]; chk "capture step: no temporary copy of the executable and no IPA is left behind" $?
+grep -qE 'PlistBuddy|CFBundle|NSCamera' "$CAP/stdout"; [ $? -ne 0 ]; chk "capture step: the job log shows no property list key or value" $?
+SEAL="$(mktemp -d -p "$tmp")"; cp -R "$CAP/evidence" "$SEAL/evidence"
+( cd "$SEAL" && env -i PATH="$PATH" HOME="$HOME" bash -e "$STEP_seal" > "$SEAL/stdout" 2>&1 ); SEAL_RC=$?
+[ "$SEAL_RC" -eq 0 ] && [ -s "$SEAL/evidence/v8-capture/ipa-Info.plist.b64" ] && [ -s "$SEAL/evidence/v8-capture/der-summary.txt" ] && grep -q 'v8-capture/ipa-Info.plist.b64' "$SEAL/evidence/SHA256SUMS.txt"; chk "capture step: the evidence seal keeps the captured files and checksums them" $?
+run_capture 0 "$P7/secret.ipa"
+SEAL="$(mktemp -d -p "$tmp")"; cp -R "$CAP/evidence" "$SEAL/evidence"
+( cd "$SEAL" && env -i PATH="$PATH" HOME="$HOME" bash -e "$STEP_seal" > "$SEAL/stdout" 2>&1 ); SEAL_RC=$?
+[ "$CAP_RC" -eq 0 ] && [ "$(cap_status infoplist_ipa)" = "withheld: a JWT-shaped token" ] && [ "$SEAL_RC" -eq 0 ] && [ -s "$SEAL/evidence/v7-ipa-verify-output.txt" ] && ! grep -rq 'eyJhbGciOiJFUzI1NiJ9' "$CAP/evidence" "$CAP/stdout"; chk "capture step: an Info.plist carrying a token-shaped string is withheld, nothing of it is kept, and the evidence seal does NOT wipe the other evidence" $?
+
+# ---- the distribution log of a FAILED export, through the redaction (the credential step, synthetic key, stub xcodebuild)
+PK=""
+run_pkg() { # MODE: normal | nobundle | outside | linkdir | linklog | old | decoy | big | success
+  PK="$(mktemp -d -p "$tmp")"; mkdir -p "$PK/evidence" "$PK/tmp" "$PK/stub" "$PK/T" "$PK/elsewhere"
+  cat > "$PK/stub/xcodebuild" <<'XEOF'
+#!/bin/bash
+# STUB xcodebuild: fails like a real failed export and leaves a distribution log bundle named on its first output line.
+mode="$STUB_PKG"
+bundle="$TMPDIR/production_2026-11-22_10-00-00.000.xcdistributionlogs"
+[ "$mode" = outside ] && bundle="$STUB_ELSEWHERE/production_x.xcdistributionlogs"
+write_log() { printf 'Processing step: IDEDistributionCodesignStep\nkey id FAKEKEYID99 issuer fake-issuer-0000-aaaa\ntoken %s end\n-----BEGIN PRIVATE KEY-----\nplain line kept\n' "$STUB_JWT" > "$1"; }
+case "$mode" in
+  linkdir) mkdir -p "$STUB_ELSEWHERE/real.xcdistributionlogs"; write_log "$STUB_ELSEWHERE/real.xcdistributionlogs/Packaging.log"; ln -s "$STUB_ELSEWHERE/real.xcdistributionlogs" "$bundle" ;;
+  linklog) mkdir -p "$bundle"; write_log "$STUB_ELSEWHERE/target.log"; ln -s "$STUB_ELSEWHERE/target.log" "$bundle/Packaging.log" ;;
+  nobundle) ;;
+  *) mkdir -p "$bundle"; write_log "$bundle/Packaging.log"
+     [ "$mode" = old ] && touch -d '2000-01-01' "$bundle/Packaging.log"
+     [ "$mode" = unreadable ] && chmod 000 "$bundle/Packaging.log"
+     [ "$mode" = big ] && head -c 4500000 /dev/zero | tr '\0' 'a' >> "$bundle/Packaging.log" ;;
+esac
+[ "$mode" = decoy ] && { mkdir -p "$TMPDIR/stale_2020.xcdistributionlogs"; printf 'DECOYSECRET99\n' > "$TMPDIR/stale_2020.xcdistributionlogs/Packaging.log"; }
+[ "$mode" != nobundle ] && [ "$mode" != success ] && echo "2026-11-22 10:00:00.000 xcodebuild[1:2] [MT] IDEDistribution: Created bundle at path \"$bundle\"."
+echo "token $STUB_JWT"
+[ "$mode" = success ] && { exp=""; while [ $# -gt 0 ]; do [ "$1" = "-exportPath" ] && exp="$2"; shift; done; : > "$exp/Runner.ipa"; exit 0; }
+exit 70
+XEOF
+  printf '#!/bin/bash\nexit 0\n' > "$PK/stub/plutil"; chmod +x "$PK/stub/xcodebuild" "$PK/stub/plutil"
+  ( cd "$PK" && env -i PATH="$PK/stub:$PATH" HOME="$HOME" TMPDIR="$PK/T" RUNNER_TEMP="$PK/tmp" GITHUB_ENV="$PK/env" TEAM_ID="$TEAM" ARCHIVE="$PK/tmp/a.xcarchive" \
+      STUB_PKG="$1" STUB_ELSEWHERE="$PK/elsewhere" STUB_JWT="$FAKEJWT" APPLE_API_KEY_P8="$FAKEKEY" APPLE_API_KEY_ID=FAKEKEYID99 APPLE_API_ISSUER_ID=fake-issuer-0000-aaaa \
+      bash -e "$STEP_secret" > "$PK/stdout" 2>&1 ); PK_RC=$?
+}
+pk_leaks() { grep -rE 'FAKEKEYID99|fake-issuer-0000|TESTONLYFAKEKEY|eyJhbGciOi|DECOYSECRET99|BEGIN PRIVATE' "$PK/stdout" "$PK/evidence" 2>/dev/null | wc -l | tr -d ' '; }
+pk_src() { sed -n "s/^$1=//p" "$PK/evidence/packaging-log-source.txt" 2>/dev/null | head -1; }
+run_pkg normal
+[ "$PK_RC" -ne 0 ] && [ -s "$PK/evidence/Packaging.log" ] && grep -q 'REDACTED' "$PK/evidence/Packaging.log" && grep -q 'plain line kept' "$PK/evidence/Packaging.log" && [ "$(pk_src packaging_log | cut -c1-9)" = collected ]; chk "packaging log: a failed export's distribution log is collected and the step still fails" $? "rc=$PK_RC"
+[ "$(pk_leaks)" = 0 ]; chk "packaging log: no key ID, issuer ID, key line, JWT or private-key marker survives in the collected log, the job log or any evidence" $? "$(grep -rhE 'FAKEKEYID99|fake-issuer-0000|eyJhbGciOi|BEGIN PRIVATE' "$PK/evidence" "$PK/stdout" | head -3)"
+[ -z "$(find "$PK/tmp" -maxdepth 1 -name '*.p8')" ]; chk "packaging log: the key file is still removed afterwards" $?
+for mode in nobundle outside linkdir linklog old big; do
+  run_pkg "$mode"
+  case "$mode" in nobundle) why="names no distribution log bundle" ;; outside) why="not a plain bundle directly inside" ;; linkdir) why="a link or not a directory" ;; linklog) why="holds no plain Packaging.log" ;; old) why="older than this export run" ;; big) why="larger than the redaction reads" ;; esac
+  [ ! -e "$PK/evidence/Packaging.log" ] && [ "$(pk_src packaging_log)" = "not collected" ] && grep -q "$why" "$PK/evidence/packaging-log-source.txt" && [ "$(pk_leaks)" = 0 ] && [ "$PK_RC" -ne 0 ]; chk "packaging log ($mode): it is NOT collected, a one-line reason is kept ($why), nothing leaks, the failure stays" $? "$(cat "$PK/evidence/packaging-log-source.txt" 2>/dev/null | tr '\n' '|')"
+done
+# a log that cannot be redacted is withheld, and the step says so (it does not go on as if the evidence were complete)
+if [ "$(id -u)" -ne 0 ]; then
+  run_pkg unreadable
+  [ "$PK_RC" -ne 0 ] && [ ! -e "$PK/evidence/Packaging.log" ] && [ "$(pk_src packaging_log)" = "withheld: the redaction failed" ] && grep -q 'A redaction failed. Evidence of this step is withheld' "$PK/stdout" && ! grep -q -- '---- xcodebuild -exportArchive (redacted)' "$PK/stdout" && [ "$(pk_leaks)" = 0 ]; chk "packaging log: a log that cannot be redacted is withheld, the step reports the failed redaction and prints no evidence tail" $? "$(cat "$PK/evidence/packaging-log-source.txt" 2>/dev/null | tr '\n' '|')"
+else
+  ok "packaging log: (the unreadable-log case is skipped: this runs as root, which can read any file)"
+fi
+run_pkg decoy
+[ "$(pk_leaks)" = 0 ] && ! grep -q DECOYSECRET99 "$PK/evidence/Packaging.log"; chk "packaging log: another bundle in the temporary directory, not named by this run, is never read" $?
+run_pkg success
+[ "$PK_RC" -eq 0 ] && [ ! -e "$PK/evidence/packaging-log-source.txt" ] && [ ! -e "$PK/evidence/Packaging.log" ]; chk "packaging log: after a SUCCESSFUL export nothing of this kind is collected (the export directory's own copy is the source then)" $? "rc=$PK_RC"
 # ============================================================================================================================
 # 6. The archive validator (F4): behaviour on crafted archives, before and after extraction
 # ============================================================================================================================
@@ -678,6 +782,22 @@ m("Q_ref_not_checked", "the signing job no longer insists on development", '[ "$
 m("R_secret_wholesale", "the whole secret context is passed", 'APPLE_API_ISSUER_ID: ${{ secrets.APPLE_API_ISSUER_ID }}', 'APPLE_API_ISSUER_ID: ${{ secrets.APPLE_API_ISSUER_ID }}\n          ALL: ${{ toJSON(secrets) }}')
 m("S_verifier_repo_is_approved", "the verifier is pointed at the approved checkout again", '--repo "$VERIFIER_REPO"', '--repo approved')
 m("T_environment_dropped", "the protected environment is dropped", '    environment: ios-hosted-signing\n', '')
+# Phase 7C: the evidence capture and the failed-export distribution log
+m("X1_capture_not_always", "the capture step no longer runs after a failed step", '        if: always()\n        run: |\n          set -uo pipefail\n          set +e\n          mkdir -p evidence/v8-capture', '        run: |\n          set -uo pipefail\n          set +e\n          mkdir -p evidence/v8-capture')
+m("X2_capture_continue_on_error", "the capture step is continue-on-error", '      - name: Capture the Info.plist and DER entitlements evidence (V8 diagnostics; read-only, decides nothing)\n        if: always()\n', '      - name: Capture the Info.plist and DER entitlements evidence (V8 diagnostics; read-only, decides nothing)\n        if: always()\n        continue-on-error: true\n')
+m("X3_capture_never_fails", "the capture step always exits 0 (a missing IPA is silent)", '          exit $?\n\n      - name: Seal the evidence', '          exit 0\n\n      - name: Seal the evidence')
+m("X4_capture_has_secret", "the capture step is given a secret", '      - name: Capture the Info.plist and DER entitlements evidence (V8 diagnostics; read-only, decides nothing)\n        if: always()\n', '      - name: Capture the Info.plist and DER entitlements evidence (V8 diagnostics; read-only, decides nothing)\n        if: always()\n        env:\n          K: ${{ secrets.APPLE_API_KEY_ID }}\n')
+m("X5_log_stale_accepted", "a distribution log older than this export run is accepted", 'if os.stat(log).st_mtime < os.stat(marker).st_mtime:', 'if False:')
+m("X6_log_dir_link_accepted", "a distribution log bundle that is a link is accepted", 'if os.path.islink(path) or not os.path.isdir(path):', 'if not os.path.isdir(path):')
+m("X7_log_file_link_accepted", "a Packaging.log that is a link is accepted", 'if os.path.islink(log) or not os.path.isfile(log):', 'if not os.path.isfile(log):')
+m("X8_log_outside_tmpdir", "a bundle outside the step's temporary directory is accepted", ' or os.path.realpath(os.path.dirname(path)) != tmpdir:', ':')
+m("X9_log_not_redacted", "the distribution log is copied without redaction", 'if redact "$logdir/Packaging.log" evidence/Packaging.log; then', 'if cp "$logdir/Packaging.log" evidence/Packaging.log; then')
+m("X10_log_after_success", "the distribution log is also collected after a successful export", 'if [ "$rc" -ne 0 ] && [ ! -f evidence/Packaging.log ]; then\n            cat > "$RUNNER_TEMP/findlog.py"', 'if true; then\n            cat > "$RUNNER_TEMP/findlog.py"')
+m("X11_no_start_marker", "the export start marker is not written", '          : > "$RUNNER_TEMP/.export-start"\n', '')
+m("X12_capture_no_ipa_search", "the capture step does not look for the IPA in the export directory", "          [ -n \"$ipa\" ] || ipa=\"$(find \"$RUNNER_TEMP/export\" -maxdepth 1 -name '*.ipa' 2>/dev/null | head -n 1)\"\n", '')
+m("X13_capture_no_baseline", "the capture step is not given the archive's app", '--archive-app "${BASELINE_APP:-}"', '--archive-app ""')
+m("X14_capture_out_elsewhere", "the capture writes into the evidence root instead of its own folder", '--out evidence/v8-capture --evidence-dir evidence', '--out evidence --evidence-dir evidence')
+m("X15_log_failure_hidden", "a failed redaction of the distribution log is hidden", 'red=1; { echo "packaging_log=withheld: the redaction failed"', ':; { echo "packaging_log=withheld: the redaction failed"')
 res = []
 for mid, desc, old, new, which in M:
     cnt = src.count(old)

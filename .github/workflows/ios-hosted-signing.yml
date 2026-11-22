@@ -630,6 +630,8 @@ jobs:
           EOF
           plutil -lint "$OPTS" || { echo "::error::The export options are not a valid plist."; exit 1; }
 
+          # Phase 7C: the moment THIS export run starts, so that a distribution log of an earlier run is never mistaken for it (see below).
+          : > "$RUNNER_TEMP/.export-start"
           # The key ID and issuer ID are command-line arguments (xcodebuild has no other way to take them); `env -u` makes sure
           # that no secret is also in the environment of xcodebuild and its children. Output goes to a raw log, never the job log.
           env -u APPLE_API_KEY_P8 -u APPLE_API_KEY_ID -u APPLE_API_ISSUER_ID \
@@ -671,6 +673,57 @@ jobs:
           [ -f "$EXPORT_DIR/DistributionSummary.plist" ] && plutil -p "$EXPORT_DIR/DistributionSummary.plist" > "$RUNNER_TEMP/distsum.txt" 2>&1 && { redact "$RUNNER_TEMP/distsum.txt" evidence/DistributionSummary.txt || red=1; }
           [ -f "$EXPORT_DIR/ExportOptions.plist" ] && plutil -p "$EXPORT_DIR/ExportOptions.plist" > "$RUNNER_TEMP/expopts.txt" 2>&1 && { redact "$RUNNER_TEMP/expopts.txt" evidence/ExportOptions-used.txt || red=1; }
           [ -f "$EXPORT_DIR/Packaging.log" ] && { redact "$EXPORT_DIR/Packaging.log" evidence/Packaging.log || red=1; }
+          # Phase 7C. When the export FAILED, Xcode does not copy Packaging.log to the export directory: it stays in a .xcdistributionlogs
+          # bundle that Xcode names on the first line of its own output ("Created bundle at path ..."), and no earlier run kept it. Keep the
+          # log of THIS run, through the SAME redaction (the key file still exists here), and nothing else: the bundle must be a directory
+          # directly inside this step's TMPDIR with a plain name, not a link, newer than the marker above, and its Packaging.log a plain
+          # file within the size the redaction reads. If any of that is not so, a one-line reason is kept instead (no path, no content).
+          if [ "$rc" -ne 0 ] && [ ! -f evidence/Packaging.log ]; then
+            cat > "$RUNNER_TEMP/findlog.py" <<'PY'
+          import os, re, sys
+          raw, marker = sys.argv[1], sys.argv[2]
+          def no(why):
+              print("NO " + why)
+              sys.exit(0)
+          try:
+              text = open(raw, "rb").read(4000000).decode("utf-8", "replace")
+          except OSError:
+              no("the export output cannot be read")
+          m = re.search(r'Created bundle at path "([^"\n]+\.xcdistributionlogs)"', text)
+          if not m:
+              no("the export output names no distribution log bundle")
+          path = m.group(1)
+          tmpdir = os.path.realpath(os.environ.get("TMPDIR") or "/tmp")
+          name = os.path.basename(path)
+          if not re.fullmatch(r"[A-Za-z0-9_.-]{1,120}\.xcdistributionlogs", name) or os.path.realpath(os.path.dirname(path)) != tmpdir:
+              no("the named bundle is not a plain bundle directly inside this step's temporary directory")
+          if os.path.islink(path) or not os.path.isdir(path):
+              no("the named bundle is a link or not a directory")
+          log = os.path.join(path, "Packaging.log")
+          if os.path.islink(log) or not os.path.isfile(log):
+              no("the bundle holds no plain Packaging.log")
+          try:
+              if os.stat(log).st_mtime < os.stat(marker).st_mtime:
+                  no("the bundle is older than this export run")
+              if os.stat(log).st_size > 4000000:
+                  no("Packaging.log is larger than the redaction reads")
+          except OSError:
+              no("Packaging.log cannot be inspected")
+          print("OK " + path)
+          PY
+            found="$(python3 -I "$RUNNER_TEMP/findlog.py" "$RUNNER_TEMP/export.raw.log" "$RUNNER_TEMP/.export-start" 2>/dev/null)"
+            case "$found" in
+              "OK "*)
+                logdir="${found#OK }"
+                if redact "$logdir/Packaging.log" evidence/Packaging.log; then
+                  { echo "packaging_log=collected, redacted, from the distribution log bundle of this failed export run"; echo "bundle_name=$(basename "$logdir")"; echo "export_exit=$rc"; } > evidence/packaging-log-source.txt
+                else
+                  red=1; { echo "packaging_log=withheld: the redaction failed"; echo "export_exit=$rc"; } > evidence/packaging-log-source.txt
+                fi ;;
+              "NO "*) { echo "packaging_log=not collected"; echo "reason=${found#NO }"; echo "export_exit=$rc"; } > evidence/packaging-log-source.txt ;;
+              *) { echo "packaging_log=not collected"; echo "reason=the search helper gave no answer"; echo "export_exit=$rc"; } > evidence/packaging-log-source.txt ;;
+            esac
+          fi
           cleanup
           [ "$red" -eq 0 ] || { echo "::error::A redaction failed. Evidence of this step is withheld; nothing was uploaded."; exit 1; }
           echo "---- xcodebuild -exportArchive (redacted), last 60 lines ----"
@@ -842,6 +895,23 @@ jobs:
           { echo "ipa_sha256_after_export=$before"; echo "ipa_sha256_after_verification=$after"; echo "ipa_size=$(stat -f%z "$IPA")"; } | tee evidence/ipa-digest.txt
           [ "$before" = "$after" ] || { echo "::error::The IPA changed between the export and the end of verification."; exit 1; }
 
+      # Phase 7C (Issue #71). READ-ONLY EVIDENCE for the open V8 question (what did the export change in the app's top-level Info.plist?) and for
+      # the DER entitlements blob of the Distribution-signed executable. It runs even when V7 or V8 failed (if: always()), uses no secret and no
+      # network, writes only under evidence/, keeps no IPA and no profile, decides nothing, and is NOT continue-on-error: if the export
+      # succeeded and the evidence cannot be captured, this step fails and so does the job. V7, V8 and V9 are untouched.
+      # (tool/verify_ipa.py capture-evidence; docs/IOS_SIGNING.md section 3.1d.)
+      - name: Capture the Info.plist and DER entitlements evidence (V8 diagnostics; read-only, decides nothing)
+        if: always()
+        run: |
+          set -uo pipefail
+          set +e
+          mkdir -p evidence/v8-capture
+          ipa="${IPA:-}"
+          [ -n "$ipa" ] || ipa="$(find "$RUNNER_TEMP/export" -maxdepth 1 -name '*.ipa' 2>/dev/null | head -n 1)"
+          python3 -I tools/tool/verify_ipa.py capture-evidence --out evidence/v8-capture --evidence-dir evidence \
+            --ipa "$ipa" --archive-app "${BASELINE_APP:-}" --run-id "$GITHUB_RUN_ID" --run-attempt "$GITHUB_RUN_ATTEMPT" --tools-sha "$GITHUB_SHA"
+          exit $?
+
       - name: Seal the evidence (text only, secret scan, SHA-256 sums)
         if: always()
         run: |
@@ -874,7 +944,7 @@ jobs:
               echo "### Signing certificate SHA-256 (public value; the coordinator records it BEFORE any upload)"
               echo '```'; cat evidence/certificate-sha256.txt; cat evidence/pin.txt 2>/dev/null; echo '```'
             fi
-            for f in evidence/export-result.txt evidence/ipa-digest.txt evidence/v1-identity.txt evidence/v4-profile-summary.txt evidence/v6-environment.txt evidence/v9-native.txt evidence/export-diagnosis.txt; do
+            for f in evidence/export-result.txt evidence/ipa-digest.txt evidence/v1-identity.txt evidence/v4-profile-summary.txt evidence/v6-environment.txt evidence/v9-native.txt evidence/export-diagnosis.txt evidence/packaging-log-source.txt evidence/v8-capture/status.txt; do
               [ -f "$f" ] || continue   # an optional file that does not exist is not an error (a successful run has no export-diagnosis.txt)
               echo "### ${f#evidence/}"; echo '```'; cat "$f"; echo '```'
             done

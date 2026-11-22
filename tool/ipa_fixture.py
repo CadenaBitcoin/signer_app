@@ -596,6 +596,28 @@ def sign_app(app_in, out_ipa, certdir, team, mutations):
         info["CFBundleShortVersionString"] = "9.9.9"
         with open(os.path.join(app, "Info.plist"), "wb") as f:
             plistlib.dump(info, f)
+    # Phase 7C: what an export could do to the app's top-level Info.plist, BEFORE signing (so the signature seals the changed file and the
+    # archive's original stays what the unsigned build had). Each is ONE kind of difference, for the evidence-capture tests.
+    if mut & {"info-reorder", "info-samelen", "info-addkey", "info-rmkey", "info-type", "info-xml", "info-secret"}:
+        with open(os.path.join(app, "Info.plist"), "rb") as f:
+            info = plistlib.load(f)
+        fmt = plistlib.FMT_BINARY
+        if "info-reorder" in mut:  # the same content, the keys written in the REVERSE order: a binary re-serialisation of the same length
+            info = dict(reversed(list(info.items())))
+        if "info-samelen" in mut:  # a value replaced by another of the same length: the file keeps its size
+            info["CFBundleName"] = "".join(chr(ord(c) ^ 1) if c.isalpha() else c for c in info["CFBundleName"])
+        if "info-addkey" in mut:
+            info["ZZAddedByExport"] = "x"
+        if "info-rmkey" in mut:
+            del info["CFBundleSupportedPlatforms"]
+        if "info-type" in mut:  # integer 1 becomes boolean true
+            info["UIDeviceFamily"] = [True]
+        if "info-xml" in mut:
+            fmt = plistlib.FMT_XML
+        if "info-secret" in mut:  # a JWT-shaped string in a value: content that must never be kept as evidence
+            info["ZZNote"] = "eyJhbGciOiJFUzI1NiJ9.eyJpc3MiOiJmYWtlIn0.c2lnbmF0dXJl"
+        with open(os.path.join(app, "Info.plist"), "wb") as f:
+            plistlib.dump(info, f, fmt=fmt, sort_keys="info-reorder" not in mut)
     c = lambda n: os.path.join(certdir, n)
     MUT_VICTIM[0] = c("leaf.crt")
     leaf_name = "leaf2" if ("other-team-cert" in mut or "spoof-signer" in mut) else "leaf"

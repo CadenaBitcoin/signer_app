@@ -1684,6 +1684,442 @@ derchk derindef der-indefinite "indefinite length"
 derchk derextra der-root-extra "exactly 2 are required"
 derchk derdeep der-deep "nested deeper than"
 
+# ---- 16. Phase 7C (Issue #71): evidence capture for the open V8 question and for the Distribution DER blob ---------------------------
+# `verify_ipa.py capture-evidence` keeps, for the NEXT signing run, what the first one did not: the archive's and the exported top-level Info.plist
+# (exact bytes as base64 text, sizes, digests, how they differ, whether the CodeDirectory seals each) and the DER entitlements blob (hex). It
+# is read-only and decides nothing: V8 stays byte-strict (sections 12 and 13 still say so). Everything here is SYNTHETIC (our own certificates);
+# the expectations are worked out from the bytes in this test, never taken from the tool's own output.
+mk cap_same staging
+mk cap_reorder staging info-reorder
+mk cap_samelen staging info-samelen
+mk cap_addkey staging info-addkey
+mk cap_rmkey staging info-rmkey
+mk cap_type staging info-type
+mk cap_xml staging info-xml
+mk cap_secret staging info-secret
+mk cap_derbad staging der-indefinite
+mk cap_noder staging no-der
+pyunit "$root" "$tmp" <<'PY'
+import base64, hashlib, json, os, re, struct, subprocess, sys, tempfile, zipfile
+sys.dont_write_bytecode = True
+root, tmp = sys.argv[1:3]
+sys.path.insert(0, os.path.join(root, "tool"))
+import ipa_inspect as I
+VERIFY = os.path.join(root, "tool", "verify_ipa.py")
+ARCHIVE = os.path.join(tmp, "staging", "Runner.app")
+
+
+def ok(m): print("ok   " + m)
+def bad(m, why=""):
+    print("FAIL " + m)
+    if why: print("     " + why)
+def check(c, m, why=""): ok(m) if c else bad(m, why)
+
+
+def member(ipa, name):
+    with zipfile.ZipFile(ipa) as z:
+        return z.read(name)
+
+
+def capture(ipa, archive=ARCHIVE, export_exit="0", record_sha=True, ev_files=None):
+    """Run the subcommand the way the workflow does; -> (rc, stdout, {file: text}, out_dir)."""
+    work = tempfile.mkdtemp(dir=tmp)
+    ev, out = os.path.join(work, "evidence"), os.path.join(work, "evidence", "v8-capture")
+    os.makedirs(ev)
+    if export_exit is not None:
+        lines = ["xcodebuild_exportArchive_exit=%s" % export_exit]
+        if export_exit == "0" and ipa and os.path.isfile(ipa) and record_sha:
+            lines.append("ipa_sha256_after_export=" + hashlib.sha256(open(ipa, "rb").read()).hexdigest())
+        open(os.path.join(ev, "export-result.txt"), "w").write("\n".join(lines) + "\n")
+    for n, t in (ev_files or {}).items():
+        open(os.path.join(ev, n), "w").write(t)
+    os.makedirs(out)
+    r = subprocess.run([sys.executable, "-I", VERIFY, "capture-evidence", "--out", out, "--evidence-dir", ev, "--ipa", ipa or "", "--archive-app", archive or "",
+                        "--run-id", "4242", "--run-attempt", "1", "--tools-sha", "a" * 40], capture_output=True, text=True)
+    files = {n: open(os.path.join(out, n), encoding="utf-8").read() for n in sorted(os.listdir(out))}
+    return r.returncode, r.stdout + r.stderr, files, out
+
+
+def kv(text):
+    return dict(l.split("=", 1) for l in text.splitlines() if "=" in l and not l.startswith("problem:"))
+
+
+def first_diff(a, b):
+    n = min(len(a), len(b))
+    return next((i for i in range(n) if a[i] != b[i]), None if len(a) == len(b) else n)
+
+
+arch_bytes = open(os.path.join(ARCHIVE, "Info.plist"), "rb").read()
+IPAS = {n: os.path.join(tmp, "cap_%s.ipa" % n) for n in ("same", "reorder", "samelen", "addkey", "rmkey", "type", "xml", "secret", "derbad", "noder")}
+INFO = "Payload/Runner.app/Info.plist"
+
+# ---- identical files
+rc, out, f, _d = capture(IPAS["same"])
+st = kv(f["status.txt"])
+check(rc == 0 and st["state"] == "export-succeeded" and st["problems"] == "0", "identical files: the capture succeeds (exit 0, state export-succeeded, no problem)", out)
+ip_bytes = member(IPAS["same"], INFO)
+check(ip_bytes == arch_bytes, "(the synthetic IPA of this case really holds the archive's exact Info.plist)")
+check(base64.b64decode("".join(f["archive-Info.plist.b64"].split())) == arch_bytes and base64.b64decode("".join(f["ipa-Info.plist.b64"].split())) == ip_bytes,
+      "the kept base64 decodes to the EXACT bytes of both files (nothing normalised)")
+check("archive: sha256=" + hashlib.sha256(arch_bytes).hexdigest() in f["infoplist-summary.txt"] and "ipa: size=%d bytes" % len(ip_bytes) in f["infoplist-summary.txt"],
+      "the summary has each file's SHA-256 and exact length, worked out independently here")
+check("bytes_identical=yes equal_length=yes" in f["infoplist-summary.txt"] and "first_differing_byte_offset" not in f["infoplist-summary.txt"], "identical bytes: said so, and no differing offset")
+check(f["infoplist-summary.txt"].count("-> MATCH") == 2 and "DIFFERENT" not in f["infoplist-summary.txt"], "the CodeDirectory's Info.plist seal matches the exported file and the archive's file")
+check(all(re.fullmatch(r"[0-9a-f]+", l) for l in f["der-entitlements-slice0-cpu100000c.hex"].split()) and "-> MATCH" in f["der-summary.txt"], "the DER blob is kept as hex and its seal (slot 7) matches")
+check("v8-capture" not in out and "CFBundle" not in out, "the log carries counts, digests and states only: no property list key or value")
+
+# ---- one kind of difference at a time (the expected offsets, counts and flags are computed from the two byte strings)
+def diffcase(name, **want):
+    rc, out, f, _d = capture(IPAS[name])
+    ipb = member(IPAS[name], INFO)
+    s = f["infoplist-summary.txt"]
+    off = first_diff(arch_bytes, ipb)
+    ok_all = rc == 0 and ("bytes_identical=NO" in s)
+    ok_all &= ("equal_length=%s" % ("yes" if len(arch_bytes) == len(ipb) else "NO")) in s
+    ok_all &= ("first_differing_byte_offset=%d " % off) in s
+    for k, v in want.items():
+        ok_all &= (v in s)
+    return ok_all, rc, out, s, ipb
+
+ok_all, rc, out, s, ipb = diffcase("reorder", sem="semantic=identical serialization_only=yes", order="top_level_key_order_equal=NO", counts="added=0 removed=0 changed=0 (of which type-changed=0)")
+check(ok_all and len(ipb) == len(arch_bytes) and ipb != arch_bytes, "a SAME-LENGTH re-serialisation (keys in reverse order): equal length, a first differing offset, serialization_only=yes, no key added, removed or changed, key order differs", s[-700:])
+check(s.count("-> MATCH") == 1 and s.count("-> DIFFERENT") == 1 and re.search(r"ipa_info_plist=\S+ -> MATCH", s) and re.search(r"archive_info_plist=\S+ -> DIFFERENT", s),
+      "...and the seal matches the EXPORTED file and not the archive's (the signature sealed what the export wrote)")
+ok_all, rc, out, s, ipb = diffcase("samelen", sem="semantic=different serialization_only=no", counts="added=0 removed=0 changed=1 (of which type-changed=0)", key="changed: CFBundleName (string value)")
+check(ok_all and len(ipb) == len(arch_bytes), "a same-length CONTENT change (one string value): equal length, semantic=different, exactly one changed key, named", s[-600:])
+ok_all, rc, out, s, ipb = diffcase("addkey", counts="added=1 removed=0 changed=0 (of which type-changed=0)", key="added: ZZAddedByExport (string)")
+check(ok_all and len(ipb) != len(arch_bytes), "an added key: lengths differ, one key added and named", s[-500:])
+ok_all, rc, out, s, ipb = diffcase("rmkey", counts="added=0 removed=1 changed=0 (of which type-changed=0)", key="removed: CFBundleSupportedPlatforms")
+check(ok_all, "a removed key: one key removed and named", s[-500:])
+ok_all, rc, out, s, ipb = diffcase("type", counts="added=0 removed=0 changed=1 (of which type-changed=1)", key="changed: UIDeviceFamily[0] (integer -> bool)")
+check(ok_all, "a TYPE difference (integer 1 became boolean true): one changed key, counted as type-changed, with both types", s[-500:])
+ok_all, rc, out, s, ipb = diffcase("xml", sem="semantic=identical serialization_only=yes", fmt="formats: binary -> xml", ipaf="ipa: container_format=xml")
+check(ok_all and ipb[:5] == b"<?xml" and "ipa: bplist" not in s, "a binary-to-XML change: formats named, same content in value and type, serialization only", s[-500:])
+# the bytes kept are the file as it was, whatever the difference
+for n in ("reorder", "samelen", "xml"):
+    rc, out, f, _d = capture(IPAS[n])
+    check(base64.b64decode("".join(f["ipa-Info.plist.b64"].split())) == member(IPAS[n], INFO), "(%s) the kept exported bytes are exact" % n)
+
+# ---- content safety: base64 is not sanitisation
+rc, out, f, d = capture(IPAS["secret"])
+st = kv(f["status.txt"])
+blob_all = out + "".join(f.values())
+check(rc == 0 and st["infoplist_ipa"] == "withheld: a JWT-shaped token" and "ipa-Info.plist.b64" not in f and st["infoplist_archive"] == "kept",
+      "a property list that holds a JWT-shaped token is NOT kept (only the kind of material is recorded); the other file still is", str(st))
+check("eyJhbGciOiJFUzI1NiJ9" not in blob_all and "c2lnbmF0dXJl" not in blob_all and "ZZNote" not in out, "...and neither the token, nor its encoding, nor a trace of it reaches any output file or the log")
+check("ipa: sha256=" + hashlib.sha256(member(IPAS["secret"], INFO)).hexdigest() in f["infoplist-summary.txt"], "...while its size and SHA-256 are still recorded")
+
+def zip_ipa(name, plist_bytes, exe=None, extra=None):
+    path = os.path.join(tmp, "hand_%s.ipa" % name)
+    with zipfile.ZipFile(path, "w", zipfile.ZIP_DEFLATED) as z:
+        z.writestr("Payload/Runner.app/Info.plist", plist_bytes)
+        if exe is not None: z.writestr("Payload/Runner.app/Runner", exe)
+        for k, v in (extra or {}).items(): z.writestr(k, v)
+    return path
+import plistlib
+base = plistlib.loads(arch_bytes)
+def xml_plist(d): return plistlib.dumps(d, fmt=plistlib.FMT_XML)
+# safe and unsafe content, by kind
+for what, d, want in (("a private-key marker in a value", dict(base, ZZ="-----BEGIN " + "PRIVATE KEY-----"), "a private-key marker"),
+                      ("a PEM line", dict(base, ZZ="x -----BEGIN CERTIFICATE----- y"), "a PEM armour line"),
+                      ("a bearer token", dict(base, ZZ="Authorization: Bearer abcdefgh12345678"), "a bearer or authorization token"),
+                      ("an unbroken 150-character token", dict(base, ZZ="A" * 150), "an unbroken run of 120 or more base64-like characters"),
+                      ("a marker in a KEY name", dict(base, **{"PRIVATE KEY": "x"}), "a private-key marker")):
+    ip = zip_ipa("unsafe", xml_plist(d))
+    rc, out, f, _d = capture(ip)
+    st = kv(f["status.txt"])
+    check(st["infoplist_ipa"] == "withheld: " + want and "ipa-Info.plist.b64" not in f and "PRIVATE KEY" not in "".join(f.values()).replace("a private-key marker", "") and "Bearer" not in "".join(f.values()),
+          "content judged on the DECODED bytes: %s is not kept (reason: %s)" % (what, want), str(st))
+check(I.evidence_unsafe_reason(arch_bytes) is None and I.evidence_unsafe_reason(b"A" * 119) is None and I.evidence_unsafe_reason(b"A" * 120) is not None,
+      "the safety check passes ordinary property list bytes and has its boundary at an unbroken run of 120 characters")
+rc, out, f, _d = capture(zip_ipa("safe", xml_plist(dict(base, ZZ="A" * 119))))
+check(kv(f["status.txt"])["infoplist_ipa"] == "kept", "a 119-character run is below the limit and is kept (the boundary is 120)")
+# the summary itself can never make the evidence seal delete everything: a hostile KEY name does not reach it
+rc, out, f, _d = capture(zip_ipa("hostile", xml_plist(dict(base, **{"PRIVATE KEY": "x", "eyJhbGciOiJFUzI1NiJ9.eyJpc3MiOiJmYWtlIn0": "y"}))))
+check(not re.search(r"PRIVATE KEY|eyJhbGciOiJ", "".join(f.values())) and "top-level keys not listed" in f["infoplist-summary.txt"], "a hostile key name of a withheld file is not listed in the summary, so the evidence seal cannot be triggered by it")
+# ...and the line-by-line scan of every written line stays as a second defence: a hostile NAME in the IPA (its app folder) is replaced by a note
+hostile_app = os.path.join(tmp, "hostile_app.ipa")
+with zipfile.ZipFile(hostile_app, "w") as z:
+    z.writestr("Payload/eyJhbGciOiJFUzI1NiJ9.eyJpc3MiOiJmYWtlIn0.c2lnbmF0dXJl.app/Info.plist", arch_bytes)
+    z.writestr("Payload/eyJhbGciOiJFUzI1NiJ9.eyJpc3MiOiJmYWtlIn0.c2lnbmF0dXJl.app/Runner", open(os.path.join(ARCHIVE, "Runner"), "rb").read())
+rc, out, f, _d = capture(hostile_app)
+check("[line withheld: it contained a JWT-shaped token]" in "".join(f.values()) and "eyJhbGciOiJFUzI1NiJ9" not in "".join(f.values()) + out, "a hostile folder name in the IPA is replaced by a note on every line that would show it (the second defence)")
+
+# ---- invalid and oversized files, bounded
+rc, out, f, _d = capture(zip_ipa("garbage", b"this is not a property list\x00\x01"))
+s = f["infoplist-summary.txt"]
+check("ipa: container_format=unknown" in s and "typed comparison: not possible" in s and kv(f["status.txt"])["infoplist_ipa"].startswith("withheld: a property list that cannot be inspected"), "an invalid property list is described (format unknown, no typed comparison) and, because it cannot be inspected, its bytes are NOT kept (R1)")
+big = xml_plist(dict(base, ZZ=b"\x00" * 70000))
+rc, out, f, _d = capture(zip_ipa("big", big))
+check(kv(f["status.txt"])["infoplist_ipa"] == "withheld: too large" and "ipa-Info.plist.b64" not in f and "ipa: size=%d bytes" % len(big) in f["infoplist-summary.txt"],
+      "a 70 KB property list is described (size, digest) but its bytes are not kept")
+rc, out, f, _d = capture(zip_ipa("huge", b"<?xml " + b"x" * (I.EVIDENCE_READ_CAP + 10)))
+check(rc == 1 and "the exported Info.plist is unavailable" in f["status.txt"] and "larger than" in f["status.txt"], "a property list beyond the read cap is not read at all, and that is a reported problem")
+check(all(len(v) < 20000 for v in f.values()) and len(out) < 2000, "every output is bounded")
+
+# ---- DER: kept whether or not the parser reads it; and the other situations of the export
+rc, out, f, _d = capture(IPAS["derbad"])
+hexf = [n for n in f if n.endswith(".hex")]
+exe_dir = tempfile.mkdtemp(dir=tmp)
+open(os.path.join(exe_dir, "exe"), "wb").write(member(IPAS["derbad"], "Payload/Runner.app/Runner"))
+want_blob = I.read_signature(os.path.join(exe_dir, "exe"))["slices"][0]["der_entitlements_blob"]
+check(rc == 0 and len(hexf) == 1 and bytes.fromhex("".join(f[hexf[0]].split())) == want_blob and want_blob[8] == 0x70 and want_blob[9] == 0x80,
+      "a MALFORMED DER blob (indefinite length) is kept byte for byte as hex, though the parser refuses it")
+check("parser verdict (information only, does not decide what is kept): refused" in f["der-summary.txt"] and "-> MATCH" in f["der-summary.txt"] and "sha256=" + hashlib.sha256(want_blob).hexdigest() in f["der-summary.txt"],
+      "...with the parser's verdict as information only, the blob's SHA-256 and its slot-7 seal")
+rc, out, f, _d = capture(IPAS["noder"])
+check(rc == 0 and kv(f["status.txt"])["der"] == "absent" and not [n for n in f if n.endswith(".hex")] and "no DER entitlements slot" in f["der-summary.txt"], "a missing DER entitlements slot is reported as absent, no file is invented")
+rc, out, f, _d = capture("", export_exit="70")
+st = kv(f["status.txt"])
+check(rc == 0 and st["state"] == "export-failed" and st["infoplist_ipa"] == "absent" and "ipa-Info.plist.b64" not in f and not [n for n in f if n.endswith(".hex")] and "none is invented" in f["infoplist-summary.txt"],
+      "after a FAILED export: no exported file is claimed or invented, the capture is not a failure of its own", str(st))
+check(st["infoplist_archive"] == "kept", "...but the archive's Info.plist (the baseline) is still kept")
+rc, out, f, _d = capture(os.path.join(tmp, "does-not-exist.ipa"), export_exit="0")
+st = kv(f["status.txt"])
+check(rc == 1 and st["state"] == "ipa-missing-after-export" and "no IPA to read" in f["status.txt"], "an IPA missing after an export that said it succeeded is a DIAGNOSTIC FAILURE (exit 1), not a skip", str(st))
+rc, out, f, _d = capture("", export_exit=None)
+check(rc == 0 and kv(f["status.txt"])["state"] == "export-not-reached", "when the export step never ran, that is said and nothing is fabricated")
+rc, out, f, _d = capture(IPAS["same"], archive=os.path.join(tmp, "nowhere"))
+check(rc == 1 and "the archived Info.plist is unavailable" in f["status.txt"], "an unreadable archive baseline after a successful export is a diagnostic failure")
+corrupt = os.path.join(tmp, "corrupt.ipa"); open(corrupt, "wb").write(b"PK\x03\x04 this is not a zip archive")
+rc, out, f, _d = capture(corrupt)
+check(rc == 1 and "the IPA cannot be read" in f["status.txt"], "a corrupt IPA after a successful export is a diagnostic failure (evidence collection failure is never silent)")
+rc, out, f, _d = capture(IPAS["same"], record_sha=False, ev_files={"export-result.txt": "xcodebuild_exportArchive_exit=0\nipa_sha256_after_export=" + "0" * 64 + "\n"})
+check(rc == 1 and "differs from the one recorded right after the export" in f["status.txt"], "an IPA whose digest is not the one recorded after the export is flagged (provenance)")
+rc, out, f, _d = capture(IPAS["same"])
+check(subprocess.run(["grep", "-rlE", "PRIVATE KEY|eyJ[A-Za-z0-9_-]{10,}\\.|BEGIN PKCS7"] + [os.path.join(_d, n) for n in f]).returncode == 1, "no evidence file holds a marker the evidence seal refuses")
+# the capture never writes anything but text under --out, and never the IPA
+check(all(n.endswith((".txt", ".b64", ".hex")) for n in f) and not any(n.endswith(".ipa") for n in f), "only text files are written (.txt, .b64, .hex); the IPA is never copied")
+
+# ---- the DER blob is judged like the property list: content first, size bound, and which executable it came from
+import ipa_fixture as FX
+keep = FX.der_entitlements_blob
+JWT = "eyJhbGciOiJFUzI1NiJ9.eyJpc3MiOiJmYWtlIn0.c2lnbmF0dXJl"
+FX.der_entitlements_blob = lambda ents, version=b"\x01": keep(dict(ents, **{"com.example.note": JWT}), version)
+try:
+    FX.MUT.clear()
+    FX.sign_app(ARCHIVE_SRC := os.path.join(tmp, "staging", "Runner.app"), os.path.join(tmp, "cap_derjwt.ipa"), os.path.join(tmp, "certs"), "SYNTH12345", [])
+finally:
+    FX.der_entitlements_blob = keep
+rc, out, f, _d = capture(os.path.join(tmp, "cap_derjwt.ipa"))
+st = kv(f["status.txt"])
+check(rc == 0 and st["der"] == "withheld: a JWT-shaped token" and not [n for n in f if n.endswith(".hex")] and "c2lnbmF0dXJl" not in out + "".join(f.values()) and "com.example.note" not in "".join(f.values()),
+      "a DER blob that holds a token-shaped string is NOT kept (hex included), and nothing of it appears in any output", str(st))
+check("sha256=" in f["der-summary.txt"] and "source executable: Payload/Runner.app/Runner" in f["der-summary.txt"], "...but its size, SHA-256 and source executable are recorded")
+import contextlib, io, types
+sys.path.insert(0, os.path.join(root, "tool"))
+import verify_ipa as V
+def inproc(ipa, bound):
+    work = tempfile.mkdtemp(dir=tmp); ev = os.path.join(work, "ev"); o = os.path.join(work, "o"); os.makedirs(ev); os.makedirs(o)
+    open(os.path.join(ev, "export-result.txt"), "w").write("xcodebuild_exportArchive_exit=0\n")
+    ns = types.SimpleNamespace(out=o, evidence_dir=ev, ipa=ipa, archive_app=ARCHIVE, run_id="1", run_attempt="1", tools_sha="")
+    old = I.EVIDENCE_DER_MAX_BYTES
+    I.EVIDENCE_DER_MAX_BYTES = bound
+    try:
+        with contextlib.redirect_stdout(io.StringIO()):
+            rc = V.capture_evidence(ns)
+    finally:
+        I.EVIDENCE_DER_MAX_BYTES = old
+    return rc, {n: open(os.path.join(o, n), encoding="utf-8").read() for n in os.listdir(o)}
+rc, f = inproc(IPAS["same"], 100)
+check(rc == 0 and kv(f["status.txt"])["der"] == "withheld: too large" and not [n for n in f if n.endswith(".hex")] and "bytes NOT kept: larger than 100 bytes" in f["der-summary.txt"],
+      "a DER blob above the size bound is described (size, SHA-256) but its bytes are not kept")
+rc, f = inproc(IPAS["same"], I.EVIDENCE_DER_MAX_BYTES)
+check(rc == 0 and kv(f["status.txt"])["der"] == "kept", "(control) the same blob under the real bound is kept")
+# an IPA must hold exactly one top-level app
+two = os.path.join(tmp, "two_apps.ipa")
+with zipfile.ZipFile(two, "w") as z:
+    z.writestr("Payload/A.app/Info.plist", arch_bytes); z.writestr("Payload/B.app/Info.plist", arch_bytes)
+rc, out, f, _d = capture(two)
+check(rc == 1 and "holds 2 top-level Info.plist member(s), expected exactly 1" in f["status.txt"], "an IPA with two top-level apps is not guessed at: no Info.plist is taken from it, and that is a reported problem")
+
+# ---- Phase 7C-R1: content safety must hold whatever the encoding, and NOTHING derived from a withheld file may reach the evidence ----
+# A binary property list stores a string with a non-ASCII character as UTF-16, so the token inside it never appears as ASCII bytes; an XML one can
+# spell it with character references. And a hex window or a key list taken from a withheld file would show it again, in a form no pattern scan sees.
+# These tests therefore DECODE every representation in everything the capture wrote (base64 and hex files, every hex run in the text, the log) and look
+# for the material itself, as ASCII and as UTF-16 of both byte orders.
+JWT2 = "eyJhbGciOiJFUzI1NiJ9.eyJpc3MiOiJmYWtlIn0.c2lnbmF0dXJl"
+PKM = "-----BEGIN " + "PRIVATE KEY-----"
+SECRET = "SECRETVALUE9988776655"
+def views_of(f, out):
+    seen = [out.encode()]
+    for n, t in f.items():
+        seen.append(t.encode())
+        if n.endswith(".b64"):
+            seen.append(base64.b64decode("".join(t.split())))
+        if n.endswith(".hex"):
+            seen.append(bytes.fromhex("".join(t.split())))
+        for m in re.finditer(r"[0-9a-f]{16,}", t):
+            if len(m.group()) % 2 == 0:
+                seen.append(bytes.fromhex(m.group()))
+    return seen
+def leaked(markers, f, out):
+    for blob in views_of(f, out):
+        for mk in markers:
+            for enc in ("utf-8", "utf-16-be", "utf-16-le"):
+                needle = mk.encode(enc)
+                if needle in blob or needle in blob[1:]:
+                    return mk
+    return None
+def binplist(d): return plistlib.dumps(d, fmt=plistlib.FMT_BINARY)
+def st_of(f): return kv(f["status.txt"])
+ALLM = [JWT2, JWT2[:30], PKM, "PRIVATE KEY", SECRET]
+
+# 1. an ASCII JWT, 2. the same after a non-ASCII character (UTF-16 inside the binary plist: the ASCII bytes are NOT in the file)
+raw1 = binplist(dict(base, ZZ=JWT2))
+raw2 = binplist(dict(base, ZZ="é" + JWT2))
+check(JWT2.encode() in raw1 and JWT2.encode() not in raw2 and JWT2[:12].encode() not in raw2, "(precondition) the non-ASCII variant stores the token as UTF-16: its ASCII bytes are not in the file")
+for what, raw in (("an ASCII token", raw1), ("a token after a non-ASCII character in a BINARY plist", raw2)):
+    rc, out, f, d = capture(zip_ipa("r1a", raw))
+    check(st_of(f)["infoplist_ipa"] == "withheld: a JWT-shaped token" and "ipa-Info.plist.b64" not in f and leaked(ALLM, f, out) is None,
+          "%s is withheld, and no representation of it is in any output" % what, str(st_of(f)))
+# 3. a private-key marker as UTF-16 inside a binary plist
+raw3 = binplist(dict(base, ZZ="é" + PKM))
+check(b"PRIVATE KEY" not in raw3, "(precondition) the marker is not in the bytes as ASCII")
+rc, out, f, d = capture(zip_ipa("r1b", raw3))
+check(st_of(f)["infoplist_ipa"] == "withheld: a private-key marker" and "ipa-Info.plist.b64" not in f and leaked(ALLM, f, out) is None, "a private-key marker stored as UTF-16 is withheld")
+# 4. nested in dictionaries and arrays, and in a KEY; and an XML token spelled with character references (only the parsed content shows it)
+cases4 = (("a dictionary in an array in a dictionary", {"A": [{"B": ["x", {"C": "é" + JWT2}]}]}),
+          ("a dictionary key", {"é" + JWT2: 1}),
+          ("a deeply nested value", {"A": [[[[[{"D": [PKM]}]]]]]}))
+for what, extra in cases4:
+    rc, out, f, d = capture(zip_ipa("r1c", binplist(dict(base, **extra))))
+    check(st_of(f)["infoplist_ipa"].startswith("withheld: ") and "ipa-Info.plist.b64" not in f and leaked(ALLM, f, out) is None, "sensitive content in %s is withheld" % what, str(st_of(f)))
+xml_ref = xml_plist(dict(base, ZZ=JWT2)).replace(b"eyJ", b"&#x65;yJ")
+check(b"eyJ" not in xml_ref and b"&#x65;yJ" in xml_ref, "(precondition) the XML spells the token with character references: its ASCII form is not in the file")
+rc, out, f, d = capture(zip_ipa("r1d", xml_ref))
+check(st_of(f)["infoplist_ipa"] == "withheld: a JWT-shaped token" and leaked(ALLM, f, out) is None, "a token spelled with XML character references is found in the PARSED content and withheld")
+# 5. binary data values
+b64key = base64.b64encode((PKM + "\nMIIE").encode())
+xml_data = xml_plist(dict(base, ZZ=(PKM + "\nMIIE").encode()))
+check(PKM.encode() not in xml_data, "(precondition) a <data> value holds the marker only inside its base64")
+rc, out, f, d = capture(zip_ipa("r1e", xml_data))
+check(st_of(f)["infoplist_ipa"].startswith("withheld: ") and leaked(ALLM, f, out) is None, "a <data> value that holds a private-key marker is withheld", str(st_of(f)))
+rc, out, f, d = capture(zip_ipa("r1f", binplist(dict(base, ZZ=bytes(range(100, 120))))))
+check("binary data in a property list that cannot be inspected" in st_of(f)["infoplist_ipa"] and "ipa-Info.plist.b64" not in f, "a <data> value that cannot be judged by looking at it (20 opaque bytes) is withheld")
+rc, out, f, d = capture(zip_ipa("r1g", binplist(dict(base, ZZ=b"\x01\x02\x03\x04"))))
+check(st_of(f)["infoplist_ipa"] == "kept", "(control) a small, harmless <data> value does not cause a withholding")
+# 6. the first-difference windows of an unsafe file
+unsafe_ipa_plist = binplist(dict(base, ZZ="é" + JWT2))
+off = first_diff(arch_bytes, unsafe_ipa_plist)
+rc, out, f, d = capture(zip_ipa("r1h", unsafe_ipa_plist))
+s = f["infoplist-summary.txt"]
+check(off is not None and "first_differing_byte_offset=%d " % off in s and "(hex):" not in s and "window_start" not in s and "detail withheld" in s, "an unsafe exported file: the first differing offset is a number, and NO byte window is output", s[-600:])
+check(leaked(ALLM + ["é"], f, out) is None and not any(m in s for m in ("added:", "removed:", "changed:")), "...and no representation of it, decoded from any hex or base64 in the evidence, is there")
+unsafe_dir = os.path.join(tmp, "arch_unsafe"); os.makedirs(unsafe_dir, exist_ok=True)
+open(os.path.join(unsafe_dir, "Info.plist"), "wb").write(binplist(dict(base, ZZ=SECRET + PKM)))
+rc, out, f, d = capture(IPAS["same"], archive=unsafe_dir)
+s = f["infoplist-summary.txt"]
+check(st_of(f)["infoplist_archive"].startswith("withheld: ") and st_of(f)["infoplist_ipa"] == "kept" and "(hex):" not in s and leaked(ALLM, f, out) is None and "archive-Info.plist.b64" not in f,
+      "an unsafe ARCHIVE file: no window, nothing of it anywhere, and the safe exported file is still kept")
+# 7. the key-difference summary
+kd = binplist(dict(base, **{"é" + PKM: 1}))
+rc, out, f, d = capture(zip_ipa("r1i", kd))
+s = f["infoplist-summary.txt"]
+check(leaked(ALLM, f, out) is None and "top-level keys not listed" in s and not re.search(r"^(added|removed|changed):", s, re.M) and "first_difference_at_index" not in s, "an unsafe file cannot leak through the key listing, the key-difference lines or the key-order line")
+check("added=1" in s or "added=" in s, "...while the counts of the typed comparison stay")
+# the key ORDER line names the keys where the two orders first differ: for a withheld file it must not (here the unsafe key is written FIRST)
+first_key = plistlib.dumps(dict([("\u00e9" + PKM + SECRET, 1)] + list(base.items())), fmt=plistlib.FMT_BINARY, sort_keys=False)
+rc, out, f, d = capture(zip_ipa("r1i2", first_key))
+s2 = f["infoplist-summary.txt"]
+check(st_of(f)["infoplist_ipa"].startswith("withheld: ") and leaked(ALLM, f, out) is None and "first_difference_at_index" not in s2 and "top_level_key_order_equal" not in s2,
+      "the key-order line of a withheld file shows no key name (the unsafe key is first, where the orders differ)", s2[-400:])
+# the line-by-line scan would hide a leak whose text it knows; a file withheld only for its SIZE, with an innocent-looking secret as the first key, shows whether the
+# comparison itself keeps names out
+big_first = plistlib.dumps(dict([(SECRET, b"x" * 70000)] + list(base.items())), fmt=plistlib.FMT_BINARY, sort_keys=False)
+rc, out, f, d = capture(zip_ipa("r1i4", big_first))
+s3 = f["infoplist-summary.txt"]
+check(st_of(f)["infoplist_ipa"] == "withheld: too large" and leaked([SECRET], f, out) is None and "first_difference_at_index" not in s3 and "top-level keys not listed" in s3 and not re.search(r"^(added|removed|changed):", s3, re.M),
+      "a file withheld only for its size shows no key name anywhere (key list, key-order line, key-difference lines), though no pattern would flag the name", s3[-500:])
+rc, out, f, d = capture(zip_ipa("r1i3", plistlib.dumps(dict([("ZZFirst", 1)] + list(base.items())), fmt=plistlib.FMT_BINARY, sort_keys=False)))
+check("top_level_key_order_equal=NO first_difference_at_index=0 (archive CFBundleDisplayName, ipa ZZFirst)" in f["infoplist-summary.txt"], "(control) for a safe pair the key-order line still names the first difference")
+rc, out, f, d = capture(zip_ipa("r1j", binplist(dict(base, **{"ZZ" + SECRET: "x"}))))
+check(st_of(f)["infoplist_ipa"] == "kept", "(control) a key name that is harmless is kept, and listed")
+# 8. malformed and uninspectable property lists cannot bypass the policy
+good_bin = binplist(base)
+for what, raw, want in (("garbage", b"this is not a property list\x00\x01", "cannot be inspected"),
+                        ("a truncated binary plist", good_bin[:-12], "cannot be inspected"),
+                        ("an XML plist that declares an entity", b'<?xml version="1.0"?><!DOCTYPE plist [<!ENTITY a "b">]><plist version="1.0"><dict/></plist>', "cannot be inspected"),
+                        ("an XML plist with a repeated key", b'<?xml version="1.0"?><plist version="1.0"><dict><key>A</key><string>1</string><key>A</key><string>2</string></dict></plist>', "cannot be inspected"),
+                        ("garbage that holds a marker as UTF-16", b"\x00\x07" + PKM.encode("utf-16-be"), "a private-key marker"),
+                        ("garbage that holds a marker as UTF-16 at an odd offset", b"\x07" + PKM.encode("utf-16-le"), "a private-key marker")):
+    rc, out, f, d = capture(zip_ipa("r1k", raw))
+    check(want in st_of(f)["infoplist_ipa"] and st_of(f)["infoplist_ipa"].startswith("withheld") and "ipa-Info.plist.b64" not in f and leaked(ALLM, f, out) is None and "top-level keys not listed" in f["infoplist-summary.txt"],
+          "%s is withheld (%s)" % (what, want), str(st_of(f)))
+# 9. ordinary safe property lists still give complete evidence
+for what, ipa_raw in (("binary", binplist(dict(base, ZZNew="added"))), ("XML", xml_plist(dict(base, ZZNew="added")))):
+    rc, out, f, d = capture(zip_ipa("r1l", ipa_raw))
+    s = f["infoplist-summary.txt"]
+    check(st_of(f)["infoplist_ipa"] == "kept" and st_of(f)["infoplist_archive"] == "kept" and "window archive (hex):" in s and "added: ZZNew (string)" in s and "top-level keys (14," in s
+          and base64.b64decode("".join(f["ipa-Info.plist.b64"].split())) == ipa_raw, "an ordinary %s property list still gives the COMPLETE evidence (bytes, windows, key lists, typed differences)" % what, s[-500:])
+# 10. the historical archive Info.plist of run 44834801248, if it is available here (it is not part of the repository)
+hist = os.environ.get("P7_HISTORICAL_INFO_PLIST", "")
+if hist and os.path.isfile(hist):
+    hb = open(hist, "rb").read()
+    rc, out, f, d = capture(zip_ipa("r1m", hb))
+    check(hashlib.sha256(hb).hexdigest() == "34fd28f02721a5aeb93a1b9db9f25519d0840d8544bda9cc13220de27ddcb319" and I.plist_evidence_unsafe_reason(hb) is None and st_of(f)["infoplist_ipa"] == "kept",
+          "the historical archive Info.plist (SHA-256 34fd28f0...) passes the safety checks and is kept")
+else:
+    ok("(the historical archive Info.plist is not available here: set P7_HISTORICAL_INFO_PLIST to its path to check it)")
+# 11. DER: safe evidence stays (also malformed); withheld DER shows nothing derived from it
+rc, out, f, d = capture(IPAS["derbad"])
+check(kv(f["status.txt"])["der"] == "kept" and "header: magic=" in f["der-summary.txt"] and "refused:" in f["der-summary.txt"], "malformed DER that holds no sensitive material is still kept, with its header and the parser's verdict")
+rc, out, f, d = capture(os.path.join(tmp, "cap_derjwt.ipa"))
+ds = f["der-summary.txt"]
+check(st_of(f)["der"] == "withheld: a JWT-shaped token" and "header: magic=" not in ds and "accepted, 7 top-level" in ds and leaked(ALLM + ["com.example.note"], f, out) is None, "a withheld DER blob: no header bytes, no key name, nothing of its content (only its length, SHA-256, seal and a count)")
+keep2 = FX.der_entitlements_blob
+def ub(k, v): return struct.pack(">II", 0xFADE7172, 8 + len(v)) + v
+u16 = PKM.encode("utf-16-be")
+def hand_blob(*_a, **_k):
+    entry = b"\x30" + bytes([2 + len(b"k") + 2 + 2 + len(u16)]) + b"\x0c\x01k" + b"\x04" + bytes([len(u16)]) + u16
+    body = b"\x70" + bytes([3 + 2 + len(entry)]) + b"\x02\x01\x01" + b"\xb0" + bytes([len(entry)]) + entry
+    return struct.pack(">II", 0xFADE7172, 8 + len(body)) + body
+FX.der_entitlements_blob = hand_blob
+try:
+    FX.MUT.clear(); FX.sign_app(os.path.join(tmp, "staging", "Runner.app"), os.path.join(tmp, "cap_der16.ipa"), os.path.join(tmp, "certs"), "SYNTH12345", [])
+finally:
+    FX.der_entitlements_blob = keep2
+rc, out, f, d = capture(os.path.join(tmp, "cap_der16.ipa"))
+check(st_of(f)["der"] == "withheld: a private-key marker" and not [n for n in f if n.endswith(".hex")] and leaked(ALLM, f, out) is None and "the parser's text is not shown" in f["der-summary.txt"] and "header: magic=" not in f["der-summary.txt"],
+      "a DER blob holding a marker as UTF-16 is withheld, and for a blob the parser refuses its own words (which can quote a key) are not shown")
+# 12. when one input is withheld, what was already collected stays intact and the other input is still kept
+pre = {"v7-ipa-verify-output.txt": "earlier evidence\n", "export-result.txt": None}
+rc, out, f, d = capture(zip_ipa("r1n", raw2), ev_files={"v7-ipa-verify-output.txt": "earlier evidence\n"})
+evd = os.path.dirname(d)
+check(open(os.path.join(evd, "v7-ipa-verify-output.txt")).read() == "earlier evidence\n" and st_of(f)["infoplist_archive"] == "kept" and base64.b64decode("".join(f["archive-Info.plist.b64"].split())) == arch_bytes,
+      "when the exported file is withheld, earlier evidence is untouched and the archive's file is still kept exactly")
+
+# ---- Phase 7C-R2: CFBundleExecutable is a VALUE of the exported Info.plist. When that file is withheld, the name must not leave through another channel
+# (der-summary.txt, status.txt, the log), and no pattern would recognise an innocent-looking confidential name, so the rule is structural: not shown.
+CONF = "CONFIDENTIALEXE_77665544"
+exe_signed = member(IPAS["same"], "Payload/Runner.app/Runner")
+def named(d): return dict(base, CFBundleExecutable=CONF, **d)
+withheld_plists = (("an unsafe plist (a JWT-shaped value)", binplist(named({"ZZ": JWT2}))),
+                   ("a plist withheld only for its size", binplist(named({"ZZ": b"x" * 70000}))),
+                   ("an unsafe plist whose executable name is itself token-shaped", binplist(dict(base, CFBundleExecutable=JWT2, ZZ="x" + PKM))))
+for what, raw in withheld_plists:
+    expname = CONF if CONF.encode() in raw or b"x" * 70000 in raw else JWT2
+    # the executable ABSENT
+    rc, out, f, d = capture(zip_ipa("r2a", raw))
+    allt = out + "".join(f.values())
+    check(st_of(f)["infoplist_ipa"].startswith("withheld: ") and leaked([CONF, JWT2, "CONFIDENTIAL"], f, out) is None, "%s, executable absent: the withheld name appears in no output, in no encoding" % what, str(st_of(f)))
+    check("the exported executable could not be located" in f["status.txt"] and "the exported executable could not be located" in f["der-summary.txt"] and "the name is not shown" in f["der-summary.txt"]
+          and "the exported executable could not be located" in out and rc == 1, "...and the generic diagnostic stays: the executable could not be located (status.txt, der-summary.txt and the log)")
+    # the executable PRESENT under that name
+    rc, out, f, d = capture(zip_ipa("r2b", raw, extra={"Payload/Runner.app/" + expname: exe_signed}))
+    check(st_of(f)["der"] == "kept" and [n for n in f if n.endswith(".hex")] and "the main executable of the IPA (its name is not shown" in f["der-summary.txt"] and "sha256=" + hashlib.sha256(exe_signed).hexdigest() in f["der-summary.txt"]
+          and leaked([CONF, JWT2, "CONFIDENTIAL"], f, out) is None and rc == 0, "%s, executable present: the DER evidence is still collected, the executable is described by its length and SHA-256 only, and the name is nowhere" % what, str(st_of(f)))
+# a valid, safe plist: the executable is located normally and named, as before
+rc, out, f, d = capture(IPAS["same"])
+check("source executable: Payload/Runner.app/Runner, " in f["der-summary.txt"] and st_of(f)["der"] == "kept" and rc == 0, "a safe plist: the executable is located normally and named in the DER summary (unchanged)")
+rc, out, f, d = capture(zip_ipa("r2c", binplist(dict(base, CFBundleExecutable="MissingExe"))))
+check(st_of(f)["infoplist_ipa"] == "kept" and "the IPA has no executable named 'MissingExe'" in f["der-summary.txt"] and "the exported executable could not be located" in f["status.txt"],
+      "a safe plist whose executable is absent: the named diagnostic is kept (the name is approved for retention along with the file)")
+# a plist that cannot be read at all: the executable is looked for under the app folder's name, and nothing from the plist is shown
+rc, out, f, d = capture(zip_ipa("r2d", b"not a property list " + CONF.encode(), extra={"Payload/Runner.app/Runner": exe_signed}))
+check(st_of(f)["infoplist_ipa"].startswith("withheld: ") and st_of(f)["der"] == "kept" and leaked([CONF], f, out) is None, "an unreadable plist: the DER evidence is still collected and no text of the plist is shown")
+PY
+
 # ---- 10. optional: re-sign a REAL unsigned build (synthetic identity) -----------------------------
 if [ -n "${REAL_UNSIGNED_APP:-}" ]; then
   if [ ! -f "$REAL_UNSIGNED_APP/Info.plist" ]; then

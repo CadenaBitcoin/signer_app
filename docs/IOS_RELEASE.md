@@ -502,8 +502,9 @@ checks revocation**; an independent source (the certificate list of the Apple ac
 cloud-managed certificate, which is **Unconfirmed**) strengthens the record but is not required by this procedure.
 If the fingerprint is not recorded, or later differs from the record: stop.
 
-**V7 and V8 have never seen a real Apple-signed IPA** ([IOS_SIGNING.md](IOS_SIGNING.md)
-section 3.1): the first run may reject a legitimate detail of real Apple output (an entitlement
+**V7 and V8 have only once seen a real Apple-signed IPA** (run `44834801248`, Authorization C; [IOS_SIGNING.md](IOS_SIGNING.md)
+section 3.1; V8 failed there on the top-level `Info.plist`, cause unknown, and the file was not kept: section 3.1d describes the read-only evidence the
+next run keeps; V8 itself is unchanged): the first run may reject a legitimate detail of real Apple output (an entitlement
 Xcode adds, the layout of nested `CodeResources`). A rejection is **reported with its full output**
 and the build is not uploaded. A reviewed pull request may then add a documented, narrow allowance;
 an ad hoc override, an edited verifier or a skipped check is never acceptable. `--trust-anchors`

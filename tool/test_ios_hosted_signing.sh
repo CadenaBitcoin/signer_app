@@ -127,6 +127,32 @@ printf '%s\n' "$sign" | grep -F 'PRIVATE KEY|BEGIN PKCS7|eyJ' >/dev/null && prin
 ustep="$(step_of "$sign" 'Upload the text evidence')"
 printf '%s\n' "$ustep" | grep -E '^        if: always\(\)$' >/dev/null && printf '%s\n' "$ustep" | grep -F 'name: ios-hosted-signing-evidence_' >/dev/null; chk "the evidence is uploaded even after a failed step" $?
 
+# ---- Phase 7C: the V8 and DER evidence capture. Read-only, no secret, no signal of its own: it must not become a way to change a verdict ----
+cstep="$(step_of "$sign" 'Capture the Info.plist and DER entitlements evidence')"
+[ "$(printf '%s\n' "$sign" | grep -c '^      - name: Capture the Info.plist and DER entitlements evidence')" -eq 1 ]; chk "capture: exactly one evidence-capture step in the signing job" $?
+printf '%s\n' "$cstep" | grep -E '^        if: always\(\)$' >/dev/null; chk "capture: it runs after a failed V7 or V8 too (if: always())" $?
+! printf '%s\n' "$code" | grep -E 'continue-on-error' >/dev/null; chk "capture: no step of the workflow is continue-on-error (a failing step stays a failing job)" $?
+! printf '%s\n' "$cstep" | grep -E 'secrets\.|APPLE_API|env:|id-token|curl |wget |gh |git (push|clone|fetch)|upload-artifact|\.p8|keychain|security ' >/dev/null; chk "capture: it uses no secret, no credential, no network command and uploads nothing itself" $?
+printf '%s\n' "$cstep" | grep -F 'python3 -I tools/tool/verify_ipa.py capture-evidence' >/dev/null && printf '%s\n' "$cstep" | grep -F -- '--out evidence/v8-capture' >/dev/null && printf '%s\n' "$cstep" | grep -F -- '--evidence-dir evidence' >/dev/null; chk "capture: it runs the read-only subcommand and writes only under evidence/v8-capture" $?
+! printf '%s\n' "$cstep" | grep -E '(^|[[:space:]])(cp|mv|ditto|rm|tee|cat >|>) ' | grep -vE 'mkdir|>/dev/null|2>/dev/null' >/dev/null; chk "capture: it copies, moves and removes nothing (the IPA is read by path, never kept)" $?
+l_v7="$(printf '%s\n' "$sign" | grep -n 'verify_ipa.py verify production' | head -1 | cut -d: -f1)"
+l_dg="$(printf '%s\n' "$sign" | grep -n 'name: Fix the IPA digest again' | head -1 | cut -d: -f1)"
+l_cap="$(printf '%s\n' "$sign" | grep -n 'name: Capture the Info.plist and DER entitlements evidence' | head -1 | cut -d: -f1)"
+l_seal="$(printf '%s\n' "$sign" | grep -n 'name: Seal the evidence' | head -1 | cut -d: -f1)"
+[ -n "$l_v7" ] && [ -n "$l_dg" ] && [ -n "$l_cap" ] && [ -n "$l_seal" ] && [ "$l_v7" -lt "$l_cap" ] && [ "$l_dg" -lt "$l_cap" ] && [ "$l_cap" -lt "$l_seal" ]; chk "capture: it comes after the IPA verification (V7, V8, V9, the digest) and before the evidence is sealed" $?
+l_key="$(printf '%s\n' "$sign" | grep -n 'name: Check that the key file is gone' | head -1 | cut -d: -f1)"
+[ -n "$l_key" ] && [ "$l_key" -lt "$l_cap" ]; chk "capture: it runs only after the key file has been removed and checked" $?
+printf '%s\n' "$sign" | grep -F 'verify_ipa.py verify production "$IPA" --team-id "$TEAM_ID" --repo "$VERIFIER_REPO"' >/dev/null && printf '%s\n' "$sign" | grep -F -- '--unsigned-app "$BASELINE_APP"' >/dev/null && printf '%s\n' "$sign" | grep -F 'verify_ipa.py compare "$BASELINE_APP" "$APP"' >/dev/null; chk "capture: V7 and V8 are still the same commands on the same inputs (V8 compares the archive's app with the exported one, byte for byte)" $?
+! printf '%s\n' "$sign" | grep -E 'capture-evidence' | grep -vE 'python3 -I tools/tool/verify_ipa.py capture-evidence' >/dev/null; chk "capture: the subcommand is called in one way only" $?
+# the failed-export distribution log: THIS run's bundle only, through the same redaction, inside the credential step
+printf '%s\n' "$secret_step" | grep -F 'findlog.py' >/dev/null && printf '%s\n' "$secret_step" | grep -F '.export-start' >/dev/null && printf '%s\n' "$secret_step" | grep -F 'redact "$logdir/Packaging.log" evidence/Packaging.log' >/dev/null; chk "packaging log: after a failed export the log of this run is collected, through the redaction" $?
+! printf '%s\n' "$secret_step" | grep -E '(cp|mv|ditto|cat) [^|]*(logdir|xcdistributionlogs)' >/dev/null; chk "packaging log: it is never copied unredacted" $?
+printf '%s\n' "$secret_step" | grep -F 'os.path.realpath(os.path.dirname(path)) != tmpdir' >/dev/null; chk "packaging log: the bundle must lie directly inside the step's own temporary directory" $?
+printf '%s\n' "$secret_step" | grep -F 'os.path.islink(path)' >/dev/null && printf '%s\n' "$secret_step" | grep -F 'os.path.islink(log)' >/dev/null && printf '%s\n' "$secret_step" | grep -F 'st_mtime < os.stat(marker).st_mtime' >/dev/null; chk "packaging log: a link, or a bundle older than this export run, is refused" $?
+l_find="$(printf '%s\n' "$secret_step" | grep -n 'findlog.py" "\$RUNNER_TEMP/export.raw.log"' | head -1 | cut -d: -f1)"
+l_clean="$(printf '%s\n' "$secret_step" | grep -n '^          cleanup$' | tail -1 | cut -d: -f1)"
+[ -n "$l_find" ] && [ -n "$l_clean" ] && [ "$l_find" -lt "$l_clean" ]; chk "packaging log: the redaction runs while the key file still exists (before the cleanup)" $?
+
 # ---- the build job keeps the existing controls ----
 for needle in 'Verify the source (SHA, production ancestry, reviewed content, clean tree, version)' 'tool/verify_build_config.sh verify' 'tool/verify_version.sh' 'EXPECTED_RUST_LIB_SHA256' 'tool/verify_artifact.sh ios' 'tool/check_build_drift.sh' 'flutter pub get --enforce-lockfile' 'flutter build ipa --release --no-codesign'; do
   printf '%s\n' "$build" | grep -F -- "$needle" >/dev/null; chk "build job keeps: $needle" $?
