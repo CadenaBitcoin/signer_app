@@ -1168,6 +1168,154 @@ def plist_difference(old_bytes, new_bytes, max_items=60):
     return res
 
 
+# ---- evidence capture helpers (Phase 7C, Issue #71): READ-ONLY. They describe bytes; they decide nothing and change no verdict. ----
+# The V8 comparison (same_code_check in verify_ipa.py) stays byte-strict. These functions exist so that the next signing run can
+# KEEP the two Info.plist files, the DER entitlements blob and the facts about them, instead of only the verdict.
+EVIDENCE_READ_CAP = 1 << 20          # at most this many bytes of one file are read at all
+EVIDENCE_PLIST_MAX_BYTES = 65536     # a property list larger than this is described (size, digest) but its bytes are not kept (the real one is 2.5 KB)
+EVIDENCE_DER_MAX_BYTES = 16384       # the same for a DER entitlements blob (the real ones are a few hundred bytes)
+EVIDENCE_KEY_LIST_MAX = 200          # top-level key names listed per file
+EVIDENCE_WINDOW = 16                 # bytes shown on each side of the first differing byte (as hex)
+
+# What must never be kept as evidence. Base64 and hex are encodings, not sanitisation: the DECODED bytes are what is judged. These are
+# the markers of the workflow's own evidence seal (PRIVATE KEY, BEGIN PKCS7, a JWT-shaped token), the PEM armour line, a bearer
+# token, and one unbroken run of 120 or more base64-like characters (key or token material; the longest run in the real Info.plist is 46).
+_EVIDENCE_UNSAFE = (
+    (re.compile(rb"PRIVATE KEY"), "a private-key marker"),
+    (re.compile(rb"-----BEGIN"), "a PEM armour line"),
+    (re.compile(rb"BEGIN PKCS7"), "a PKCS7 marker"),
+    (re.compile(rb"eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}"), "a JWT-shaped token"),
+    (re.compile(rb"(?i)(bearer|authorization:?)[ \t]+[A-Za-z0-9._~+/=-]{8,}"), "a bearer or authorization token"),
+    (re.compile(rb"[A-Za-z0-9+/=_-]{120,}"), "an unbroken run of 120 or more base64-like characters"),
+)
+
+
+def _evidence_text_views(data):
+    """The same bytes read as text in the encodings a property list or a blob may use: UTF-16 big and little endian, each at both byte
+    alignments (a binary property list stores a string with a non-ASCII character as UTF-16 big endian, so a token inside it never appears
+    as ASCII bytes), re-encoded as UTF-8 so that the patterns of _EVIDENCE_UNSAFE apply to them."""
+    views = []
+    for enc in ("utf-16-be", "utf-16-le"):
+        for start in (0, 1):
+            views.append(data[start:len(data) - ((len(data) - start) % 2)].decode(enc, "ignore").encode("utf-8", "ignore"))
+    return views
+
+
+def evidence_unsafe_reason(data):
+    """None when `data` (bytes, or text) may be kept as evidence, otherwise a short reason that names the KIND of material and never
+    shows it. The bytes are judged as they are AND read as UTF-16 (see _evidence_text_views), so an encoded copy is refused the same way.
+    For a property list use plist_evidence_unsafe_reason, which also looks at the parsed keys and values."""
+    if isinstance(data, str):
+        data = data.encode("utf-8", "replace")
+    for view in [data] + _evidence_text_views(data):
+        for pattern, why in _EVIDENCE_UNSAFE:
+            if pattern.search(view):
+                return why
+    return None
+
+
+EVIDENCE_DATA_MAX = 16       # a property list <data> value longer than this cannot be judged by looking at it and is not kept
+EVIDENCE_NODE_LIMIT = 20000  # property list objects inspected at most
+
+
+def plist_evidence_unsafe_reason(data):
+    """None when the property list `data` may be kept as evidence, otherwise a short reason (the KIND of problem, never its content).
+    Fail closed, in three steps: (1) the raw bytes, with UTF-16 views; (2) the PARSED content: every key and every string, at any depth in
+    any dictionary or array, is judged as text whatever encoding the file stores it in; (3) a <data> value is judged as bytes and, because
+    arbitrary binary data cannot be shown safe by looking at it, a non-trivial one (longer than EVIDENCE_DATA_MAX bytes) is refused. A file
+    that cannot be read with an explicit format cannot be inspected and is refused as well. It reads the file with the same reader as the
+    V8 diagnostics (read_plist_exact) and changes nothing about what any verification accepts."""
+    why = evidence_unsafe_reason(data)
+    if why:
+        return why
+    try:
+        obj, _fmt = read_plist_exact(data)
+    except Exception:  # not readable, too deep, entities, repeated keys...: it cannot be inspected, so it is not kept
+        return "a property list that cannot be inspected (it is not readable with an explicit format)"
+    stack, seen = [obj], 0
+    while stack:
+        seen += 1
+        if seen > EVIDENCE_NODE_LIMIT:
+            return "a property list with too many objects to inspect"
+        v = stack.pop()
+        if isinstance(v, dict):
+            for k, x in v.items():
+                stack.append(k)
+                stack.append(x)
+        elif isinstance(v, list):
+            stack.extend(v)
+        elif isinstance(v, str):
+            why = evidence_unsafe_reason(v.encode("utf-8", "surrogatepass"))
+            if why:
+                return why
+        elif isinstance(v, (bytes, bytearray)):
+            if len(v) > EVIDENCE_DATA_MAX:
+                return "binary data in a property list that cannot be inspected (longer than %d bytes)" % EVIDENCE_DATA_MAX
+            why = evidence_unsafe_reason(bytes(v))
+            if why:
+                return why
+    return None
+
+
+def b64_lines(data, width=76):
+    import base64
+    text = base64.b64encode(data).decode("ascii")
+    return "\n".join(text[i:i + width] for i in range(0, len(text), width)) + "\n"
+
+
+def hex_lines(data, width=64):
+    text = data.hex()
+    return "\n".join(text[i:i + width] for i in range(0, len(text), width)) + "\n"
+
+
+def plist_container_format(data):
+    """'binary', 'xml' or 'unknown', from the first bytes only."""
+    if data[:8] == b"bplist00":
+        return "binary"
+    if data.lstrip()[:5] in (b"<?xml", b"<!DOC", b"<plis"):
+        return "xml"
+    return "unknown"
+
+
+def bplist_structure(data):
+    """The 32-byte trailer of a binary property list, or None when `data` is not one: the facts that tell two serialisations of the
+    same content apart (how many objects, how wide the references and offsets are, where the offset table starts)."""
+    if data[:8] != b"bplist00" or len(data) < 8 + 32:
+        return None
+    t = data[-32:]
+    out = {"sort_version": t[5], "offset_int_size": t[6], "object_ref_size": t[7], "num_objects": int.from_bytes(t[8:16], "big"),
+           "top_object": int.from_bytes(t[16:24], "big"), "offset_table_offset": int.from_bytes(t[24:32], "big")}
+    out["consistent"] = (out["offset_int_size"] in (1, 2, 3, 4, 5, 6, 7, 8) and out["object_ref_size"] in (1, 2, 4, 8)
+                         and 8 <= out["offset_table_offset"] <= len(data) - 32
+                         and out["offset_table_offset"] + out["offset_int_size"] * out["num_objects"] == len(data) - 32)
+    return out
+
+
+def first_difference(a, b):
+    """-> {"identical", "equal_length", "offset" (the first differing byte, or None), "differing_bytes" (over the common length, plus the
+    length difference), "window_a", "window_b" (hex of EVIDENCE_WINDOW bytes each side of the first difference)}"""
+    n = min(len(a), len(b))
+    off = next((i for i in range(n) if a[i] != b[i]), None)
+    if off is None and len(a) != len(b):
+        off = n
+    out = {"identical": a == b, "equal_length": len(a) == len(b), "offset": off, "differing_bytes": 0, "window_a": None, "window_b": None}
+    if off is not None:
+        out["differing_bytes"] = sum(1 for i in range(n) if a[i] != b[i]) + abs(len(a) - len(b))
+        lo = max(0, off - EVIDENCE_WINDOW)
+        out["window_a"], out["window_b"] = a[lo:off + EVIDENCE_WINDOW].hex(), b[lo:off + EVIDENCE_WINDOW].hex()
+        out["window_start"] = lo
+    return out
+
+
+def plist_top_keys(data):
+    """The top-level keys of a property list in the order the FILE lists them, or None when it cannot be read."""
+    try:
+        d, _fmt = read_plist_exact(data)
+    except ValueError:
+        return None
+    return list(d) if isinstance(d, dict) else None
+
+
 def read_signature(path):
     """Everything the signature of one Mach-O file (every architecture slice) says.
 

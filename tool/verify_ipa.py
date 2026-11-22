@@ -1186,6 +1186,313 @@ def analyze_unsigned(args):
 # ---- command line -----------------------------------------------------------------------------
 
 
+# ---- capture-evidence (Phase 7C, Issue #71): READ-ONLY evidence for V8 and for the Distribution DER blob ------------------------------
+# What it is for. The first Apple-signed IPA (run 44834801248) failed V8 because its top-level Info.plist differed from the archive's, and
+# neither the IPA nor its Info.plist was kept, so the difference is still unknown. This subcommand makes the NEXT signing run keep what
+# is needed to find out: the two Info.plist files (exact bytes, as base64 text), their sizes and digests, how they differ, and whether the
+# CodeDirectory's slot-1 seal matches each; and the DER entitlements blob of the Distribution-signed executable (exact bytes, as hex).
+# What it is not. It decides nothing: V7 and V8 keep their rules and their verdicts, this runs apart from them, and a difference between the
+# two files is NOT a failure of the capture. It never retains the IPA, a profile or any credential; it reads the IPA by path and writes only
+# text under --out. Everything it keeps is judged by ipa_inspect.evidence_unsafe_reason on the DECODED bytes first (base64 is an encoding,
+# not sanitisation): content that fails is not kept, and the reason (the KIND of material, never the material) is recorded instead.
+# The log gets counts, digests and file names only, never a property list value.
+CAPTURE_MEMBER_RE = re.compile(r"^Payload/([^/]+)\.app/Info\.plist$")
+CAPTURE_EXE_CAP = 256 << 20
+
+
+def _cap_kv(path, limit=65536):
+    """key=value lines of a small evidence file; {} when it is missing or unreadable."""
+    out = {}
+    try:
+        with open(path, "rb") as f:
+            text = f.read(limit).decode("utf-8", "replace")
+    except OSError:
+        return out
+    for line in text.splitlines():
+        if "=" in line and not line.startswith("#"):
+            k, _, v = line.partition("=")
+            out[k.strip()] = v.strip()
+    return out
+
+
+def _cap_write(out_dir, name, text):
+    """Write one evidence file. A LINE that would trip the evidence seal is replaced by a note, so that the seal can never be made to
+    delete ALL the evidence by one hostile string (the note names the kind of material, not the material)."""
+    kept = []
+    for line in text.splitlines():
+        why = I.evidence_unsafe_reason(line)
+        kept.append("[line withheld: it contained %s]" % why if why else line)
+    with open(os.path.join(out_dir, name), "w", encoding="utf-8") as f:
+        f.write("\n".join(kept) + "\n")
+
+
+def _cap_esc(value, limit=120):
+    return I.escape_text(str(value), backslash=True, limit=limit)
+
+
+def _cap_read_member(zf, info, cap):
+    if info.file_size > cap:
+        return None, "larger than %d bytes (%d)" % (cap, info.file_size)
+    with zf.open(info) as f:
+        data = f.read(cap + 1)
+    if len(data) > cap:
+        return None, "larger than %d bytes" % cap
+    return data, None
+
+
+def _cap_file_facts(label, data, show_keys):
+    """Lines that describe one property list file (bytes in, text out; no values). Its top-level key NAMES are listed only when the file's
+    bytes may be kept (`show_keys`): for a file that is withheld, whatever the reason, no content of it is shown in any form."""
+    lines = ["%s: size=%d bytes" % (label, len(data)), "%s: sha256=%s" % (label, hashlib.sha256(data).hexdigest()),
+             "%s: sha1=%s" % (label, hashlib.sha1(data).hexdigest()), "%s: container_format=%s" % (label, I.plist_container_format(data))]
+    st = I.bplist_structure(data)
+    if st is not None:
+        lines.append("%s: bplist version/sort=%d offset_int_size=%d object_ref_size=%d num_objects=%d top_object=%d offset_table_offset=%d trailer_consistent=%s"
+                     % (label, st["sort_version"], st["offset_int_size"], st["object_ref_size"], st["num_objects"], st["top_object"],
+                        st["offset_table_offset"], "yes" if st["consistent"] else "NO"))
+    keys = I.plist_top_keys(data) if show_keys else None
+    if not show_keys:
+        lines.append("%s: top-level keys not listed: the bytes of this file are withheld, so nothing of its content is shown" % label)
+    elif keys is None:
+        lines.append("%s: top-level keys: not readable as a property list dictionary" % label)
+    else:
+        shown = ", ".join(_cap_esc(k, 60) for k in keys[:I.EVIDENCE_KEY_LIST_MAX])
+        lines.append("%s: top-level keys (%d, in file order): %s%s" % (label, len(keys), shown, " ..." if len(keys) > I.EVIDENCE_KEY_LIST_MAX else ""))
+    return lines
+
+
+def _cap_plist_retention(data):
+    """(reason, kept) for a property list: reason is None when its bytes may be kept, otherwise why not (the KIND of problem); `kept` is the
+    status word. One decision, used everywhere, so that what may be SHOWN about a file is exactly what may be KEPT of it."""
+    if len(data) > I.EVIDENCE_PLIST_MAX_BYTES:
+        return "larger than %d bytes" % I.EVIDENCE_PLIST_MAX_BYTES, "withheld: too large"
+    unsafe = I.plist_evidence_unsafe_reason(data)
+    return ("the content has %s" % unsafe, "withheld: " + unsafe) if unsafe else (None, "kept")
+
+
+def _cap_seal_lines(label, cds, data, slot, slot_name):
+    """For each CodeDirectory: the sealed hash of `slot`, the hash of `data` under that CodeDirectory's algorithm, and whether they agree."""
+    lines = []
+    for key, cd in cds:
+        want = I.slot_hash(cd, slot)
+        got = hash_with(cd, data) if data is not None else None
+        verdict = "n/a" if got is None else ("no seal in this CodeDirectory" if want is None else ("MATCH" if want == got else "DIFFERENT"))
+        lines.append("seal: CodeDirectory 0x%x (%s): %s slot %d sealed=%s %s=%s -> %s" % (
+            key, cd["hash_name"], slot_name, slot, want.hex() if want else "none", label, got.hex() if got else "none", verdict))
+    return lines
+
+
+def capture_evidence(args):
+    out_dir, ev_dir = args.out, args.evidence_dir
+    os.makedirs(out_dir, exist_ok=True)
+    problems = []
+    prov = []
+    src, arch, res, xc = (_cap_kv(os.path.join(ev_dir, n)) for n in ("source.txt", "archive.txt", "export-result.txt", "xcode.txt"))
+    for label, d, keys in (("source", src, ("approved_sha", "tools_commit", "workflow_blob", "run")), ("archive", arch, ("archive_tar_sha256", "archive_app_files")),
+                           ("export", res, ("xcodebuild_exportArchive_exit", "ipa_sha256_after_export", "ipa_size")), ("xcode", xc, ("xcode",))):
+        for k in keys:
+            prov.append("provenance: %s %s=%s" % (label, k, _cap_esc(d.get(k, "(absent)"))))
+    prov.append("provenance: this run id=%s attempt=%s, tools commit=%s" % (_cap_esc(args.run_id or "(not given)"), _cap_esc(args.run_attempt or "(not given)"), _cap_esc(args.tools_sha or "(not given)")))
+    for n in ("ExportOptions-used.txt", "archive-app.sha256"):
+        p = os.path.join(ev_dir, n)
+        prov.append("provenance: %s sha256=%s" % (n, sha256_path(p) if os.path.isfile(p) else "(absent)"))
+
+    # ---- which situation is this? (decided from the export evidence, never guessed)
+    if "xcodebuild_exportArchive_exit" not in res:
+        state = "export-not-reached"
+    elif res["xcodebuild_exportArchive_exit"] != "0":
+        state = "export-failed"
+    else:
+        state = "export-succeeded"
+    ipa = args.ipa or ""
+    if state == "export-succeeded" and not (ipa and os.path.isfile(ipa)):
+        state = "ipa-missing-after-export"
+        problems.append("the export reported success but there is no IPA to read (a diagnostic failure, not a skip)")
+
+    # ---- the archive's Info.plist (the V8 baseline)
+    archive_plist, archive_why = None, None
+    if args.archive_app:
+        ap_path = os.path.join(args.archive_app, "Info.plist")
+        try:
+            with open(ap_path, "rb") as f:
+                archive_plist = f.read(I.EVIDENCE_READ_CAP + 1)
+            if len(archive_plist) > I.EVIDENCE_READ_CAP:
+                archive_plist, archive_why = None, "larger than %d bytes" % I.EVIDENCE_READ_CAP
+        except OSError as e:
+            archive_why = "cannot be read (%s)" % type(e).__name__
+    else:
+        archive_why = "no archive app was given"
+    if archive_plist is None and state in ("export-succeeded", "ipa-missing-after-export"):
+        problems.append("the archived Info.plist is unavailable: %s" % archive_why)
+
+    # ---- the IPA's Info.plist and the main executable
+    ipa_plist, ipa_why, exe_bytes, exe_name, app_name, exe_note, names_ok = None, None, None, None, None, None, False
+    ipa_sha = None
+    if state == "export-succeeded":
+        try:
+            ipa_sha = sha256_path(ipa)
+            if res.get("ipa_sha256_after_export") and res["ipa_sha256_after_export"] != ipa_sha:
+                problems.append("the IPA's SHA-256 differs from the one recorded right after the export")
+            with zipfile.ZipFile(ipa) as zf:
+                cands = [i for i in zf.infolist() if CAPTURE_MEMBER_RE.match(i.filename)]
+                if len(cands) != 1:
+                    ipa_why = "the IPA holds %d top-level Info.plist member(s), expected exactly 1" % len(cands)
+                else:
+                    app_name = CAPTURE_MEMBER_RE.match(cands[0].filename).group(1)
+                    ipa_plist, ipa_why = _cap_read_member(zf, cands[0], I.EVIDENCE_READ_CAP)
+                    exe = None
+                    if ipa_plist is not None:
+                        try:
+                            exe, _fmt = I.read_plist_exact(ipa_plist)
+                            exe = exe.get("CFBundleExecutable") if isinstance(exe, dict) else None
+                        except ValueError:
+                            exe = None
+                    # CFBundleExecutable is a VALUE of the exported Info.plist. It is used to find the executable, but it may be NAMED in an
+                    # output (der-summary.txt, status.txt, the log) only if that plist may be kept: for a withheld plist it is untrusted, and a
+                    # confidential value must not leave through a diagnostic that the pattern scan would not recognise (Phase 7C-R2).
+                    names_ok = ipa_plist is not None and _cap_plist_retention(ipa_plist)[0] is None
+                    exe_name = exe if isinstance(exe, str) and exe and "/" not in exe and not exe.startswith(".") else app_name
+                    try:
+                        exe_info = zf.getinfo("Payload/%s.app/%s" % (app_name, exe_name))
+                        exe_bytes, exe_why = _cap_read_member(zf, exe_info, CAPTURE_EXE_CAP)
+                    except KeyError:
+                        exe_why = "the IPA has no executable named %r" % exe_name if names_ok else "no executable was found under the name the exported Info.plist gives (the name is not shown: that file is withheld)"
+                    if exe_bytes is None:
+                        exe_note = "the exported executable could not be located: %s" % _cap_esc(exe_why)
+        except (OSError, zipfile.BadZipFile, ValueError, RuntimeError) as e:
+            ipa_why = "the IPA cannot be read (%s)" % type(e).__name__
+        if ipa_plist is None:
+            problems.append("the exported Info.plist is unavailable: %s" % _cap_esc(ipa_why))
+    elif state == "export-failed":
+        ipa_why = "the export failed (exit %s): there is no exported file, and none is invented" % _cap_esc(res.get("xcodebuild_exportArchive_exit"))
+    elif state == "export-not-reached":
+        ipa_why = "the export step did not run, so there is no exported file"
+
+    # ---- the Info.plist evidence
+    # A file is RETAINABLE only if it is within the size bound and passes ipa_inspect.plist_evidence_unsafe_reason (raw bytes with UTF-16 views,
+    # every parsed key and string, binary data values; a file that cannot be inspected is not retainable). Nothing derived from a file that is
+    # not retainable is shown in ANY form, hex and base64 included: no byte window, no key name, no value, no key-difference line. Sizes,
+    # digests, formats, counts, offsets as numbers and the reason are safe metadata and stay.
+    info_lines = ["Info.plist evidence (Phase 7C). Exact bytes are kept as base64 text only when the content passes the safety check.", ""] + prov + [""]
+    kept, retainable = {}, {}
+    for label, data, why in (("archive", archive_plist, archive_why), ("ipa", ipa_plist, ipa_why)):
+        if data is None:
+            info_lines.append("%s: Info.plist not captured: %s" % (label, _cap_esc(why)))
+            kept[label] = "absent"
+            retainable[label] = False
+            continue
+        reason, kept[label] = _cap_plist_retention(data)
+        retainable[label] = reason is None
+        info_lines.extend(_cap_file_facts(label, data, retainable[label]))
+        if reason is not None:
+            info_lines.append("%s: bytes NOT kept: %s" % (label, reason))
+            continue
+        _cap_write(out_dir, "%s-Info.plist.b64" % label, I.b64_lines(data))
+        info_lines.append("%s: bytes kept as %s-Info.plist.b64 (base64 of the exact file)" % (label, label))
+    if archive_plist is not None and ipa_plist is not None:
+        detail = retainable["archive"] and retainable["ipa"]
+        fd = I.first_difference(archive_plist, ipa_plist)
+        info_lines += ["", "comparison (archive -> ipa):", "bytes_identical=%s equal_length=%s" % ("yes" if fd["identical"] else "NO", "yes" if fd["equal_length"] else "NO")]
+        if not detail:
+            info_lines.append("detail withheld: at least one of the two files is not retainable, so no byte window, key name, value or key-difference line is shown; only counts, offsets and flags")
+        if fd["offset"] is not None:
+            info_lines.append("first_differing_byte_offset=%d differing_bytes=%d%s" % (fd["offset"], fd["differing_bytes"], " window_start=%d" % fd["window_start"] if detail else ""))
+            if detail:
+                info_lines.append("window archive (hex): %s" % fd["window_a"])
+                info_lines.append("window ipa     (hex): %s" % fd["window_b"])
+        d = I.plist_difference(archive_plist, ipa_plist)
+        if not d["readable"]:
+            info_lines.append("typed comparison: not possible (%s)" % (_cap_esc(d["error"]) if detail else "a file is not readable as a property list"))
+        else:
+            tc = [c for c in d["changed"] if " -> " in c[1] and not c[1].startswith("array of")]
+            info_lines.append("typed comparison (every key, value AND type): semantic=%s serialization_only=%s" % (d["semantic"], "yes" if d["serialization_only"] else "no"))
+            info_lines.append("formats: %s -> %s; added=%d removed=%d changed=%d (of which type-changed=%d%s)" % (
+                d["old_format"], d["new_format"], d["counts"]["added"], d["counts"]["removed"], d["counts"]["changed"], len(tc),
+                "; listing truncated" if d["truncated"] else ""))
+            if detail:
+                for kind, items in (("added", d["added"]), ("removed", d["removed"]), ("changed", d["changed"])):
+                    for path, what, old_v, new_v in items[:I.EVIDENCE_KEY_LIST_MAX]:
+                        info_lines.append("%s: %s (%s) %s%s" % (kind, _cap_esc(path, 100), _cap_esc(what, 60),
+                                                               "" if old_v is None else "old=%s " % _cap_esc(old_v, 100), "" if new_v is None else "new=%s" % _cap_esc(new_v, 100)))
+        ka, kb = (I.plist_top_keys(archive_plist), I.plist_top_keys(ipa_plist)) if detail else (None, None)
+        if ka is not None and kb is not None:
+            idx = next((i for i, (x, y) in enumerate(zip(ka, kb)) if x != y), None)
+            info_lines.append("top_level_key_order_equal=%s%s" % ("yes" if ka == kb else "NO", "" if idx is None else " first_difference_at_index=%d (archive %s, ipa %s)" % (idx, _cap_esc(ka[idx], 60), _cap_esc(kb[idx], 60))))
+    # ---- the slot-1 seal of the exported executable, for both files
+    der_lines = ["DER entitlements evidence (Phase 7C). The blob is kept as hex whether or not the parser reads it.", ""] + prov + [""]
+    der_status = "not captured"
+    if exe_bytes is not None:
+        with tempfile.TemporaryDirectory(prefix="verify_ipa_cap_") as tmp:
+            exe_path = os.path.join(tmp, "exe")
+            with open(exe_path, "wb") as f:
+                f.write(exe_bytes)
+            sig = I.read_signature(exe_path)
+        der_lines.append("source executable: %s, %d bytes, sha256=%s" % (
+            "Payload/%s.app/%s" % (_cap_esc(app_name), _cap_esc(exe_name)) if names_ok else "the main executable of the IPA (its name is not shown: the exported Info.plist is withheld)",
+            len(exe_bytes), hashlib.sha256(exe_bytes).hexdigest()))
+        if sig["error"] or not sig["slices"]:
+            der_lines.append("the executable's signature cannot be read: %s" % _cap_esc(sig["error"] or "no architecture slice"))
+            problems.append("the exported executable's signature cannot be read")
+        for si, sl in enumerate(sig["slices"]):
+            tag = "slice %d (cpu 0x%x)" % (si, sl["cpu"])
+            cds = sl.get("cds") or []
+            if ipa_plist is not None or archive_plist is not None:
+                info_lines.append("")
+                for lab, dat in (("ipa_info_plist", ipa_plist), ("archive_info_plist", archive_plist)):
+                    if dat is not None:
+                        info_lines += ["%s: %s" % (tag, line) for line in _cap_seal_lines(lab, cds, dat, I.SLOT_INFO, "Info.plist")]
+                if not cds:
+                    info_lines.append("%s: no readable CodeDirectory: the Info.plist seal cannot be compared" % tag)
+            blob = sl.get("der_entitlements_blob")
+            if blob is None:
+                der_lines.append("%s: no DER entitlements slot (slot %d)" % (tag, I.SLOT_DER_ENTITLEMENTS))
+                der_status = "absent"
+                continue
+            too_large = len(blob) > I.EVIDENCE_DER_MAX_BYTES
+            unsafe = None if too_large else I.evidence_unsafe_reason(blob)
+            keepable = not too_large and unsafe is None
+            der_lines.append("%s: DER entitlements blob: %d bytes, sha256=%s" % (tag, len(blob), hashlib.sha256(blob).hexdigest()))
+            if keepable:  # header bytes and the parser's own words (they can quote a key) only for a blob whose bytes may be kept
+                der_lines.append("%s: header: magic=%s declared_length=%s" % (tag, blob[:4].hex(), int.from_bytes(blob[4:8], "big") if len(blob) >= 8 else "n/a"))
+            der_lines += ["%s: %s" % (tag, line) for line in _cap_seal_lines("der_blob", cds, blob, I.SLOT_DER_ENTITLEMENTS, "DER entitlements")]
+            try:
+                parsed = I.parse_der_entitlements(blob)
+                verdict = "accepted, %d top-level entitlement(s)" % len(parsed)
+            except (I.Asn1Error, IndexError, ValueError, struct.error, RecursionError) as e:
+                verdict = "refused: %s" % _cap_esc(e, 200) if keepable else "refused (the parser's text is not shown for a blob that is withheld)"
+            der_lines.append("%s: parser verdict (information only, does not decide what is kept): %s" % (tag, verdict))
+            if too_large:
+                der_lines.append("%s: bytes NOT kept: larger than %d bytes" % (tag, I.EVIDENCE_DER_MAX_BYTES))
+                der_status = "withheld: too large"
+                continue
+            if unsafe:
+                der_lines.append("%s: bytes NOT kept: the content has %s" % (tag, unsafe))
+                der_status = "withheld: " + unsafe
+                continue
+            name = "der-entitlements-slice%d-cpu%x.hex" % (si, sl["cpu"])
+            _cap_write(out_dir, name, I.hex_lines(blob))
+            der_lines.append("%s: bytes kept as %s (hex of the exact blob)" % (tag, name))
+            der_status = "kept"
+    elif state == "export-succeeded":
+        der_lines.append("not captured: %s" % (exe_note or "the executable was unavailable"))
+        problems.append("the DER entitlements could not be read: %s" % (exe_note or "the executable was unavailable"))
+    else:
+        der_lines.append("not captured: %s" % ("the export failed: no exported executable exists" if state == "export-failed" else "no export happened"))
+
+    status = ["state=%s" % state, "infoplist_archive=%s" % kept.get("archive", "absent"), "infoplist_ipa=%s" % kept.get("ipa", "absent"), "der=%s" % der_status,
+              "problems=%d" % len(problems)] + ["problem: %s" % p for p in problems]
+    _cap_write(out_dir, "infoplist-summary.txt", "\n".join(info_lines) + "\n")
+    _cap_write(out_dir, "der-summary.txt", "\n".join(der_lines) + "\n")
+    _cap_write(out_dir, "status.txt", "\n".join(status) + "\n")
+    emit("capture-evidence: state=%s, Info.plist archive=%s ipa=%s, DER %s, %d problem(s)" % (state, kept.get("archive", "absent"), kept.get("ipa", "absent"), der_status, len(problems)))
+    if archive_plist is not None and ipa_plist is not None:
+        emit("capture-evidence: archive Info.plist %d bytes sha256 %s; exported %d bytes sha256 %s; byte-identical: %s" % (
+            len(archive_plist), hashlib.sha256(archive_plist).hexdigest(), len(ipa_plist), hashlib.sha256(ipa_plist).hexdigest(), "yes" if archive_plist == ipa_plist else "NO"))
+    for p in problems:
+        emit("  FAIL  evidence capture: %s" % p)
+    return 1 if problems else 0
+
+
 def main(argv):
     ap = argparse.ArgumentParser(prog="verify_ipa.py", description=__doc__.split("\n")[0])
     sub = ap.add_subparsers(dest="cmd")
@@ -1226,6 +1533,14 @@ def main(argv):
     c = sub.add_parser("compare", help="is SIGNED the UNSIGNED bundle plus signatures only?")
     c.add_argument("unsigned", help="the unsigned Runner.app directory")
     c.add_argument("signed", help="the signed Runner.app directory or the .ipa")
+    cap = sub.add_parser("capture-evidence", help="keep the Info.plist files and the DER entitlements blob as text evidence (read-only; decides nothing)")
+    cap.add_argument("--out", required=True, help="directory the evidence files are written to")
+    cap.add_argument("--evidence-dir", required=True, help="the existing evidence directory (provenance files are read from it)")
+    cap.add_argument("--ipa", default="", help="the exported IPA (read, never copied)")
+    cap.add_argument("--archive-app", default="", help="the archive's Runner.app directory (the V8 baseline)")
+    cap.add_argument("--run-id", default="")
+    cap.add_argument("--run-attempt", default="")
+    cap.add_argument("--tools-sha", default="")
     args = ap.parse_args(argv[1:])
     if args.cmd == "verify":
         if args.leaf_prefix is None:
@@ -1272,6 +1587,14 @@ def main(argv):
             raise
         except Exception as e:
             emit("  FAIL  internal error while comparing (%s: %s)" % (type(e).__name__, e))
+            return 1
+    if args.cmd == "capture-evidence":
+        try:
+            return capture_evidence(args)
+        except SystemExit:
+            raise
+        except Exception as e:  # fail closed: a failed capture is reported, and it is never a pass
+            emit("  FAIL  internal error while capturing evidence (%s)" % type(e).__name__)
             return 1
     ap.print_help()
     return 2

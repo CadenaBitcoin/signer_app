@@ -271,7 +271,7 @@ duplicate keys, before any DER was written), and whether the blob of a **Distrib
 | Diagnostic added | When a property list differs, the comparison now lists keys added, removed and changed (with value types), says whether the content is equal in value **and type** (a difference of serialization only) and labels identity, version, platform and privilege keys. A **value** is shown only for an approved low-risk key (a fixed display list in `tool/ipa_inspect.py`: bundle identifier, versions, platform and SDK keys, `DT*` build identifiers, a few capability arrays) and only as a short string of letters, digits and `. _ + -`; for every other key the report gives the path, the kind of change, the type and a size, never the content, whatever the key is called. Every difference is counted, so the totals (added / removed / changed) are exact; at most 60 entries of each kind are kept, at most 3 files and 40 lines are listed, and when the listing is shorter than the totals the report says `LISTING INCOMPLETE: n of m` and the evidence record carries `listing_incomplete=1`. A file over 4 MiB is not read beyond the cap, and a failing diagnostic is reported as unavailable without touching the verdict. **The comparison still fails on every difference**; there is no exclusion and no acceptance allowlist (the display list is not read by any check). |
 | Output hygiene | Everything the verifier writes passes one escaping step: line breaks, carriage returns, escape sequences (including the C1 range), bidirectional and zero-width characters and surrogates become visible escapes, so text from an IPA (member names, property list keys, values, certificate fields) cannot end a line, start a GitHub workflow command or move a terminal; an evidence key is encoded reversibly (`/` is `%2F`, so two identifiers never share a key) and an evidence value has its backslashes escaped. The checks themselves still use the real names and values. Not covered: the other tools of the signing job (`tool/verify_artifact.sh`, `tool/validate_handover_archive.py`) were not changed. |
 | Proposed, NOT active | If a future real run shows `serialization only` for exactly the app's top-level `Info.plist`: accept it only when the two files are equal after reading each with an explicit format (binary or XML, no entities, no repeated key), with the same keys, the same value **types** (`True` is not `1`, `1` is not `1.0`), the same values, the same array order, and when the CodeDirectory's Info.plist seal matches the **IPA's** bytes (already checked). Any key added, removed or changed, however harmless it looks, stays a failure until it is reviewed on its own. This needs its own review and tests; it is not implemented. |
-| Smallest evidence for a future signing run | The signed `Payload/Runner.app/Info.plist` itself (public data) and its SHA-256, and the verifier's own report of the difference, which now prints the delta without any workflow change. Retaining the signed IPA's `Info.plist` and the raw DER blobs in the evidence folder would settle both questions in one run; that is a workflow change and is not made here. |
+| Smallest evidence for a future signing run | The signed `Payload/Runner.app/Info.plist` itself (public data) and its SHA-256, and the verifier's own report of the difference, which now prints the delta without any workflow change. Retaining the signed IPA's `Info.plist` and the raw DER blobs in the evidence folder would settle both questions in one run; that workflow change is made in Phase 7C and described in section 3.1d (the evidence is captured by `verify_ipa.py capture-evidence`; V8 itself is unchanged and stays byte-strict). |
 
 ### 3.1b Phase 3 preparation of the DER experiment: variants, evidence recovery, logging exception (prepared 2026-11-21; nothing run, nothing activated)
 
@@ -358,6 +358,65 @@ The exception does **not** apply to a production or staging application; a real 
 - **Approval for any further dispatch:** a new written CTO authorization that cites the previous run id and why a repeat is needed, names the commit to run, and again does not rely on any earlier authorization. The guard makes "Re-run" from the Actions page fail by design, but a new dispatch is a new run that the guard accepts: that approval must exist **before** it, because nothing but this procedure requires it.
 
 **Validation gaps (this preparation).** The workflow was validated statically only: the YAML parses, every embedded shell block passes `bash -n`, the guard's shell was run against the allowed and refused environments, and the test suites pass in both states (workflow present, workflow absent). `actionlint`, `shellcheck` and `yamllint` are not installed, so **no linter has read the workflow**. Nothing was dispatched or run on macOS; everything listed under "What this preparation does not establish" in section 3.1b still applies.
+
+### 3.1d Phase 7C: evidence capture for the open V8 question and for the Distribution DER blob (implemented; no signing run authorized)
+
+**Why.** The first Apple-signed IPA (Authorization C, run `44834801248`) failed V8: its top-level `Info.plist` differed from the archive's,
+yet both were 2,551 bytes (archive: `Info.plist` SHA-256 `34fd28f0…`; the exported file's bytes were not kept). What the export changed is **not
+known**. The existing hypothesis (a different serialisation of the same content) is **unproven**: it fits the equal length, and nothing else
+is shown. The same run left no copy of the DER entitlements blob of the Distribution-signed executable, and a failed export leaves its
+`Packaging.log` in a temporary directory that nothing collected. Phase 7C makes the **next** authorized signing run keep what is needed. It is
+evidence only: **V8 stays byte-strict, V7 and V9 and the DER rules are unchanged, and no relaxation is made before the evidence exists.**
+
+**The step.** `Capture the Info.plist and DER entitlements evidence` in `.github/workflows/ios-hosted-signing.yml` runs
+`tool/verify_ipa.py capture-evidence`. It comes after V7, V8, V9 and the digest check and before the evidence is sealed; it has `if: always()` (so
+it runs after a failed V7 or V8), no `continue-on-error`, no secret and no network access, writes only under `evidence/v8-capture/`, and reads
+the IPA by path without copying or keeping it. It decides nothing: a difference between the two files is not a failure of the capture. It fails
+only when evidence that should exist cannot be produced: the export reported success and there is no IPA, or the IPA, the archive's
+`Info.plist` or the executable cannot be read. If the export failed it says so and invents nothing; the archive's `Info.plist` is still kept.
+
+**What is kept** (text only; `status.txt` also appears in the job summary, with states and counts only):
+
+| File | Content |
+|---|---|
+| `infoplist-summary.txt` | for the archive's and the exported top-level `Info.plist`: exact length, SHA-256 and SHA-1, container format, the bplist trailer (object count, offset and reference widths, offset-table position), the top-level keys in file order; then the comparison: byte identity, equal length, the first differing offset with 16 bytes of hex on each side, the typed comparison of every key, value **and type** (semantic equality, serialisation-only, counts of added, removed, changed and type-changed keys, the keys named, values shown only for the verifier's approved low-risk keys), whether the key order differs and where; then, for each CodeDirectory of the executable, the slot-1 (Info.plist) seal and the hash of each of the two files, with `MATCH` or `DIFFERENT`; and provenance (approved commit, archive tar digest, export result and IPA digest, Xcode version, the run, the digests of `ExportOptions-used.txt` and `archive-app.sha256`) |
+| `archive-Info.plist.b64`, `ipa-Info.plist.b64` | the exact bytes of each file as base64 (76 columns), nothing normalised before hashing or encoding |
+| `der-summary.txt`, `der-entitlements-slice<N>-cpu<hex>.hex` | the DER entitlements blob of each architecture slice of the main executable as hex, its length and SHA-256, the executable it came from, the slot-7 seal against its CodeDirectories, and the parser's verdict **as information only** (the blob is kept whether or not the parser reads it; the parser is not changed) |
+| `status.txt` | `state` (`export-succeeded`, `export-failed`, `export-not-reached`, `ipa-missing-after-export`), what was kept or withheld, and the problems |
+
+**Content safety.** Base64 and hex are encodings, not sanitisation, and a binary property list stores a string with a non-ASCII character as
+UTF-16, so a token inside it never appears as ASCII bytes. A file is therefore **retained only after a format-aware inspection**
+(`ipa_inspect.plist_evidence_unsafe_reason`): (1) its raw bytes, also read as UTF-16 (both byte orders and alignments); (2) every **parsed** key and
+every string at any depth in any dictionary or array, whatever encoding the file uses (so a token spelled with XML character references is found);
+(3) every `<data>` value, judged as bytes, and refused when longer than 16 bytes because opaque binary data cannot be shown safe by looking at it;
+(4) a file that cannot be read with an explicit format (garbage, truncated, entity declarations, repeated keys) cannot be inspected and is **not
+kept**. Content that fails is withheld: the file's bytes are not kept, and the reason (the KIND of material, never the material) is recorded. A
+property list above 64 KiB, and a DER blob above 16 KiB, are also withheld (length and digest kept); nothing larger than 1 MiB is read. The DER
+blob is judged the same way (raw bytes and UTF-16 views).
+
+**Nothing derived from a withheld file is shown.** For a file whose bytes are withheld, for any reason, the summary shows no key name, no value, no
+byte window (hex), no key-difference line and no key-order name, and for a withheld DER blob no header bytes and no parser text (it can quote a key). The same holds for **`CFBundleExecutable`**: the capture uses that value to find the executable, but names it in an output (`der-summary.txt`, `status.txt`, the log) only when the exported `Info.plist` may be kept; otherwise it says that the executable could not be located, or describes it by length and SHA-256 only, and shows no name.
+What stays is safe metadata: lengths, SHA-256 and SHA-1, formats, the bplist trailer numbers, whether the files are byte-identical, equal in
+length and semantically equal, the counts of added, removed, changed and type-changed keys, the first differing offset **as a number**, the seal
+results and the reason. The detailed byte-difference diagnostics are kept for every pair that passes the policy. Every line written is also scanned
+for the evidence seal's markers and replaced by a note if it would trip them, so one hostile string cannot make the seal delete all the evidence. The
+job log gets counts, digests and states only. The IPA, the profile and every credential are never kept. The real archive `Info.plist` of the first
+run (40 keys, no URL, address or token; SHA-256 `34fd28f0…`) passes the inspection and would be kept. **What this cannot do:** recognise secret
+material that has no recognisable shape (for example an arbitrary short string), or one encoded in a way no pattern knows; the policy is
+fail-closed for what it cannot parse, not a guarantee about every possible value.
+
+**The failed-export distribution log.** When `xcodebuild -exportArchive` fails, Xcode leaves `Packaging.log` in a `.xcdistributionlogs` bundle
+named on the first line of its own output ("Created bundle at path ..."), and does not copy it into the export directory (the evidence of
+Authorizations A and B has none). The credential step now keeps **this run's** log, through the same redaction as `export.log`, and only if the
+bundle is a plain directory directly inside the step's own `TMPDIR`, is not a link, is newer than a marker written just before `xcodebuild`
+started, and holds a plain `Packaging.log` within the size the redaction reads. Otherwise `packaging-log-source.txt` holds a one-line reason (no
+path, no content). If the redaction fails the log is withheld and the step says so. Nothing else in the runner's directories is read.
+
+**Limits.** The capture cannot say **why** Xcode changed a file, only what changed. A property list that fails the safety check is described but
+not kept, so a hostile or unexpectedly sensitive `Info.plist` loses its bytes (its digest and size remain). The seal comparison needs a readable
+CodeDirectory. The step runs only in a signing run, which needs its own written authorization and a refreshed G2S record: this change alters the
+workflow and two gate-bound tool files (`tool/ipa_inspect.py`, `tool/verify_ipa.py`), so their recorded blobs are out of date until that record
+pull request. Nothing here authorizes or prepares a run.
 
 ### 3.2 Signing-job separation: findings (2026-10-22, credential-free)
 

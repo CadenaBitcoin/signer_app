@@ -26,7 +26,10 @@ Started by hand only (`workflow_dispatch`), from `refs/heads/development` only. 
 | `build` | none | The part that runs third-party code. Checks out exactly the approved commit and verifies it (SHA, ancestor of `production`, content equal to the reviewed content, clean tree, version), then the repository's own checks (`verify_build_config`, `verify_version`, the pinned Rust library SHA-256, `verify_artifact.sh`, `check_build_drift.sh`). **One** compile: `flutter build ipa --release --no-codesign` (the command of the diagnostics run `44625655320`). Hands the unsigned archive over as a one-day tar with its SHA-256. It runs whether or not signing is authorized, so the hand-over is exercised first. |
 | `sign` | environment `ios-hosted-signing`; three secrets in **one** step | Only when `authorize` said yes. Compiles nothing and installs nothing, and executes **no script of the approved commit, of the build job or of the archive** (only `tools/`, this workflow's commit, and Apple's tools). Re-checks the authorization against the tip of `development` again, checks the archive digest, validates the archive before and after extraction (section 2.1), reads the unsigned app (no secret yet); exports and signs (section 2); verifies the IPA with no secret present (V1 to V9); keeps text evidence. |
 
-Verification after signing (every step fails the job; [IOS_RELEASE.md](IOS_RELEASE.md) section 9 is the reference):
+Verification after signing (every step fails the job; [IOS_RELEASE.md](IOS_RELEASE.md) section 9 is the reference). After V7 to V9 and the digest
+check, and even when one of them failed, a separate **read-only evidence step** keeps the archive's and the exported `Info.plist`, the DER
+entitlements blob and the facts about them as text under `evidence/v8-capture/` ([IOS_SIGNING.md](IOS_SIGNING.md) section 3.1d). It decides nothing,
+uses no secret, keeps no IPA, and fails only if evidence that should exist cannot be captured.
 
 | Check | How |
 |---|---|
@@ -79,6 +82,8 @@ item 8). Only text is kept: hashes, the fingerprint, the checks, redacted tool o
   On failure the evidence is `export.log` (redacted) and `export-diagnosis.txt` (pattern counts such as permission, 401/403, "No
   signing certificate", "No profiles for"). That text is an inference, never proof of the cause. No `.p12` route is built; one is a
   separate decision after a demonstrated failure.
+  Since Phase 7C a failed export also keeps this run's `Packaging.log` (redacted) in the evidence, with `packaging-log-source.txt` saying where it
+  came from or why it was not collected ([IOS_SIGNING.md](IOS_SIGNING.md) section 3.1d).
 
 ### 2.1 The hand-over from the build job is data to be checked (audit F4)
 
