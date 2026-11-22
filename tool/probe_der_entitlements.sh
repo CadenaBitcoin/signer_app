@@ -4,10 +4,12 @@
 #   tool/probe_der_entitlements.sh WORK_DIR        (WORK_DIR must not exist yet)
 #
 # Question: what does a DER entitlements blob written by APPLE'S OWN `codesign --generate-entitlement-der` really look
-# like? tool/ipa_inspect.py parse_der_entitlements assumes a layout (the dictionary as a SET) that was taken from public
+# like? tool/ipa_inspect.py parse_der_entitlements ASSUMED a layout (the dictionary as a SET) that was taken from public
 # descriptions and never checked against Apple's output; on the first Apple-signed IPA (Authorization C, run
 # 44834801248) it refused the real blob with "unsupported DER entitlements version or layout", and that blob was not
-# kept. This script produces new ones, from scratch, with nothing of the application in them:
+# kept. This script produces new ones, from scratch, with nothing of the application in them.
+# (Result, Authorization D1, run 44956044650: the dictionary is [CONTEXT 16], not a SET; the parser was repaired in Phase 6B and
+# docs/IOS_SIGNING.md section 3.1a holds the current contract. The text of this header is the question as it was asked.)
 #
 #   1. it compiles a tiny DISPOSABLE executable (a C program that does nothing), once for iOS arm64 and once for macOS;
 #   2. for each of a set of explicit XML entitlements (the keys of the real app, then every value type) it makes a copy

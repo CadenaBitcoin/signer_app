@@ -402,7 +402,8 @@ if [ "$arc" -eq 0 ] && echo "$a" | grep -F "with no signature" >/dev/null && ech
 #             returned (public data; provenance in the file). tool/fixtures/apple_swift_runtime_embedded_info_plist.txt: the
 #             embedded Info.plist section of Apple's Swift runtime library and the hashes its signature seals (public data).
 #   SYNTHETIC the IPAs of tool/ipa_fixture.py (same structures, our own certificates), which cannot prove that Apple agrees.
-# Not covered here, because no genuine evidence exists yet: the DER entitlements layout and the V8 Info.plist comparison.
+# The DER entitlements layout is covered by REAL Apple blobs since Phase 6B (section 14). Not covered, because no genuine evidence
+# exists yet: the V8 Info.plist comparison.
 cmsfix="$root/tool/fixtures/apple_cloud_signing_cms_run44834801248.txt"
 swiftfix="$root/tool/fixtures/apple_swift_runtime_embedded_info_plist.txt"
 
@@ -661,7 +662,8 @@ PY
 # Everything here is SYNTHETIC. These checks pin DIAGNOSTICS only: no acceptance rule was changed in Phase 2. In particular
 # a difference of serialization only is still a FAILED comparison (an exact, type-preserving rule is proposed in
 # docs/IOS_SIGNING.md, not activated), and a DER blob the parser refuses is still a failure. What the real Info.plist
-# difference and the real DER layout are is NOT known (no genuine evidence kept); nothing here claims to know.
+# difference is, is NOT known (no genuine evidence kept). The real DER layout was unknown in Phase 2; it is now known (Phase 6B,
+# section 14 below), and the synthetic DER blobs of this section follow it.
 
 # cmpcase NAME PYCODE: a copy of the unsigned staging app whose Info.plist is rewritten by PYCODE (sees `d`, may set `fmt`),
 # compared with the original by the signing job's check. -> $out, $rc
@@ -922,10 +924,10 @@ check(not any("secret-looking" in ln for ln in strs["outline"]) and any("secret-
       "describe_asn1: string content is shown only in raw (synthetic) mode; the structure mode shows the string's length")
 check(any("BOOLEAN, 1 byte(s): 0xff" in ln for ln in I.der_blob_diagnostic(F.der_entitlements_blob({"a": True}))["outline"]) and any("INTEGER, 1 byte(s): 0x01" in ln for ln in I.der_blob_diagnostic(F.der_entitlements_blob({"a": 1}))["outline"]),
       "describe_asn1: small booleans and integers stay visible in structure mode (their encoding is part of the layout)")
-# the parser's acceptance did not change: a blob of the layout it assumes still decodes, others still fail
+# the parser reads the layout the fixture writes (Apple's observed layout, Phase 6B), and still refuses a wrong version
 import ipa_fixture as F
 gb = F.der_entitlements_blob({"a": True, "b": ["x", 3]})
-check(I.parse_der_entitlements(gb) == {"a": True, "b": ["x", 3]}, "parse_der_entitlements: acceptance is unchanged in Phase 2 (the layout the parser assumes still decodes)")
+check(I.parse_der_entitlements(gb) == {"a": True, "b": ["x", 3]}, "parse_der_entitlements: the layout the fixture writes (Apple's observed layout, Phase 6B) decodes")
 for name, bl in (("a wrong version", F.der_entitlements_blob({"a": True}, b"\x02")),):
     try:
         I.parse_der_entitlements(bl)
@@ -1215,6 +1217,239 @@ bomb = struct.pack(">II", I.CSMAGIC_DER_ENTITLEMENTS, 8 + 6000) + b"\x30\x80" * 
 out = I.der_blob_diagnostic(bomb)["outline"]
 check(len(out) <= 90 and any("truncated" in l or "not readable" in l for l in out), "describe_asn1: an enormous or endlessly nested structure gives a bounded outline that says it was cut")
 PY
+
+# ---- 14. Phase 6B (Issue #71): the DER entitlements parser reads what Apple's codesign really writes ------------------
+# REAL     tool/fixtures/apple_der_entitlements_d1_run44956044650.txt: the seven distinct DER entitlements blobs Apple's own
+#          `codesign --generate-entitlement-der` wrote in Authorization D1 (run 44956044650). They were NOT made by tool/ipa_fixture.py.
+#          Every expectation below is written out by hand from the entitlements the experiment signed
+#          (tool/probe_der_entitlements.sh, `ent` lines), never derived from the parser or from the fixture writer.
+# SYNTHETIC the negative cases: the real blobs with ONE byte changed, and small hand-built blobs.
+# What this cannot show: that the blob of a Distribution-signed IPA equals that of an ad hoc one (strong evidence, not proof).
+derfix="$root/tool/fixtures/apple_der_entitlements_d1_run44956044650.txt"
+pyunit "$root" "$derfix" <<'PY'
+import hashlib, os, struct, sys
+sys.dont_write_bytecode = True
+root, derfix = sys.argv[1:3]
+sys.path.insert(0, os.path.join(root, "tool"))
+import ipa_inspect as I
+import ipa_fixture as F
+
+
+def ok(m): print("ok   " + m)
+def bad(m, why=""):
+    print("FAIL " + m)
+    if why: print("     " + why)
+def check(c, m, why=""): ok(m) if c else bad(m, why)
+
+
+REFUSED = (I.Asn1Error, IndexError, ValueError, struct.error)
+
+
+def refuses(blob, needle=None):
+    try:
+        I.parse_der_entitlements(blob)
+    except REFUSED as e:
+        return needle is None or needle in str(e)
+    return False
+
+
+# ---- the seven real blobs, their recorded size and SHA-256 (the digests are repeated here on purpose: the file and the test must agree)
+SHA = {
+    "booleans": "8b648a060612c9dc3c4e1fcc123ee9187f89cf8a283ea237332f1ad77c4a6da8",
+    "dicts": "990757663ef290272b7f06e68cc2d868fa29ff7c30e8297666d2669a475226de",
+    "unsorted": "d0c499cb3a63c256a776952ead55ce467b929074d81e498a4042f1043f42c258",
+    "arrays": "d6cdcb95e574eb1274b30364aa7ab7f24c7b14985737c8e298d4d517b8758677",
+    "runner": "8afe8d8cbeab8c196ba1992e08c18f9bd696a4ace29555e2a8ca186bebdf2e3e",
+    "integers": "16f81e571c23ab165989a51566ecde363032efb7d5e7ac5fbd7f2848d2250a2a",
+    "many": "2d493d24574ab09de05f812d037581dde791d0185c1ec2626a6498378627b8db",
+}
+SIZE = {"booleans": 58, "dicts": 93, "unsorted": 130, "arrays": 165, "runner": 176, "integers": 285, "many": 1810}
+real = {}
+for line in open(derfix):
+    if line.startswith("#") or not line.strip():
+        continue
+    name, size, digest, hx = line.split()
+    real[name] = (int(size), digest, bytes.fromhex(hx))
+check(sorted(real) == sorted(SHA), "the Apple DER fixture holds exactly the seven distinct blobs of Authorization D1")
+check(all(len(b) == n == SIZE[k] and hashlib.sha256(b).hexdigest() == h for k, (n, h, b) in real.items()),
+      "each Apple DER blob matches its recorded size and SHA-256")
+check(all(struct.unpack(">II", b[:8]) == (0xFADE7172, len(b)) for _n, _h, b in real.values()),
+      "each Apple DER blob starts with the magic 0xfade7172 and its own total length")
+
+# ---- what each blob holds, written out by hand from the entitlements that were signed
+TEAM, IDENT = "TESTTEAM00", "com.example.disposable"
+EXPECTED = {
+    "booleans": {"com.example.yes": True, "com.example.no": False},
+    "dicts": {"com.example.empty": {}, "com.example.nested": {"b": "2", "a": {"z": True, "y": False}}},
+    "unsorted": {"zzz": "last-in-order-first-in-file", "aaa": "first-in-order-last-in-file", "mmm": "middle", "AAA": "upper", "aa": "prefix"},
+    "arrays": {"com.example.empty": [], "com.example.strings": ["a", "b"], "com.example.nested": [["x"]],
+               "com.example.dicts": [{"k": "v"}], "com.example.mixed": ["s", True, 7]},
+    "runner": {"application-identifier": TEAM + "." + IDENT, "beta-reports-active": True,
+               "com.apple.developer.team-identifier": TEAM, "get-task-allow": False},
+    "integers": {"com.example.i0": 0, "com.example.i1": 1, "com.example.i127": 127, "com.example.i128": 128, "com.example.i255": 255,
+                 "com.example.i256": 256, "com.example.i65535": 65535, "com.example.neg1": -1, "com.example.neg128": -128,
+                 "com.example.neg129": -129, "com.example.i32max": 2147483647},
+    "many": {"com.example.key%02d" % i: "value%d" % i for i in range(1, 61)},
+}
+for name in SHA:
+    blob = real[name][2]
+    try:
+        got = I.parse_der_entitlements(blob)
+    except Exception as e:
+        bad("the parser decodes the Apple blob `%s`" % name, "%s: %s" % (type(e).__name__, e))
+        continue
+    check(I.plist_equal_strict(got, EXPECTED[name]), "the parser decodes the Apple blob `%s` to exactly the entitlements that were signed (values AND types)" % name,
+          "got %r" % (got,))
+
+# ---- the structure Apple wrote, asserted from the raw bytes (independent of the parser's own reading)
+def walk(node, seen):
+    seen.add((node.cls, node.tag, node.constructed))
+    for c in node.children:
+        walk(c, seen)
+    return seen
+
+LENGTH_FORM = {"booleans": None, "dicts": None, "unsorted": None, "arrays": 0x81, "runner": 0x81, "integers": 0x82, "many": 0x82}
+for name, (_n, _h, blob) in real.items():
+    root_ = I.parse_der(blob[8:])
+    seen = walk(root_, set())
+    body = root_.children[1]
+    check(blob[8] == 0x70 and (root_.cls, root_.tag, root_.constructed) == (1, 16, True) and root_.children[0].raw == b"\x02\x01\x01"
+          and (body.cls, body.tag, body.constructed) == (2, 16, True) and (0, 17, True) not in seen,
+          "Apple blob `%s`: [APPLICATION 16] { INTEGER 1, [CONTEXT 16] }, and no SET anywhere" % name)
+    form = LENGTH_FORM[name]
+    check((blob[9] & 0x80 == 0) if form is None else blob[9] == form,
+          "Apple blob `%s`: the root length is written in the %s form" % (name, "short" if form is None else "long (%d length byte(s))" % (form & 0x7F)))
+    keys = [pair.children[0].value for pair in body.children]
+    check(keys == sorted(keys) and len(set(keys)) == len(keys), "Apple blob `%s`: its top-level keys are in ascending byte order, without duplicates" % name)
+check([p.children[0].value for p in I.parse_der(real["unsorted"][2][8:]).children[1].children] == [b"AAA", b"aa", b"aaa", b"mmm", b"zzz"]
+      and list(EXPECTED["unsorted"]) == ["zzz", "aaa", "mmm", "AAA", "aa"],
+      "Apple sorted the entries of `unsorted`: written as zzz, aaa, mmm, AAA, aa, they are in the blob as AAA, aa, aaa, mmm, zzz")
+nested = I.parse_der(real["dicts"][2][8:]).children[1].children[1].children[1]   # com.example.nested
+check((nested.cls, nested.tag, nested.constructed) == (2, 16, True) and [p.children[0].value for p in nested.children] == [b"a", b"b"]
+      and (nested.children[0].children[1].cls, nested.children[0].children[1].tag) == (2, 16), "Apple blob `dicts`: a nested dictionary is [CONTEXT 16] too, sorted, at every level")
+arr = I.parse_der(real["arrays"][2][8:]).children[1].children[0].children[1]          # com.example.dicts: an array holding a dictionary
+check((arr.cls, arr.tag, arr.constructed) == (0, 16, True) and (arr.children[0].cls, arr.children[0].tag) == (2, 16),
+      "Apple blob `arrays`: an array is a SEQUENCE, and a dictionary inside it is [CONTEXT 16]")
+ints = {p.children[0].value.decode(): p.children[1].value for p in I.parse_der(real["integers"][2][8:]).children[1].children}
+check(ints["com.example.neg128"] == b"\x80" and ints["com.example.i128"] == b"\x00\x80" and ints["com.example.neg129"] == b"\xff\x7f" and ints["com.example.i0"] == b"\x00",
+      "Apple blob `integers`: the shortest two's complement form (-128 is 80, 128 is 0080, -129 is ff7f)")
+
+# the SYNTHETIC writer agrees with Apple's bytes (a consistency check of the test tool: it is NOT the proof, the blobs above are)
+check(all(F.der_entitlements_blob(EXPECTED[k]) == real[k][2] for k in real), "the synthetic fixture writer reproduces all seven Apple blobs byte for byte")
+
+# ---- one byte changed in a REAL blob: every wrong class, tag or form is refused
+def patched(name, node_path, byte):
+    blob = bytearray(real[name][2])
+    node = I.parse_der(bytes(blob[8:]))
+    for i in node_path:
+        node = node.children[i]
+    blob[8 + node.start] = byte
+    return bytes(blob)
+
+run_ = "runner"
+check(refuses(patched(run_, [1], 0x31), "unsupported DER entitlements version or layout"), "the OBSOLETE layout (the dictionary as a SET, 0x31) is refused")
+check(refuses(patched("dicts", [1, 1, 1], 0x31), "unsupported value"), "a nested dictionary written as a SET is refused (no layout is accepted besides Apple's)")
+for byte, what in ((0x30, "a UNIVERSAL SEQUENCE"), (0xB1, "[CONTEXT 17]"), (0xA0, "[CONTEXT 0]"), (0xF0, "[PRIVATE 16]"), (0x70, "[APPLICATION 16]"), (0x90, "a PRIMITIVE [CONTEXT 16]")):
+    check(refuses(patched(run_, [1], byte)), "a dictionary written as %s (class, tag or form wrong) is refused" % what)
+for byte, what in ((0x50, "a PRIMITIVE [APPLICATION 16]"), (0xB0, "[CONTEXT 16]"), (0x30, "a UNIVERSAL SEQUENCE"), (0x71, "[APPLICATION 17]")):
+    check(refuses(patched(run_, [], byte), "single [APPLICATION 16]"), "a root written as %s is refused" % what)
+check(refuses(patched("dicts", [1, 1, 1], 0x90)) and refuses(patched("dicts", [1, 1, 1], 0xF0)) and refuses(patched("dicts", [1, 1, 1], 0xB1)),
+      "a nested dictionary with a wrong class, tag or form is refused (primitive [CONTEXT 16], [PRIVATE 16], [CONTEXT 17])")
+# A UNIVERSAL SEQUENCE is an ARRAY by definition, so a nested dictionary rewritten as one still parses, as an array: it can never equal the dictionary.
+as_array = I.parse_der_entitlements(patched("dicts", [1, 1, 1], 0x30))["com.example.nested"]
+check(isinstance(as_array, list) and not I.plist_equal_strict(I.parse_der_entitlements(patched("dicts", [1, 1, 1], 0x30)), EXPECTED["dicts"]),
+      "a nested dictionary rewritten as a UNIVERSAL SEQUENCE is an array, never the dictionary (the XML comparison then differs)")
+check(all(refuses(patched("arrays", [1, 0, 1], byte)) for byte in (0x10, 0x31, 0xB0, 0x70)),
+      "an array written as a PRIMITIVE SEQUENCE (it would read as an empty array), a SET, [CONTEXT 16] or [APPLICATION 16] is refused")
+check(refuses(patched(run_, [1, 0], 0x10), "malformed entry") and refuses(patched(run_, [1, 0], 0x31), "malformed entry") and refuses(patched(run_, [1, 0], 0xB0), "malformed entry"),
+      "an entry that is a PRIMITIVE SEQUENCE, a SET or [CONTEXT 16] is a malformed entry")
+check(refuses(patched(run_, [1, 0, 0], 0x2C, ), "malformed entry") and refuses(patched(run_, [1, 0, 0], 0x16, ), "malformed entry") and refuses(patched(run_, [1, 0, 0], 0x04, ), "malformed entry"),
+      "a key that is a CONSTRUCTED UTF8String, an IA5String or an OCTET STRING is a malformed entry")
+for byte, what in ((0x21, "a constructed BOOLEAN"), (0x04, "an OCTET STRING"), (0x05, "NULL"), (0x31, "a SET"), (0x81, "[CONTEXT 1]"), (0x41, "[APPLICATION 1]")):
+    check(refuses(patched(run_, [1, 1, 1], byte), "unsupported value"), "a value written as %s is an unsupported value" % what)
+check(refuses(patched("integers", [1, 0, 1], 0x22), "unsupported value") and refuses(patched(run_, [1, 0, 1], 0x2C), "unsupported value"),
+      "a constructed INTEGER and a constructed UTF8String are unsupported values")
+check(refuses(patched(run_, [0], 0x03), "version") and refuses(patched(run_, [0], 0x42), "version") and refuses(patched(run_, [0], 0x22), "version"),
+      "a version that is not a primitive UNIVERSAL INTEGER (BIT STRING, [APPLICATION 2], constructed) is refused")
+v2 = bytearray(real[run_][2]); v2[8 + I.parse_der(bytes(v2[8:])).children[0].vstart] = 0x02
+check(refuses(bytes(v2), "version"), "DER version 2 is refused")
+
+# ---- truncated and trailing input, header damage
+blob = real[run_][2]
+check(all(refuses(struct.pack(">II", 0xFADE7172, cut) + blob[8:cut]) for cut in range(8, len(blob))),
+      "a real blob cut at every possible length (header length corrected to match) is always refused, never accepted")
+check(refuses(blob[:-1], "header is wrong") and refuses(blob + b"\x00", "header is wrong"), "a blob shorter or longer than its declared length is refused")
+check(refuses(struct.pack(">II", 0xFADE7172, len(blob) + 1) + blob[8:] + b"\x00", "single [APPLICATION 16]") and refuses(struct.pack(">II", 0xFADE7171, len(blob)) + blob[8:], "header is wrong"),
+      "bytes after the root element, and a wrong magic, are refused")
+check(refuses(b"\xfa\xde\x71") and refuses(struct.pack(">II", 0xFADE7172, 8)), "a blob shorter than its header, and an empty body, are refused")
+
+# ---- hand-built blobs: duplicate keys, malformed entries, unsupported values
+def utf(k): return F.der(0x0C, k)
+def entry(k, v): return F.d_seq(utf(k), v)
+def blob_of(*entries):
+    body = F.der(0x70, F.der(0x02, b"\x01") + F.der(0xB0, b"".join(entries)))
+    return struct.pack(">II", 0xFADE7172, 8 + len(body)) + body
+T, FALSE = F.der(1, b"\xff"), F.der(1, b"\x00")
+check(I.parse_der_entitlements(blob_of(entry(b"a", T), entry(b"b", FALSE))) == {"a": True, "b": False}, "(control) a hand-built two-entry blob in Apple's layout decodes")
+check(refuses(blob_of(entry(b"a", T), entry(b"a", FALSE)), "duplicate key"), "a duplicate top-level key is refused")
+check(refuses(blob_of(entry(b"n", F.der(0xB0, entry(b"x", T) + entry(b"x", FALSE)))), "duplicate key"), "a duplicate key inside a nested dictionary is refused")
+check(refuses(blob_of(entry(b"n", F.d_seq(F.der(0xB0, entry(b"x", T) + entry(b"x", T))))), "duplicate key"), "a duplicate key inside a dictionary inside an array is refused")
+check(I.parse_der_entitlements(blob_of(entry(b"a", T), entry(b"n", F.der(0xB0, entry(b"a", FALSE))))) == {"a": True, "n": {"a": False}},
+      "(control) the same key in DIFFERENT dictionaries is not a duplicate")
+check(refuses(blob_of(F.d_seq(utf(b"a"))), "malformed entry") and refuses(blob_of(F.d_seq(utf(b"a"), T, T)), "malformed entry") and refuses(blob_of(F.d_seq(T, T)), "malformed entry")
+      and refuses(blob_of(T), "malformed entry"), "an entry with one child, three children, a non-string key, or no SEQUENCE at all is refused")
+for what, v in (("OCTET STRING", F.der(4, b"x")), ("NULL", F.der(5, b"")), ("a SET", F.der(0x31, b"")), ("a REAL", F.der(9, b"\x00")), ("a GeneralizedTime", F.der(0x18, b"20260101000000Z")),
+                ("an OID", F.der(6, b"\x2a\x03")), ("[CONTEXT 0]", F.der(0xA0, b""))):
+    check(refuses(blob_of(entry(b"a", v)), "unsupported value"), "%s as an entitlement value is refused" % what)
+check(refuses(blob_of(entry(b"a", F.der(0x31, entry(b"k", T)))), "unsupported value"), "a SET of entries where a dictionary is expected, inside a value, is refused")
+check(I.parse_der_entitlements(blob_of(entry(b"a", F.der(0xB0, b"")), entry(b"b", F.d_seq()))) == {"a": {}, "b": []}, "(control) an empty dictionary and an empty array decode to {} and []")
+check(type(I.parse_der_entitlements(blob_of(entry(b"a", T), entry(b"b", F.der(2, b"\x01")))).get("a")) is bool and type(I.parse_der_entitlements(blob_of(entry(b"b", F.der(2, b"\x01"))))["b"]) is int,
+      "a BOOLEAN decodes to bool and an INTEGER to int (never confused)")
+
+# ---- XML versus DER: value AND type (the entitlement values the parser can produce)
+S = I.plist_equal_strict
+check(S({"a": True}, {"a": True}) and S({"a": False, "b": 0}, {"b": 0, "a": False}), "(control) equal entitlements pass, whatever the key order")
+check(not S({"a": True}, {"a": 1}) and not S({"a": 1}, {"a": True}) and not S({"a": False}, {"a": 0}) and not S({"a": 0}, {"a": False}), "a boolean and an integer of the same value are NOT interchangeable")
+check({"a": 1} == {"a": True} and {"a": 1} == {"a": 1.0}, "(why: Python's own == calls them equal)")
+check(not S({"a": [True]}, {"a": [1]}) and not S({"a": ["x", True]}, {"a": [True, "x"]}) and not S({"a": [1, 2]}, {"a": [2, 1]}) and S({"a": [1, "x", True, [False]]}, {"a": [1, "x", True, [False]]}),
+      "arrays keep their element types and their order")
+check(not S({"a": {"b": {"c": True}}}, {"a": {"b": {"c": 1}}}) and not S({"a": {"b": 1}}, {"a": {"b": 1, "c": 2}}) and not S({"a": {"b": 1}}, {"a": {"c": 1}}) and S({"a": {"b": {"c": [True]}}}, {"a": {"b": {"c": [True]}}}),
+      "nested dictionaries are compared recursively, in value, type and keys")
+check(not S({"a": "1"}, {"a": 1}) and not S({"a": "x"}, {"a": "y"}) and not S({"a": 1}, {"a": 2}) and not S({"a": True}, {"a": False}) and not S({"a": 1}, {}) and not S({}, {"a": 1}),
+      "different strings, integers, booleans, and missing or extra keys are different")
+import datetime
+check(not S({"a": 1}, {"a": 1.0}) and not S({"a": "x"}, {"a": b"x"}) and not S({"a": 1}, {"a": datetime.datetime(2026, 1, 1)}) and not S({"a": []}, {"a": {}}) and not S({"a": {}}, {"a": []}),
+      "XML types DER cannot hold (real, data, date) and an array against a dictionary never equal a DER value")
+check(all(S(I.parse_der_entitlements(real[k][2]), EXPECTED[k]) for k in real), "every entitlement the parser reads from a real Apple blob equals its XML form under the strict comparison")
+PY
+
+# the same, end to end through the verifier: the first mismatch is only a TYPE (BOOLEAN against INTEGER), and the obsolete layout is unreadable
+mk dertype staging der-type-differs
+expect_fail "DER entitlements that differ from the XML entitlements only in TYPE (a BOOLEAN against an INTEGER) are refused" "differ from the XML entitlements" staging "$tmp/dertype.ipa" --expect-cert-sha256 "$PIN"
+mk derset staging der-set-layout
+expect_fail "an IPA whose DER entitlements use the OBSOLETE layout (a SET) is refused as unreadable" "DER entitlements are unreadable: unsupported DER entitlements version or layout" staging "$tmp/derset.ipa" --expect-cert-sha256 "$PIN"
+
+# ---- the entitlements must also agree ACROSS the slices of a universal executable, in value AND type
+# (check_code_signature compared them with Python's ==, which calls <false/> and <integer>0</integer> equal). A fat executable with two
+# arm64 slices is the only fat shape the verifier can otherwise accept, so that is what these build.
+mk fat staging fat-main
+expect_ok "(control) a universal executable whose two arm64 slices carry identical entitlements passes" staging "$tmp/fat.ipa" --expect-cert-sha256 "$PIN"
+mk fattype staging fat-slice-type
+run staging "$tmp/fattype.ipa" "${common[@]}" --expect-cert-sha256 "$PIN"
+# the refusal must be consistent: a FAIL for the slices and NO "signature intact" PASS for the same executable
+if [ "$rc" -eq 1 ] && grep -F "FAIL" <<<"$out" | grep -F "the entitlements differ between architecture slices" >/dev/null && ! grep -F "PASS  main executable Runner: signature intact" <<<"$out" >/dev/null; then
+  ok "a universal executable whose second slice declares an entitlement with the same value in another TYPE (a boolean against an integer) is refused (and the executable is not also reported intact)"
+else
+  bad "a universal executable whose second slice declares an entitlement with the same value in another TYPE (a boolean against an integer) is refused" "exit $rc: $(echo "$out" | grep -E 'FAIL|signature intact' | head -3 | tr '\n' '|')"
+fi
+mk fatvalue staging fat-slice-value
+run staging "$tmp/fatvalue.ipa" "${common[@]}" --expect-cert-sha256 "$PIN"
+# the refusal must be consistent: a FAIL for the slices and NO "signature intact" PASS for the same executable
+if [ "$rc" -eq 1 ] && grep -F "FAIL" <<<"$out" | grep -F "the entitlements differ between architecture slices" >/dev/null && ! grep -F "PASS  main executable Runner: signature intact" <<<"$out" >/dev/null; then
+  ok "a universal executable whose slices carry different entitlement values is refused (and the executable is not also reported intact)"
+else
+  bad "a universal executable whose slices carry different entitlement values is refused" "exit $rc: $(echo "$out" | grep -E 'FAIL|signature intact' | head -3 | tr '\n' '|')"
+fi
 
 # ---- 10. optional: re-sign a REAL unsigned build (synthetic identity) -----------------------------
 if [ -n "${REAL_UNSIGNED_APP:-}" ]; then

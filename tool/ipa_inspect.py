@@ -429,6 +429,7 @@ CSMAGIC_DER_ENTITLEMENTS = 0xFADE7172
 CSMAGIC_BLOBWRAPPER = 0xFADE0B01
 CS_ADHOC, CS_LINKER_SIGNED = 0x2, 0x20000
 HASH_TYPES = {1: ("sha1", 20), 2: ("sha256", 32), 3: ("sha256", 20), 4: ("sha384", 48)}
+DER_DICT_CLASS, DER_DICT_TAG = 2, 16  # the entitlements dictionary of the DER blob: [CONTEXT 16] (observed, not a SET)
 SLOT_INFO, SLOT_REQUIREMENTS, SLOT_RESOURCES, SLOT_ENTITLEMENTS, SLOT_DER_ENTITLEMENTS = 1, 2, 3, 5, 7
 SLOT_CODEDIRECTORY, SLOT_CMS = 0, 0x10000
 SLOT_ALT_CODEDIRECTORIES = tuple(range(0x1000, 0x1005))
@@ -646,27 +647,35 @@ def code_slot_problems(cd, slice_data, signature_offset=None):
     return out
 
 
+def _der_is(node, cls, tag, constructed):
+    """True if the element has exactly this class, tag number and form (constructed or primitive)."""
+    return node.cls == cls and node.tag == tag and node.constructed == constructed
+
+
 def _der_entitlement_value(node):
-    if node.cls != 0:
-        raise Asn1Error("unexpected tag class in DER entitlements")
-    if node.tag == 1:
+    # Class AND form are checked for every kind of value: a BOOLEAN, INTEGER or UTF8String is a primitive element, an array
+    # (SEQUENCE) and a dictionary ([CONTEXT 16]) are constructed. A dictionary is NOT a SET and a SET is NOT a value.
+    if _der_is(node, 0, 1, False):
         return node.value == b"\xff"
-    if node.tag == 2:
+    if _der_is(node, 0, 2, False):
         return int.from_bytes(node.value, "big", signed=True)
-    if node.tag == 12:
+    if _der_is(node, 0, 12, False):
         return node.value.decode("utf-8")
-    if node.tag == 16:
+    if _der_is(node, 0, 16, True):
         return [_der_entitlement_value(c) for c in node.children]
-    if node.tag == 17:
+    if _der_is(node, DER_DICT_CLASS, DER_DICT_TAG, True):
         return _der_entitlement_dict(node)
-    raise Asn1Error("unsupported value type %d in DER entitlements" % node.tag)
+    raise Asn1Error("unsupported value (class %d, tag %d, %s) in DER entitlements"
+                    % (node.cls, node.tag, "constructed" if node.constructed else "primitive"))
 
 
 def _der_entitlement_dict(node):
     out = {}
     for pair in node.children:
+        if not _der_is(pair, 0, 16, True):
+            raise Asn1Error("malformed entry in DER entitlements")
         kv = pair.children
-        if pair.tag != 16 or len(kv) != 2 or kv[0].tag != 12:
+        if len(kv) != 2 or not _der_is(kv[0], 0, 12, False):
             raise Asn1Error("malformed entry in DER entitlements")
         key = kv[0].value.decode("utf-8")
         if key in out:
@@ -676,18 +685,28 @@ def _der_entitlement_dict(node):
 
 
 def parse_der_entitlements(blob):
-    """Decode the DER entitlements blob (magic 0xfade7172): [APPLICATION 16] { INTEGER 1, SET OF
-    SEQUENCE { UTF8String key, value } }. The kernel enforces THESE where present, so they must be
-    reconciled with the XML entitlements. The layout is from public descriptions and has not been
-    checked against a real Apple-signed app (docs/IOS_SIGNING.md); anything else is an error."""
+    """Decode the DER entitlements blob (magic 0xfade7172), in the layout Apple's own `codesign
+    --generate-entitlement-der` writes. OBSERVED on genuine Apple output (Issue #71, Authorization D1, 14 signings by
+    Xcode 26.3's codesign, 7 distinct blobs; tool/test_verify_ipa.sh decodes all of them):
+
+        blob  = magic 0xfade7172 | length (4 bytes, big endian, of the whole blob) | DER
+        DER   = [APPLICATION 16] constructed { INTEGER 1, dictionary }
+        dict  = [CONTEXT 16] constructed { entry ... }            (NOT a SET; Apple orders the entries by key)
+        entry = SEQUENCE { UTF8String key, value }
+        value = BOOLEAN | INTEGER | UTF8String | SEQUENCE { value ... } (array) | dict (nested, the same [CONTEXT 16])
+
+    The kernel enforces THESE where present, so they must be reconciled with the XML entitlements. The obsolete SET layout
+    (the one this parser assumed from public descriptions before genuine evidence existed) is refused, and so is every other
+    class, tag or form. What is deliberately NOT checked here (Phase 6C of Issue #71): key order, BER laxness (indefinite and
+    non-minimal lengths, non-minimal integers, a BOOLEAN other than 00/ff), nesting depth, the number of children of the root."""
     magic, length = struct.unpack(">II", blob[:8])
     if magic != CSMAGIC_DER_ENTITLEMENTS or length != len(blob):
         raise Asn1Error("DER entitlements blob header is wrong")
     root = parse_der(blob[8:])
-    if root.end != len(blob) - 8 or root.cls != 1 or root.tag != 16:
+    if root.end != len(blob) - 8 or not _der_is(root, 1, 16, True):
         raise Asn1Error("DER entitlements are not a single [APPLICATION 16] element")
     ver, body = root.children[0], root.children[1]
-    if ver.tag != 2 or ver.value != b"\x01" or body.tag != 17:
+    if not _der_is(ver, 0, 2, False) or ver.value != b"\x01" or not _der_is(body, DER_DICT_CLASS, DER_DICT_TAG, True):
         raise Asn1Error("unsupported DER entitlements version or layout")
     return _der_entitlement_dict(body)
 

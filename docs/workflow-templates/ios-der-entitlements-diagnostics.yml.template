@@ -18,10 +18,13 @@
 # not an Apple Distribution signing operation, not a release and not an upload, and it accesses no Apple signing credential.
 #
 # Question: what does a DER entitlements blob written by Apple's own `codesign --generate-entitlement-der` really look like?
-# tool/ipa_inspect.py parse_der_entitlements assumes a layout (the dictionary as an ASN.1 SET) from public descriptions. On the
+# tool/ipa_inspect.py parse_der_entitlements ASSUMED a layout (the dictionary as an ASN.1 SET) from public descriptions (D1 then showed
+# [CONTEXT 16], and the parser was repaired in Phase 6B; docs/IOS_SIGNING.md section 3.1a has the current contract). On the
 # first Apple-signed IPA (Authorization C, run 44834801248) it refused Apple's real blob ("unsupported DER entitlements version
-# or layout") and that blob was not kept, so the layout has never been seen on real Apple data. A macOS runner is the only place
-# where Apple's tool can be run, and no repository tool can write the answer for it.
+# or layout") and that blob was not kept, so at the time of writing no genuine Apple DER blob had ever been seen. A macOS runner is the
+# only place where Apple's tool can be run, and no repository tool can write the answer for it. (Since D1, run 44956044650: Apple's own
+# `codesign --generate-entitlement-der` output has been observed, and it is what section 3.1a of docs/IOS_SIGNING.md records. The DER
+# blob inside a Distribution-signed IPA has still NOT been observed; see the last paragraph of this header.)
 #
 # What it does, on a GitHub-hosted macos-15 runner with Xcode 26.3 (the pins of the other iOS workflows), by running
 # tool/probe_der_entitlements.sh:
@@ -57,7 +60,8 @@
 # the format Apple's codesign writes. The Packaging.log of run 44834801248 shows that Xcode's own local call for every item, the
 # main app included, is an ad-hoc call (`codesign -f -s - ... --generate-entitlement-der`), that the cloud service receives only the
 # CodeDirectory digest, and that its CMS signature is attached afterwards (`--edit-cms`): the blob of a cloud-signed IPA is written
-# by a call of the kind made here. That is strong evidence of its layout, not a proof about that IPA. See docs/IOS_SIGNING.md.
+# by a call of the kind made here. That is strong evidence of its layout, not a proof about that IPA: the layout of Apple's own ad-hoc
+# output is observed (D1); the layout of the Distribution-signed IPA is not. See docs/IOS_SIGNING.md.
 
 name: iOS DER entitlements diagnostics (credential-free, not a release)
 

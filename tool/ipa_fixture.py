@@ -107,7 +107,10 @@ def d_value(v):
     if isinstance(v, bool):
         return der(0x01, b"\xff" if v else b"\x00")
     if isinstance(v, int):
-        return der(0x02, v.to_bytes(max(1, (v.bit_length() + 8) // 8), "big", signed=True))
+        n = 1  # the SHORTEST two's complement encoding, as Apple writes it (-128 is 0x80, 128 is 0x0080)
+        while not -(1 << (8 * n - 1)) <= v < (1 << (8 * n - 1)):
+            n += 1
+        return der(0x02, v.to_bytes(n, "big", signed=True))
     if isinstance(v, str):
         return der(0x0C, v.encode())
     if isinstance(v, list):
@@ -118,13 +121,16 @@ def d_value(v):
 
 
 def d_dict(d):
-    return d_set(*[d_seq(der(0x0C, k.encode()), d_value(v)) for k, v in sorted(d.items())])
+    # The layout of Apple's own `codesign --generate-entitlement-der`, as observed in Issue #71 (Authorization D1): the
+    # dictionary is [CONTEXT 16] constructed (0xb0), NOT a SET, holding one SEQUENCE { UTF8String key, value } per entry,
+    # ordered by the bytes of the key; a nested dictionary is the same [CONTEXT 16] element.
+    return der(0xB0, b"".join(d_seq(der(0x0C, k.encode()), d_value(v)) for k, v in sorted(d.items(), key=lambda kv: kv[0].encode())))
 
 
 def der_entitlements_blob(ents, version=b"\x01"):
-    # NOTE: this is the layout tool/ipa_inspect.py parse_der_entitlements ASSUMES (the dictionary as a SET). It was never
-    # compared with a blob written by Apple's codesign (Phase 2 of the verifier repair, docs/IOS_SIGNING.md); until that
-    # evidence exists the fixture can only agree with the parser, not prove it. `version` exists for the negative test.
+    # This synthetic writer follows the layout observed on genuine Apple output (see d_dict). The independent proof is not
+    # this function but the seven Apple-written blobs committed under tool/fixtures/apple_der_entitlements_d1_run44956044650.txt (see
+    # tool/test_verify_ipa.sh): they were never produced by this file. `version` exists for the negative test.
     body = der(0x70, d_int(version) + d_dict(ents))
     return struct.pack(">II", I.CSMAGIC_DER_ENTITLEMENTS, 8 + len(body)) + body
 
@@ -382,7 +388,17 @@ def sign_slice(sl, ident, team, specials, ents_xml, dual, adhoc, certs, main):
             ents = plistlib.loads(ents_xml)
             if "der-differs" in MUT:
                 ents = dict(ents, **{"get-task-allow": True})
+            if "der-type-differs" in MUT:
+                # same VALUE, different TYPE: the first BOOLEAN of the XML entitlements becomes an INTEGER (False -> 0, True -> 1)
+                # in the DER form. Python's == calls these equal; the kernel does not.
+                first = next(k for k, v in ents.items() if isinstance(v, bool))
+                ents = dict(ents, **{first: int(ents[first])})
             der_blob = der_entitlements_blob(ents, b"\x02" if "der-version2" in MUT else b"\x01")
+            if "der-set-layout" in MUT:
+                # the OBSOLETE layout this repository assumed before genuine Apple evidence (a SET instead of [CONTEXT 16])
+                inner = I.parse_der(d_dict(ents)).value
+                body = der(0x70, d_int(b"\x01") + der(0x31, inner))
+                der_blob = struct.pack(">II", I.CSMAGIC_DER_ENTITLEMENTS, 8 + len(body)) + body
             sp[7] = der_blob
     blobs = {}
     algs = ["sha1", "sha256"] if dual else ["sha256"]
@@ -422,22 +438,29 @@ def sign_slice(sl, ident, team, specials, ents_xml, dual, adhoc, certs, main):
     return out
 
 
-def sign_macho_file(path, ident, team, specials, ents_xml, dual, adhoc, certs, main):
+def fat_from(cpus, slices):
+    """A fat (universal) Mach-O holding the given slices, each at a 16 KiB boundary (alignment 2**14)."""
+    off, recs, placed = 0x4000, b"", []
+    for cpu, sl in zip(cpus, slices):
+        recs += struct.pack(">iIIII", cpu, 0, off, len(sl), 14)
+        placed.append((off, sl))
+        off = (off + len(sl) + 0x3FFF) & ~0x3FFF
+    out = bytearray(struct.pack(">II", I.FAT_MAGIC, len(slices)) + recs)
+    for o, sl in placed:
+        out = out.ljust(o, b"\0")
+        out += sl
+    return bytes(out)
+
+
+def sign_macho_file(path, ident, team, specials, ents_xml, dual, adhoc, certs, main, later_slice_ents_xml=None):
+    """Sign every slice. `later_slice_ents_xml` (tests only) replaces the entitlements of every slice after the first."""
     with open(path, "rb") as f:
         data = f.read()
     sls = I.macho_slices(data)
-    signed = [sign_slice(data[o:o + s], ident, team, specials, ents_xml, dual, adhoc, certs, main) for _c, o, s in sls]
+    signed = [sign_slice(data[o:o + s], ident, team, specials, ents_xml if i == 0 or later_slice_ents_xml is None else later_slice_ents_xml,
+                         dual, adhoc, certs, main) for i, (_c, o, s) in enumerate(sls)]
     if struct.unpack(">I", data[:4])[0] in (I.FAT_MAGIC, I.FAT_MAGIC_64):
-        off, recs, placed = 0x4000, b"", []
-        for (cpu, _o, _s), sl in zip(sls, signed):
-            recs += struct.pack(">iIIII", cpu, 0, off, len(sl), 14)
-            placed.append((off, sl))
-            off = (off + len(sl) + 0x3FFF) & ~0x3FFF
-        out = bytearray(struct.pack(">II", I.FAT_MAGIC, len(sls)) + recs)
-        for o, sl in placed:
-            out = out.ljust(o, b"\0")
-            out += sl
-        new = bytes(out)
+        new = fat_from([cpu for cpu, _o, _s in sls], signed)
     else:
         new = signed[0]
     with open(path, "wb") as f:
@@ -661,8 +684,20 @@ def sign_app(app_in, out_ipa, certdir, team, mutations):
         info_b = f.read()
     with open(os.path.join(app, "_CodeSignature", "CodeResources"), "rb") as f:
         res_b = f.read()
+    later = None
+    if "fat-main" in mut or "fat-slice-type" in mut or "fat-slice-value" in mut:
+        # a universal executable of TWO arm64 slices (the verifier requires arm64, so this is the only fat shape it can accept)
+        with open(os.path.join(app, "Runner"), "rb") as f:
+            one = f.read()
+        with open(os.path.join(app, "Runner"), "wb") as f:
+            f.write(fat_from([0x0100000C, 0x0100000C], [one, one]))
+        if "fat-slice-type" in mut:  # the second slice declares the same value with ANOTHER TYPE: <integer>0</integer> for <false/>
+            first = next(k for k, v in ents.items() if isinstance(v, bool))
+            later = plistlib.dumps(dict(ents, **{first: int(ents[first])}), fmt=plistlib.FMT_XML)
+        if "fat-slice-value" in mut:  # the second slice differs in value
+            later = plistlib.dumps(dict(ents, **{"beta-reports-active": not ents["beta-reports-active"]}), fmt=plistlib.FMT_XML)
     sign_macho_file(os.path.join(app, "Runner"), bundle_id, team if "wrong-cd-team" not in mut else "OTHER12345",
-                    {1: info_b, 3: res_b}, None if "no-entitlements" in mut else ents_xml, dual, adhoc_main, certs, True)
+                    {1: info_b, 3: res_b}, None if "no-entitlements" in mut else ents_xml, dual, adhoc_main, certs, True, later)
     # tampering AFTER signing
     if "tamper-exe" in mut:
         p = os.path.join(app, "Runner")
