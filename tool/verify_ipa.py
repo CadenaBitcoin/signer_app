@@ -358,12 +358,15 @@ def check_code_signature(rep, label, path, bundle_dir, bundle_id, team_id, expec
         # hide the others. Entitlements read from a signature whose CMS did not verify are for diagnosis only, and the
         # run fails anyway: every CMS failure sets result["ok"] = False.)
         if s["entitlements"] is not None:
-            if s["der_entitlements"] is not None and s["der_entitlements"] != s["entitlements"]:
+            # Equal in value AND type, all the way down: Python's == treats True as 1 and 1 as 1.0, and a DER BOOLEAN that
+            # the XML declares as an INTEGER (or the reverse) is a real difference for the kernel.
+            if s["der_entitlements"] is not None and not I.plist_equal_strict(s["der_entitlements"], s["entitlements"]):
                 result["ok"] = False
                 rep.fail("%s: the DER entitlements (enforced by the kernel) differ from the XML entitlements" % tag)
             if result["ents"] is None:
                 result["ents"] = s["entitlements"]
-            elif result["ents"] != s["entitlements"]:
+            elif not I.plist_equal_strict(result["ents"], s["entitlements"]):
+                # every slice of a universal executable must carry the same entitlements, in value AND type (the same reason as above)
                 result["ok"] = False
                 rep.fail("%s: the entitlements differ between architecture slices" % tag)
         elif s["der_entitlements"] is not None:
