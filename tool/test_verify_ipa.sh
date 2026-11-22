@@ -1451,6 +1451,239 @@ else
   bad "a universal executable whose slices carry different entitlement values is refused" "exit $rc: $(echo "$out" | grep -E 'FAIL|signature intact' | head -3 | tr '\n' '|')"
 fi
 
+# ---- 15. Phase 6C-B (Issue #71): the DER entitlements reader is a STRICT DER reader --------------------------------------------
+# DER has one encoding per value; refusing the others removes specific encoding ambiguities and reduces the risk that this reader and the
+# kernel's read one blob differently. It does not prove the two equivalent (Apple's reader was not examined). These tests pin what is
+# refused: what DER forbids (an indefinite or non-minimal length, a non-canonical high-tag form, a BOOLEAN other than 00/ff, an empty or
+# padded INTEGER) and two limits of THIS application that DER does not require (a root that is not exactly two elements, nesting beyond
+# the limit); and what must still be accepted (everything Apple wrote). The blobs here are
+# hand-built with a LOCAL encoder that shares no code with tool/ipa_fixture.py (which is used only to sign a file for read_signature);
+# the real blobs are the seven of Authorization D1.
+pyunit "$root" "$derfix" <<'PY'
+import hashlib, inspect, os, plistlib, struct, sys, tempfile
+sys.dont_write_bytecode = True
+root, derfix = sys.argv[1:3]
+sys.path.insert(0, os.path.join(root, "tool"))
+import ipa_inspect as I
+
+
+def ok(m): print("ok   " + m)
+def bad(m, why=""):
+    print("FAIL " + m)
+    if why: print("     " + why)
+def check(c, m, why=""): ok(m) if c else bad(m, why)
+
+
+# a local, independent DER writer (and the means to write it WRONG on purpose)
+def lenb(n):
+    if n < 0x80: return bytes([n])
+    b = n.to_bytes((n.bit_length() + 7) // 8, "big")
+    return bytes([0x80 | len(b)]) + b
+def tlv(tag, body, length=None): return bytes([tag]) + (lenb(len(body)) if length is None else length) + body
+def blob(root_der): return struct.pack(">II", 0xFADE7172, 8 + len(root_der)) + root_der
+def utf(k): return tlv(0x0C, k)
+def entry(k, v): return tlv(0x30, utf(k) + v)
+def dic(*entries): return tlv(0xB0, b"".join(entries))
+VER = tlv(2, b"\x01")
+def top(*entries, extra=b""): return blob(tlv(0x70, VER + dic(*entries) + extra))
+TRUE, FALSE = tlv(1, b"\xff"), tlv(1, b"\x00")
+KEY = utf(b"a")
+
+
+def parse(b):
+    try: return ("ok", I.parse_der_entitlements(b))
+    except (I.Asn1Error, IndexError, ValueError, struct.error) as e: return ("refused", str(e))
+    except RecursionError: return ("RECURSION", "")
+def refuses(b, needle): r = parse(b); return r[0] == "refused" and needle in r[1]
+def accepts(b, want): r = parse(b); return r[0] == "ok" and r[1] == want
+
+
+# ---- the seven real Apple blobs go through the strict reader unchanged: the same bytes, the same values
+real = {}
+for line in open(derfix):
+    if line.startswith("#") or not line.strip(): continue
+    n, size, sha, hx = line.split()
+    real[n] = (int(size), sha, bytes.fromhex(hx))
+check(sorted(real) == ["arrays", "booleans", "dicts", "integers", "many", "runner", "unsorted"], "all seven Apple blobs of Authorization D1 are present")
+check(hashlib.sha256(open(derfix, "rb").read()).hexdigest() == "067905aebc352bf48c8ad40c1ce4471b2b5f5869557c3829e75c36ba3bf73576",
+      "the Apple fixture file is byte-identical to the one committed in Phase 6B (its SHA-256)")
+check(all(len(b) == n and hashlib.sha256(b).hexdigest() == h for n, h, b in real.values()), "every Apple blob still has its recorded size and SHA-256")
+for name, (_n, _h, b) in sorted(real.items()):
+    r = parse(b)
+    check(r[0] == "ok" and len(r[1]) > 0, "the strict reader accepts the real Apple blob `%s` (its values are checked in full in section 14)" % name, str(r)[:120])
+check(all(len(I._der_strict_node(b, 8, len(b), 0).children) == 2 for _n, _h, b in real.values()), "every real Apple blob has exactly two elements in its root")
+prim = I._der_strict_node(tlv(2, b"\x05\x05"), 0, 4, 0)
+check(prim.children == [] and prim.value == b"\x05\x05", "a primitive element has no children, whatever its content looks like")
+
+# ---- BOOLEAN: exactly one octet, 00 or ff
+check(accepts(top(entry(b"a", TRUE)), {"a": True}) and accepts(top(entry(b"a", FALSE)), {"a": False}), "BOOLEAN ff is TRUE and 00 is FALSE (accepted)")
+for what, c in (("01", b"\x01"), ("02", b"\x02"), ("80", b"\x80"), ("fe", b"\xfe"), ("empty", b""), ("ff ff", b"\xff\xff"), ("00 00", b"\x00\x00"), ("00 ff", b"\x00\xff")):
+    check(refuses(top(entry(b"a", tlv(1, c))), "BOOLEAN is not exactly 00 or ff"), "a BOOLEAN with the content %s is refused" % what)
+bb = real["booleans"][2]
+at = bb.find(b"\x01\x01\x00")
+check(at > 8 and refuses(bb[:at] + b"\x01\x01\x01" + bb[at + 3:], "BOOLEAN is not exactly 00 or ff"), "the real `booleans` blob with ONE BOOLEAN changed from 00 to 01 is refused")
+at = bb.find(b"\x01\x01\xff")
+check(at > 8 and refuses(bb[:at] + b"\x01\x01\xfe" + bb[at + 3:], "BOOLEAN is not exactly 00 or ff"), "the real `booleans` blob with ONE BOOLEAN changed from ff to fe is refused")
+
+# ---- INTEGER: not empty, shortest two's complement (valid: both signs, every width, and the boundaries)
+GOOD_INTS = ((b"\x00", 0), (b"\x01", 1), (b"\x7f", 127), (b"\x00\x80", 128), (b"\x00\xff", 255), (b"\x01\x00", 256), (b"\x80", -128), (b"\xff", -1),
+             (b"\xff\x7f", -129), (b"\xff\x00", -256), (b"\x7f\xff\xff\xff", 2147483647), (b"\x80\x00\x00\x00", -2147483648),
+             (b"\x00\xff\xff\xff\xff", 4294967295), (b"\x7f" + b"\xff" * 7, 2 ** 63 - 1), (b"\x80" + b"\x00" * 7, -2 ** 63))
+for c, v in GOOD_INTS:
+    check(v == int.from_bytes(c, "big", signed=True) and accepts(top(entry(b"i", tlv(2, c))), {"i": v}), "INTEGER %s is accepted and means %d" % (c.hex(), v))
+for what, c in (("empty", b""), ("00 00", b"\x00\x00"), ("00 01", b"\x00\x01"), ("00 7f", b"\x00\x7f"), ("00 00 80", b"\x00\x00\x80"), ("ff ff", b"\xff\xff"),
+                ("ff 80", b"\xff\x80"), ("ff ff 80", b"\xff\xff\x80")):
+    check(refuses(top(entry(b"i", tlv(2, c))), "INTEGER"), "INTEGER %s (empty or not shortest) is refused" % what)
+
+# ---- lengths: definite, and as short as possible
+check(refuses(blob(bytes([0x70, 0x80]) + VER + dic(entry(b"a", TRUE)) + b"\0\0"), "indefinite length"), "an indefinite length on the root is refused")
+check(refuses(blob(tlv(0x70, VER + bytes([0xB0, 0x80]) + entry(b"a", TRUE) + b"\0\0")), "indefinite length"), "an indefinite length on the dictionary is refused")
+check(refuses(top(bytes([0x30, 0x80]) + KEY + TRUE + b"\0\0"), "indefinite length"), "an indefinite length on an entry is refused")
+check(refuses(top(entry(b"a", bytes([0x30, 0x80]) + TRUE + b"\0\0")), "indefinite length"), "an indefinite length on an array is refused")
+check(refuses(top(tlv(0x30, bytes([0x0C, 0x80]) + b"a" + TRUE)), "indefinite length"), "an indefinite length on a primitive is refused")
+body = VER + dic(entry(b"a", TRUE))
+check(refuses(blob(tlv(0x70, body, bytes([0x81, len(body)]))), "long form"), "a length in the long form that fits the short form (81 xx with xx < 80) is refused")
+check(refuses(top(tlv(0x30, KEY + TRUE, bytes([0x81, len(KEY + TRUE)]))), "long form"), "a padded entry length (81 06) is refused")
+check(refuses(top(tlv(0x30, KEY + TRUE, bytes([0x82, 0x00, len(KEY + TRUE)]))), "leading zero"), "a length with a leading zero octet (82 00 xx) is refused")
+check(refuses(top(tlv(0x30, KEY + TRUE, bytes([0x84, 0, 0, 0, len(KEY + TRUE)]))), "leading zero"), "a length with three leading zero octets (84 00 00 00 xx) is refused")
+check(refuses(top(entry(b"a", tlv(0x0C, b"x" * 200, bytes([0x82, 0x00, 200])))), "leading zero"), "a padded length on a 200-byte string (82 00 c8) is refused")
+check(refuses(top(tlv(0x30, KEY + TRUE, bytes([0x85, 0, 0, 0, 0, len(KEY + TRUE)]))), "oversized length"), "a length of more than four octets is refused")
+for n in (128, 200, 255, 256, 300, 70000):  # the long forms that ARE minimal, as Apple writes them (81 in runner and arrays, 82 in integers and many)
+    check(accepts(top(entry(b"s", tlv(0x0C, b"x" * n))), {"s": "x" * n}), "a %d-byte string with its minimal long-form length is accepted" % n)
+
+# ---- tags: the single-octet form below 31; a high-tag form only for 31 and above, and then without a leading zero
+dic_a = entry(b"a", TRUE)
+for what, b in (("the dictionary as bf 10 (tag 16 in the high form)", blob(tlv(0x70, VER + bytes([0xBF, 0x10]) + lenb(len(dic_a)) + dic_a))),
+                ("a key as 1f 0c", top(tlv(0x30, bytes([0x1F, 0x0C]) + lenb(1) + b"a" + TRUE))),
+                ("a BOOLEAN as 1f 01", top(tlv(0x30, KEY + bytes([0x1F, 0x01]) + lenb(1) + b"\xff"))),
+                ("an INTEGER as 1f 02", top(tlv(0x30, KEY + bytes([0x1F, 0x02]) + lenb(1) + b"\x01"))),
+                ("the root as 7f 10", blob(bytes([0x7F, 0x10]) + lenb(len(body)) + body)),
+                ("an array as 3f 10", top(entry(b"a", bytes([0x3F, 0x10]) + lenb(0))))):
+    check(refuses(b, "high-tag-number form"), "%s is refused" % what)
+check(refuses(top(entry(b"a", bytes([0x9F, 0x80, 0x1F]) + lenb(0))), "leading zero"), "a high-tag number with a leading zero octet (9f 80 1f) is refused")
+check(refuses(top(entry(b"a", bytes([0x9F, 0x81, 0x81, 0x81, 0x81, 0x01]) + lenb(0))), "overlong"), "a tag number of more than four octets is refused")
+check(refuses(top(entry(b"a", bytes([0x9F, 0x1F]) + lenb(0))), "unsupported value"), "a CANONICAL high tag (tag 31, 9f 1f) is read, and refused as a value this layout does not have (not as non-canonical)")
+
+# ---- the root: exactly two elements
+# (an application rule, not a DER one) the message gives the offset where the surplus starts, worked out here from the bytes written above
+for what, extra in (("a BOOLEAN", TRUE), ("a NULL", tlv(5, b"")), ("an empty SEQUENCE", tlv(0x30, b"")), ("a second dictionary (a hidden entitlement)", dic(entry(b"x", TRUE)))):
+    inner = VER + dic(entry(b"a", TRUE))
+    surplus_at = 8 + 1 + len(lenb(len(inner + extra))) + len(inner)  # blob header, root tag, root length, then version and dictionary
+    check(refuses(top(entry(b"a", TRUE), extra=extra), "exactly 2 are required") and refuses(top(entry(b"a", TRUE), extra=extra), "the first surplus element starts at byte %d" % surplus_at)
+          and refuses(top(entry(b"a", TRUE), extra=extra), "root holds 3 element(s)"), "a third element in the root, %s, is refused, naming the offset where it starts (byte %d)" % (what, surplus_at))
+one, none = blob(tlv(0x70, VER)), blob(tlv(0x70, b""))
+check(refuses(one, "exactly 2 are required") and refuses(none, "exactly 2 are required"),
+      "a root with one element, or none, is refused as an Asn1Error with a message (not an IndexError)")
+check(refuses(one, "root holds 1 element(s)") and refuses(one, "its content ends at byte %d" % len(one)) and refuses(none, "root holds 0 element(s)")
+      and refuses(none, "its content ends at byte %d" % len(none)), "...and the message gives the offset where the root's content ends (byte %d, %d)" % (len(one), len(none)))
+
+# ---- nesting depth: a documented limit, refused with a message and NEVER a RecursionError
+MAX = I.MAX_DER_ENTITLEMENTS_DEPTH
+def nest_dict(k):
+    v = TRUE
+    for _ in range(k): v = dic(entry(b"a", v))
+    return top(entry(b"k", v))
+def nest_arr(k):
+    v = TRUE
+    for _ in range(k): v = tlv(0x30, v)
+    return top(entry(b"k", v))
+kd, ka = (MAX - 3) // 2, MAX - 3  # the deepest element sits at level 3 + 2k for k nested dictionaries, 3 + k for k nested arrays (root = level 0)
+check(parse(nest_dict(kd))[0] == "ok" and refuses(nest_dict(kd + 1), "nested deeper than %d levels" % MAX), "dictionaries nested up to the limit (%d levels) are accepted, one more is refused" % MAX)
+check(parse(nest_arr(ka))[0] == "ok" and refuses(nest_arr(ka + 1), "nested deeper than %d levels" % MAX), "arrays nested up to the limit are accepted, one more is refused")
+check(all(refuses(nest_dict(k), "nested deeper") for k in (100, 1000, 20000)) and all(refuses(nest_arr(k), "nested deeper") for k in (100, 1000, 20000)),
+      "blobs of 100, 1000 and 20000 levels are refused with the limit's message, never a RecursionError")
+check(MAX >= 4 * 7, "the limit (%d) is more than four times the deepest Apple blob (7 levels)" % MAX)
+def frames_needed(b):
+    base = len(inspect.stack())
+    try:
+        for extra in range(5, 300):
+            sys.setrecursionlimit(base + extra)
+            try:
+                I.parse_der_entitlements(b)
+                return extra
+            except RecursionError:
+                continue
+    finally:
+        sys.setrecursionlimit(1000)
+need = max(frames_needed(nest_dict(kd)), frames_needed(nest_arr(ka)))
+check(need is not None and need <= 3 * MAX + 10, "a blob at the limit needs only %s Python frames: the reader cannot exhaust the stack on its own" % need)
+
+# ---- a failure of the reader is a RECORDED problem in read_signature, a RecursionError included: the other fields are still read
+work = tempfile.mkdtemp()
+def signed_file(name, der_blob):
+    import ipa_fixture as fx
+    path = os.path.join(work, name)
+    with open(path, "wb") as f: f.write(fx.make_macho("p6c" + name))
+    keep = fx.der_entitlements_blob
+    fx.der_entitlements_blob = lambda ents, version=b"\x01": der_blob
+    try:
+        fx.MUT.clear()
+        fx.sign_macho_file(path, "org.example.p6c", "SYNTH12345", {}, plistlib.dumps({"get-task-allow": False}, fmt=plistlib.FMT_XML), False, True, None, True)
+    finally:
+        fx.der_entitlements_blob = keep
+    return path
+good = top(entry(b"get-task-allow", FALSE))
+p0 = I.read_signature(signed_file("good", good))["slices"][0]
+check(p0["problems"] == [] and p0["der_entitlements"] == {"get-task-allow": False} and p0["cds"], "(control) a well-formed blob is read and nothing is recorded")
+for what, b in (("a BOOLEAN 01", top(entry(b"get-task-allow", tlv(1, b"\x01")))), ("an indefinite length", blob(bytes([0x70, 0x80]) + VER + dic(entry(b"a", TRUE)) + b"\0\0")),
+                ("a third root element", top(entry(b"a", TRUE), extra=TRUE)), ("nesting of 1000 levels", nest_dict(1000))):
+    sl = I.read_signature(signed_file("bad", b))["slices"][0]
+    check(any("DER entitlements are unreadable" in p for p in sl["problems"]) and sl["der_entitlements"] is None and sl["cds"] and sl["entitlements"] == {"get-task-allow": False},
+          "read_signature records %s as a problem and still reads the CodeDirectory and the XML entitlements" % what, str(sl["problems"])[:160])
+real_parse = I.parse_der_entitlements
+def boom(_b): raise RecursionError("maximum recursion depth exceeded")
+I.parse_der_entitlements = boom
+try:
+    sl = I.read_signature(signed_file("rec", good))["slices"][0]
+finally:
+    I.parse_der_entitlements = real_parse
+check(any("DER entitlements are unreadable" in p for p in sl["problems"]) and sl["cds"] and sl["entitlements"] == {"get-task-allow": False},
+      "a RecursionError from the reader is a recorded problem (nothing aborts), and the other fields are still read", str(sl["problems"])[:160])
+# and a REAL stack exhaustion inside the reader: a blob WITHIN the limit, read with so little stack that the interpreter itself gives out
+path = signed_file("rec2", nest_dict(kd))
+base, found = len(inspect.stack()), None
+try:
+    for limit in range(base + 70, base + 20, -1):
+        sys.setrecursionlimit(limit)
+        try:
+            sl = I.read_signature(path)["slices"][0]
+        except RecursionError:
+            continue  # not even enough stack to reach the reader
+        if any("nested too deeply" in p for p in sl["problems"]):
+            found = (limit - base, sl)
+            break
+finally:
+    sys.setrecursionlimit(1000)
+check(found is not None and any("DER entitlements are unreadable" in p for p in found[1]["problems"]) and found[1]["cds"],
+      "when the interpreter's stack really runs out inside the reader (with %s frames to spare), read_signature records it as a problem" % (found[0] if found else "?"))
+
+# ---- the BER reader that CMS needs is NOT changed: it still reads what the strict reader refuses
+ind = bytes([0x30, 0x80, 0x02, 0x01, 0x05, 0x00, 0x00])
+check(I.parse_der(ind).constructed and I.parse_der(ind).children[0].value == b"\x05", "parse_der (the CMS reader) still reads an indefinite length")
+check(I.parse_der(bytes([0x30, 0x81, 0x03, 0x02, 0x01, 0x05])).children[0].value == b"\x05", "parse_der still reads a padded length")
+check(I.parse_der(bytes([0xBF, 0x10, 0x00])).tag == 16, "parse_der still reads a tag in the high form")
+indef_root = bytes([0x70, 0x80]) + VER + dic(entry(b"a", TRUE)) + b"\0\0"
+check(refuses(blob(indef_root), "indefinite") and I.parse_der(indef_root).constructed, "...while the same bytes are refused by parse_der_entitlements")
+PY
+
+# the same, end to end through the verifier: a refusal by the strict reader is a FAILED verification, in ONE respect only, and the other checks run
+derchk() { # NAME MUTATION REASON: a failed, recorded verification; nothing else fails; the independent checks still ran; no abort
+  local name=$1 mut=$2 reason=$3 nfail
+  mk "$name" staging "$mut"
+  run staging "$tmp/$name.ipa" "${common[@]}" --expect-cert-sha256 "$PIN" --evidence "$tmp/$name.ev"
+  nfail="$(grep -c 'FAIL  ' <<<"$out")"
+  if [ "$rc" -eq 1 ] && grep -F "FAIL" <<<"$out" | grep -F "DER entitlements are unreadable" | grep -F "$reason" >/dev/null && [ "$nfail" -eq 1 ] \
+     && ! grep -F "internal error" <<<"$out" >/dev/null && grep -F "PASS  Frameworks/Flut.framework/Flut: signature intact" <<<"$out" >/dev/null && [ -s "$tmp/$name.ev" ]; then
+    ok "an IPA whose DER entitlements are $reason: refused as a recorded problem, the only failure, the other checks ran and the evidence was written"
+  else
+    bad "an IPA whose DER entitlements are $reason is a recorded failure and the other checks ran" "exit $rc, FAIL lines $nfail: $(echo "$out" | grep -E 'FAIL|internal' | head -3 | tr '\n' '|')"
+  fi
+}
+derchk derbool der-bool01 "BOOLEAN is not exactly 00 or ff"
+derchk derindef der-indefinite "indefinite length"
+derchk derextra der-root-extra "exactly 2 are required"
+derchk derdeep der-deep "nested deeper than"
+
 # ---- 10. optional: re-sign a REAL unsigned build (synthetic identity) -----------------------------
 if [ -n "${REAL_UNSIGNED_APP:-}" ]; then
   if [ ! -f "$REAL_UNSIGNED_APP/Info.plist" ]; then

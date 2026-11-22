@@ -647,18 +647,127 @@ def code_slot_problems(cd, slice_data, signature_offset=None):
     return out
 
 
+# ---- the DER entitlements reader (a STRICT DER reader of its own; parse_node above stays the lenient BER reader that CMS needs) ----
+# Phase 6C-B (Issue #71). DER has exactly ONE encoding for every value. Refusing what the DER rules forbid (an indefinite or padded length,
+# a BOOLEAN other than 00/ff, a padded INTEGER, a high-tag form that has a short one) removes those specific encoding ambiguities, and so
+# reduces the risk that this reader and a different reader of the same blob (the kernel's) take it to say different things. It does NOT
+# establish that the two are equivalent: Apple's kernel reader has not been examined, and what it accepts or refuses beyond DER is unknown.
+# Two rules here are NOT ASN.1 DER requirements but limits of THIS application: the root holds exactly two elements (the layout Apple's
+# output shows: version, dictionary) and nesting stops at MAX_DER_ENTITLEMENTS_DEPTH. Every refusal carries the rule and a byte offset.
+# Apple's own blobs (7 distinct ones, Authorization D1) satisfy all of it. NOT part of this reader, and deliberately left for later: key
+# order, empty or NUL keys, non-ASCII keys, Unicode normalisation, and limits on the size of a value or on the number of entries.
+MAX_DER_ENTITLEMENTS_DEPTH = 32
+# What it is: the deepest element's nesting level, the root [APPLICATION 16] being level 0 (a dictionary adds 2 levels per nesting: the
+# dictionary and its entry; an array adds 1). Apple's deepest observed blob has 7 (the `dicts` vector), the real app's has 3. 32 allows
+# about 14 nested dictionaries, far beyond any entitlement, and bounds the reader's recursion: at most about 3 Python frames per level
+# on any CPython (about 100 in all, a tenth of the default limit); measured on 3.14, a blob at the limit needs 34 frames above its
+# caller. The reader therefore cannot exhaust the interpreter's stack on its own, whatever the blob.
+MAX_DER_TAG_BYTES = 4  # bytes of a high-tag-number identifier that are read at all (no tag this reader accepts is anywhere near 31)
+
+
+class _DerNode(object):
+    """One element of the strict reader: `start` and `end` are offsets in the whole blob. Like the BER reader's Node, the children of a
+    constructed element are read (strictly) the first time they are asked for, so an element the layout does not allow is refused for
+    what it is before anything inside it is looked at."""
+    __slots__ = ("data", "cls", "tag", "constructed", "value", "start", "vstart", "end", "depth", "_kids")
+
+    def __init__(self, data, cls, tag, constructed, start, vstart, end, depth):
+        self.data, self.cls, self.tag, self.constructed = data, cls, tag, constructed
+        self.start, self.vstart, self.end, self.depth, self._kids = start, vstart, end, depth, None
+        self.value = data[vstart:end]
+
+    @property
+    def children(self):
+        if self._kids is None:
+            kids, cur = [], self.vstart
+            while self.constructed and cur < self.end:
+                child = _der_strict_node(self.data, cur, self.end, self.depth + 1)
+                kids.append(child)
+                cur = child.end
+            self._kids = kids
+        return self._kids
+
+
+def _der_strict_node(data, off, limit, depth):
+    """Read the header of the DER element at `off` in `data[off:limit]`, with every DER rule that concerns a header. Raises Asn1Error,
+    naming the rule and the offset."""
+    def bad(why, at=off):
+        raise Asn1Error("DER entitlements are not canonical DER at byte %d: %s" % (at, why))
+    if depth > MAX_DER_ENTITLEMENTS_DEPTH:
+        bad("nested deeper than %d levels" % MAX_DER_ENTITLEMENTS_DEPTH)
+    if off + 2 > limit:
+        bad("truncated element")
+    first = data[off]
+    cls, constructed, tag = first >> 6, bool(first & 0x20), first & 0x1F
+    pos = off + 1
+    if tag == 0x1F:  # high-tag-number form: only canonical for a tag number of 31 or more, and then without leading zeros
+        tag, nbytes = 0, 0
+        while True:
+            if pos >= limit or nbytes >= MAX_DER_TAG_BYTES:
+                bad("unreadable or overlong tag number")
+            b = data[pos]
+            if nbytes == 0 and b == 0x80:
+                bad("tag number with a leading zero")
+            pos += 1
+            nbytes += 1
+            tag = (tag << 7) | (b & 0x7F)
+            if not b & 0x80:
+                break
+        if tag < 31:
+            bad("tag number %d in the high-tag-number form (it must use the single-octet form)" % tag)
+    if pos >= limit:
+        bad("truncated length")
+    lb = data[pos]
+    pos += 1
+    if lb == 0x80:
+        bad("indefinite length (DER allows only definite lengths)")
+    if lb & 0x80:
+        n = lb & 0x7F
+        if n > 4 or pos + n > limit:
+            bad("unreadable or oversized length")
+        if data[pos] == 0:
+            bad("length with a leading zero octet")
+        length = int.from_bytes(data[pos:pos + n], "big")
+        pos += n
+        if length < 0x80:
+            bad("length %d in the long form (it must use the short form)" % length)
+    else:
+        length = lb
+    if pos + length > limit:
+        bad("element runs past its container")
+    return _DerNode(data, cls, tag, constructed, off, pos, pos + length, depth)
+
+
 def _der_is(node, cls, tag, constructed):
     """True if the element has exactly this class, tag number and form (constructed or primitive)."""
     return node.cls == cls and node.tag == tag and node.constructed == constructed
+
+
+def _der_boolean(node):
+    # DER: exactly one content octet, 00 for FALSE and ff for TRUE. (BER reads any non-zero octet as TRUE, so one reader taking 01 for
+    # FALSE and another taking it for TRUE would disagree: neither is accepted.)
+    if node.value not in (b"\x00", b"\xff"):
+        raise Asn1Error("DER entitlements are not canonical DER at byte %d: BOOLEAN is not exactly 00 or ff" % node.start)
+    return node.value == b"\xff"
+
+
+def _der_integer(node):
+    # DER: at least one content octet, in the shortest two's-complement form (no 00 before a byte below 80, no ff before a byte of 80 or more).
+    v = node.value
+    if not v:
+        raise Asn1Error("DER entitlements are not canonical DER at byte %d: INTEGER without content" % node.start)
+    if len(v) > 1 and ((v[0] == 0x00 and v[1] < 0x80) or (v[0] == 0xFF and v[1] >= 0x80)):
+        raise Asn1Error("DER entitlements are not canonical DER at byte %d: INTEGER is not in its shortest form" % node.start)
+    return int.from_bytes(v, "big", signed=True)
 
 
 def _der_entitlement_value(node):
     # Class AND form are checked for every kind of value: a BOOLEAN, INTEGER or UTF8String is a primitive element, an array
     # (SEQUENCE) and a dictionary ([CONTEXT 16]) are constructed. A dictionary is NOT a SET and a SET is NOT a value.
     if _der_is(node, 0, 1, False):
-        return node.value == b"\xff"
+        return _der_boolean(node)
     if _der_is(node, 0, 2, False):
-        return int.from_bytes(node.value, "big", signed=True)
+        return _der_integer(node)
     if _der_is(node, 0, 12, False):
         return node.value.decode("utf-8")
     if _der_is(node, 0, 16, True):
@@ -690,22 +799,35 @@ def parse_der_entitlements(blob):
     Xcode 26.3's codesign, 7 distinct blobs; tool/test_verify_ipa.sh decodes all of them):
 
         blob  = magic 0xfade7172 | length (4 bytes, big endian, of the whole blob) | DER
-        DER   = [APPLICATION 16] constructed { INTEGER 1, dictionary }
+        DER   = [APPLICATION 16] constructed { INTEGER 1, dictionary }          (exactly these two elements)
         dict  = [CONTEXT 16] constructed { entry ... }            (NOT a SET; Apple orders the entries by key)
         entry = SEQUENCE { UTF8String key, value }
         value = BOOLEAN | INTEGER | UTF8String | SEQUENCE { value ... } (array) | dict (nested, the same [CONTEXT 16])
 
     The kernel enforces THESE where present, so they must be reconciled with the XML entitlements. The obsolete SET layout
     (the one this parser assumed from public descriptions before genuine evidence existed) is refused, and so is every other
-    class, tag or form. What is deliberately NOT checked here (Phase 6C of Issue #71): key order, BER laxness (indefinite and
-    non-minimal lengths, non-minimal integers, a BOOLEAN other than 00/ff), nesting depth, the number of children of the root."""
+    class, tag or form.
+
+    It is a STRICT DER reader (Phase 6C-B; `_der_strict_node`, which is NOT the lenient BER reader parse_node that CMS needs). It
+    refuses what ASN.1 DER forbids: an indefinite or non-minimal length, a tag number in a non-canonical high-tag form, a BOOLEAN that
+    is not exactly 00 or ff, and an INTEGER that is empty or not in its shortest two's-complement form. That removes those encoding
+    ambiguities and reduces the risk of a parser differential with the kernel's reader; it does not prove the two equivalent. It also
+    applies two limits that are specific to this application and are NOT DER requirements: the root must hold exactly two elements,
+    and nesting deeper than MAX_DER_ENTITLEMENTS_DEPTH is refused. Every failure is an Asn1Error naming the rule and the byte offset.
+    What is deliberately NOT checked here (still deferred): key order, empty or NUL keys, non-ASCII keys, Unicode normalisation,
+    and limits on the size of a value or the number of entries."""
     magic, length = struct.unpack(">II", blob[:8])
     if magic != CSMAGIC_DER_ENTITLEMENTS or length != len(blob):
         raise Asn1Error("DER entitlements blob header is wrong")
-    root = parse_der(blob[8:])
-    if root.end != len(blob) - 8 or not _der_is(root, 1, 16, True):
+    root = _der_strict_node(blob, 8, len(blob), 0)
+    if root.end != len(blob) or not _der_is(root, 1, 16, True):
         raise Asn1Error("DER entitlements are not a single [APPLICATION 16] element")
-    ver, body = root.children[0], root.children[1]
+    if len(root.children) != 2:
+        # an application rule, not a DER one; the offset is where the surplus starts, or where the root's content ends if it is short
+        at = root.children[2].start if len(root.children) > 2 else root.end
+        raise Asn1Error("DER entitlements root holds %d element(s), exactly 2 are required (version, dictionary); %s byte %d"
+                        % (len(root.children), "the first surplus element starts at" if len(root.children) > 2 else "its content ends at", at))
+    ver, body = root.children
     if not _der_is(ver, 0, 2, False) or ver.value != b"\x01" or not _der_is(body, DER_DICT_CLASS, DER_DICT_TAG, True):
         raise Asn1Error("unsupported DER entitlements version or layout")
     return _der_entitlement_dict(body)
@@ -1109,8 +1231,9 @@ def read_signature(path):
         if item["der_entitlements_blob"] is not None:
             try:
                 item["der_entitlements"] = parse_der_entitlements(item["der_entitlements_blob"])
-            except (Asn1Error, IndexError, ValueError, struct.error) as e:
-                item["problems"].append("DER entitlements are unreadable: %s" % e)
+            except (Asn1Error, IndexError, ValueError, struct.error, RecursionError) as e:
+                # RecursionError too: a failure of the reader is a recorded problem, never an abort that skips the other checks
+                item["problems"].append("DER entitlements are unreadable: %s" % (e if not isinstance(e, RecursionError) else "nested too deeply to read"))
                 # The check above still fails. This only keeps what the blob really looks like, so the failure
                 # can be understood from its own report (Phase 2: the layout was never seen on real Apple data).
                 try:
