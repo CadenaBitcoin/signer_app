@@ -18,7 +18,13 @@ tmp="$(mktemp -d)"; trap 'rm -rf "$tmp"' EXIT
 neutral_record() { # IN OUT
   awk '/^G2S-/ { next } /^\| D14 \| / { next } { print }' "$1" | awk '
     BEGIN { n = split("D3 D6 D7 D8 D9 D10 D11 D12", a, " "); for (i = 1; i <= n; i++) want[i] = "| " a[i] " | " }
-    { for (i = 1; i <= n; i++) if (index($0, want[i]) == 1) sub(/\| Decided \| [^|]*\| [0-9-]+ \|[ ]*$/, "| Proposed, not decided | TBD | TBD |"); print }' > "$2"
+    { for (i = 1; i <= n; i++) if (index($0, want[i]) == 1) sub(/\| Decided \| [^|]*\| [0-9-]+ \|[ ]*$/, "| Proposed, not decided | TBD | TBD |"); print }' \
+  | awk '
+    # Authorization E decided D1, D2, D4 and D5 and the risk of X2, and set the status to G2: the neutral record has none of that.
+    index($0, "| D1 | ") == 1 || index($0, "| D2 | ") == 1 || index($0, "| D4 | ") == 1 || index($0, "| D5 | ") == 1 { sub(/\| Decided \| [^|]*\| [0-9-]+ \|[ ]*$/, "| Proposed, not decided | TBD | TBD |") }
+    index($0, "| X2 | ") == 1 { sub(/\| Decided \| [^|]*\| [0-9-]+ \|[ ]*$/, "| Open | TBD | TBD |") }
+    /^\*\*Record Status: `G2 AUTHORIZED`\*\*$/ { print "**Record Status: `G1 AUTHORIZED`**"; next }
+    { print }' > "$2"
 }
 real_record="$tmp/neutral-record.md"; neutral_record "$committed_record" "$real_record"
 pass=0; failed=0
@@ -263,8 +269,8 @@ for bad_op in "sign-verify-and-upload " "SIGN-VERIFY-AND-UPLOAD" "sign-and-verif
 done
 { cat "$up"; echo "G2S-OPERATION: sign-and-verify-only"; } > "$tmp/m.md"; expect_rc "UPLOAD: a second, contradicting operation line is refused" 1 "$tmp/m.md"
 # the upload lines of a record can be given by nobody but the record: the WITHDRAWN lines of an earlier authorization authorize nothing, upload included
-sed -E 's/^G2S-OPERATION: .*/G2S-OPERATION: sign-verify-and-upload/' "$committed_record" > "$tmp/m.md"
-expect_rc "UPLOAD: the committed record (whatever its state) with only the operation line changed to upload is refused" 1 "$tmp/m.md"
+sed -E 's/^G2S-OPERATION: .*/G2S-OPERATION: sign-verify-and-upload/; s/^G2S-STATUS: .*/G2S-STATUS: WITHDRAWN/' "$committed_record" > "$tmp/m.md"
+expect_rc "UPLOAD: the committed record (whatever its state) with the operation line set to upload and the status WITHDRAWN is refused" 1 "$tmp/m.md"
 sed -E 's/^G2S-OPERATION: .*/G2S-OPERATION: sign-verify-and-upload/; s/`G1 AUTHORIZED`/`G2 AUTHORIZED`/; s/^G2S-STATUS: .*/G2S-STATUS: WITHDRAWN/' "$up" > "$tmp/m.md"
 expect_rc "UPLOAD: a withdrawn upload authorization is refused (fails closed)" 1 "$tmp/m.md"
 for f in .github/workflows/ios-hosted-signing.yml tool/check_signing_authorization.sh tool/verify_ipa.py; do
