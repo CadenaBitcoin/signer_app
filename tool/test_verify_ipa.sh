@@ -402,8 +402,8 @@ if [ "$arc" -eq 0 ] && echo "$a" | grep -F "with no signature" >/dev/null && ech
 #             returned (public data; provenance in the file). tool/fixtures/apple_swift_runtime_embedded_info_plist.txt: the
 #             embedded Info.plist section of Apple's Swift runtime library and the hashes its signature seals (public data).
 #   SYNTHETIC the IPAs of tool/ipa_fixture.py (same structures, our own certificates), which cannot prove that Apple agrees.
-# The DER entitlements layout is covered by REAL Apple blobs since Phase 6B (section 14). Not covered, because no genuine evidence
-# exists yet: the V8 Info.plist comparison.
+# The DER entitlements layout is covered by REAL Apple blobs since Phase 6B (section 14), and the V8 Info.plist comparison by the REAL
+# pair of run 45148346007 since Phase 9 (section 17).
 cmsfix="$root/tool/fixtures/apple_cloud_signing_cms_run44834801248.txt"
 swiftfix="$root/tool/fixtures/apple_swift_runtime_embedded_info_plist.txt"
 
@@ -660,8 +660,8 @@ PY
 
 # ---- 12. Phase 2 diagnostics (Issue #71): HOW does the IPA's Info.plist differ, and what does an unreadable DER blob look like --
 # Everything here is SYNTHETIC. These checks pin DIAGNOSTICS only: no acceptance rule was changed in Phase 2. In particular
-# a difference of serialization only is still a FAILED comparison (an exact, type-preserving rule is proposed in
-# docs/IOS_SIGNING.md, not activated), and a DER blob the parser refuses is still a failure. What the real Info.plist
+# a difference of serialization only is still a FAILED comparison in this section (Phase 9, section 17 below, accepts exactly one such
+# difference: the top-level Info.plist, binary -> binary; every case of THIS section stays refused), and a DER blob the parser refuses is still a failure. What the real Info.plist
 # difference is, is NOT known (no genuine evidence kept). The real DER layout was unknown in Phase 2; it is now known (Phase 6B,
 # section 14 below), and the synthetic DER blobs of this section follow it.
 
@@ -2119,6 +2119,567 @@ check(st_of(f)["infoplist_ipa"] == "kept" and "the IPA has no executable named '
 rc, out, f, d = capture(zip_ipa("r2d", b"not a property list " + CONF.encode(), extra={"Payload/Runner.app/Runner": exe_signed}))
 check(st_of(f)["infoplist_ipa"].startswith("withheld: ") and st_of(f)["der"] == "kept" and leaked([CONF], f, out) is None, "an unreadable plist: the DER evidence is still collected and no text of the plist is shown")
 PY
+
+# ---- 17. Phase 9 (Issue #71): V8 accepts ONE re-serialization, the top-level Info.plist, and nothing else -------------------------
+# REAL      tool/fixtures/apple_runner_info_plist_run45148346007.txt: the app's top-level Info.plist BEFORE and AFTER Apple's export, from
+#           the Distribution-signed export of Authorization D (run 45148346007), the first whose Info.plist was kept (Authorization C's export was
+#           signed too, but its IPA was not retained). Hand-written expectations below (the SHA-256 values, the
+#           key counts, the byte lengths) come from the run's report, not from the code under test.
+# SYNTHETIC the negative cases: the real content with ONE change, and small hand-built binary property lists.
+# What this cannot show: that CoreFoundation reads every accepted file as Python does (residual risk, docs/IOS_SIGNING.md section 3.1e), and
+# that Apple's export always writes this layout. `compare` authenticates no signature; `verify` checks the seal (tests at the end).
+plistfix="$root/tool/fixtures/apple_runner_info_plist_run45148346007.txt"
+pyunit "$root" "$plistfix" <<'PY'
+import base64, contextlib, copy, datetime, hashlib, io, os, plistlib, struct, sys, tempfile
+sys.dont_write_bytecode = True
+root, fixture_path = sys.argv[1:3]
+sys.path.insert(0, os.path.join(root, "tool"))
+import ipa_inspect as I
+import verify_ipa as V
+
+
+def ok(m): print("ok   " + m)
+def bad(m, why=""):
+    print("FAIL " + m)
+    if why: print("     " + why)
+def check(c, m, why=""): ok(m) if c else bad(m, why)
+
+
+# ---- the fixture file
+fx, seal = {}, None
+for line in open(fixture_path, encoding="utf-8"):
+    if line.startswith("#") or not line.strip():
+        continue
+    parts = line.split()
+    if parts[0] in ("archive", "exported"):
+        fx[parts[0]] = (parts[1], base64.b64decode(parts[2], validate=True))
+    elif parts[:2] == ["seal", "sha256"]:
+        seal = parts[2]
+ARCH_SHA = "34fd28f02721a5aeb93a1b9db9f25519d0840d8544bda9cc13220de27ddcb319"   # from the run's report
+EXP_SHA = "ce5bf1f3139f8d66deadec0f713cb53588882376bfd91ceb99dffa0a5617538a"
+A, B = fx["archive"][1], fx["exported"][1]
+check(sorted(fx) == ["archive", "exported"] and seal == EXP_SHA, "fixture: the file holds exactly the two plists and the sealed hash of the exported one")
+check(hashlib.sha256(A).hexdigest() == ARCH_SHA == fx["archive"][0] and hashlib.sha256(B).hexdigest() == EXP_SHA == fx["exported"][0],
+      "fixture: each file matches its recorded SHA-256 (the run's report), so the bytes are the captured ones")
+check(len(A) == 2551 and len(B) == 2551 and A.startswith(b"bplist00") and B.startswith(b"bplist00") and A != B,
+      "fixture: both are binary property lists of 2,551 bytes and their bytes differ")
+check(hashlib.sha256(B).hexdigest() == seal and hashlib.sha256(A).hexdigest() != seal,
+      "fixture: the exported file is what the slot-1 seal covers (its SHA-256 equals the sealed hash); the archive's file is not")
+pa, pb = plistlib.loads(A), plistlib.loads(B)
+ka, kb = list(pa), list(pb)
+check(len(ka) == 40 and len(kb) == 40 and set(ka) == set(kb) and ka == sorted(ka) and kb != sorted(kb) and ka != kb and pa == pb,
+      "fixture (facts read with plistlib, not with the check): 40 keys each, the same set; the archive's order is alphabetical, the exported file's is not; the content is equal")
+check(A[-32:] == B[-32:] and struct.unpack(">5xBBBQQQ", A[-32:]) == (0, 2, 1, 96, 0, 2327), "fixture: both carry the same trailer (offset table at 2327, 96 objects)")
+
+acc = I.info_plist_reserialized_only
+def refused(old, new, needle=None, label=""):
+    try:
+        r = acc(old, new)
+    except BaseException as e:   # the check must REFUSE, never raise
+        return False, "RAISED %s" % type(e).__name__
+    good = r[0] is False and (needle is None or needle in r[1])
+    return good, r
+
+# ---- POSITIVE
+check(acc(A, B) == (True, ""), "REAL PAIR: the captured archive file and the captured exported file are accepted (same content and types, other serialization)")
+check(acc(B, A) == (True, "") and acc(A, A) == (True, ""), "REAL PAIR: the reverse direction and identical bytes are accepted too (the rule is about content, not direction)")
+content = pb
+dump = lambda d, sort: plistlib.dumps(d, fmt=plistlib.FMT_BINARY, sort_keys=sort)
+base = dump(content, True)
+rev = lambda d: dict(reversed(list(d.items())))
+check(acc(base, dump(rev(content), False)) == (True, ""), "synthetic: the same content with the top-level keys in the reverse order is accepted")
+n1 = dict(content); n1["ZZNested"] = {"p": 1, "q": [2, 3], "r": {"s": "t"}}
+n2 = dict(content); n2["ZZNested"] = {"r": {"s": "t"}, "q": [2, 3], "p": 1}
+check(acc(dump(n1, False), dump(n2, False)) == (True, ""), "synthetic: the key order of a NESTED dictionary is not content either (a property list dictionary has no order)")
+
+# ---- NEGATIVE: ONE change of content at a time (the second file is written in another key order, so only the content decides)
+def mutated(fn):
+    d = copy.deepcopy(content); fn(d); return dump(rev(d), False)
+def neg(label, fn, needle="content differs"):
+    good, r = refused(base, mutated(fn), needle)
+    check(good, "refused: " + label, str(r))
+neg("an added key", lambda d: d.update({"ZZAddedKey": "x"}))
+neg("a removed key", lambda d: d.pop("CFBundleName"))
+neg("a changed string (the same length)", lambda d: d.update({"CFBundleDisplayName": d["CFBundleDisplayName"][:-1] + "!"}))
+neg("a changed bundle identifier (identity)", lambda d: d.update({"CFBundleIdentifier": "com.example.other.app"[:len(d["CFBundleIdentifier"])].ljust(len(d["CFBundleIdentifier"]), "x")}))
+neg("a boolean flipped", lambda d: d.update({"LSRequiresIPhoneOS": not d["LSRequiresIPhoneOS"]}))
+neg("a boolean that became an integer (True == 1 in Python)", lambda d: d.update({"LSRequiresIPhoneOS": 1}))
+neg("an integer that became a boolean inside an array", lambda d: d.update({"UIDeviceFamily": [True]}))
+neg("an integer that became a real (1 == 1.0 in Python)", lambda d: d.update({"UIDeviceFamily": [1.0]}), "type real")
+neg("a changed integer", lambda d: d.update({"UIDeviceFamily": [2]}))
+neg("an array in another order", lambda d: d.update({"UIBackgroundModes": list(reversed(d["UIBackgroundModes"]))}))
+neg("an array that lost an element", lambda d: d.update({"UIBackgroundModes": d["UIBackgroundModes"][:1]}))
+neg("a changed value deep inside nested dictionaries", lambda d: d["CFBundleIcons"]["CFBundlePrimaryIcon"].update({"CFBundleIconName": "Other00"}))
+neg("a key renamed (the same length)", lambda d: d.update({"ZZ" + k[2:]: d.pop(k) for k in ["CFBundleName"]}))
+neg("a string that became data (not in the accepted language)", lambda d: d.update({"CFBundleName": b"Runner"}), "type data")
+neg("an empty dictionary replaced the content", lambda d: (d.clear()))
+
+# ---- NEGATIVE: real bytes edited
+i = B.index(b"Cadena Bitcoin")
+good, r = refused(A, B[:i] + b"Cadena Bitcoiz" + B[i + 14:], "content differs")
+check(good, "REAL BYTES: one character of a string value of the exported file changed (the same length, the same structure): refused", str(r))
+off = struct.unpack(">5xBBBQQQ", B[-32:])[5]
+bb = bytearray(B); bb[off + 3] ^= 0x01
+good, r = refused(A, bytes(bb))
+check(good, "REAL BYTES: one byte of the offset table changed: refused, no exception", str(r))
+check(refused(A, B[:-10])[0] and refused(A, B + b"\0")[0] and refused(A, b"bplist00" + b"\xff" * 2543)[0] and refused(A, b"")[0],
+      "REAL BYTES: truncated, extended, garbage and empty files are refused without an exception")
+bb = bytearray(B); struct.pack_into(">Q", bb, len(B) - 24, 1 << 40)
+check(refused(A, bytes(bb))[0], "REAL BYTES: an absurd object count in the trailer is refused without an exception")
+# the documented residual: an object that nothing refers to
+check(acc(A, B[:2326] + b"\x08" + B[2327:]) == (True, ""),
+      "RESIDUAL (documented, docs/IOS_SIGNING.md section 3.1e): the one unreferenced `true` object of the exported file turned into `false` (the SAME length) is NOT content: accepted here. Equal length does not exclude it, and semantic equality is not bytewise immutability; after signing only the seal covers it")
+
+# ---- NEGATIVE: format
+xml = plistlib.dumps(content, fmt=plistlib.FMT_XML)
+check(refused(base, xml, "not a binary property list")[0] and refused(xml, base, "not a binary property list")[0] and refused(xml, xml, "not a binary property list")[0],
+      "format: binary -> XML, XML -> binary and XML -> XML are all refused (only binary -> binary is the observed case)")
+check(refused(base, b" \n" + base, "not a binary property list")[0], "format: leading bytes before the magic are refused")
+
+# ---- NEGATIVE: malformed and hostile structures, bounded and fail closed
+def bplist(objs, rsz=1, top=0):
+    osz = 2 if sum(len(o) for o in objs) > 250 else 1
+    body, offs = b"bplist00", []
+    for o in objs:
+        offs.append(len(body)); body += o
+    otab = len(body)
+    body += b"".join(x.to_bytes(osz, "big") for x in offs)
+    return body + b"\0" * 5 + struct.pack(">BBBQQQ", 0, osz, rsz, len(objs), top, otab)
+STR = lambda t: bytes([0x50 | len(t)]) + t.encode()
+sane = bplist([bytes([0xD1, 1, 2]), STR("a"), b"\x10\x01"])
+check(acc(sane, sane) == (True, ""), "hand-built: a minimal dictionary {a: 1} is accepted (the builder is sound)")
+dup = bplist([bytes([0xD2, 1, 1, 2, 3]), STR("a"), b"\x10\x01", b"\x10\x02"])
+check(refused(dup, dup)[0] and refused(sane, dup)[0], "hand-built: a dictionary with a repeated key is refused (never read as 'last one wins')")
+cyc = bplist([bytes([0xD1, 1, 0]), STR("a")])
+check(refused(cyc, cyc)[0], "hand-built: a dictionary that contains itself is refused, no RecursionError", str(refused(cyc, cyc)[1]))
+intkey = bplist([bytes([0xD1, 1, 2]), b"\x10\x05", b"\x10\x06"])
+check(refused(intkey, intkey, "not a string")[0], "hand-built: a dictionary key that is not a string is refused")
+def deep(n):  # root dictionary -> n nested arrays -> false (2-byte references)
+    objs = [bytes([0xD1, 0, 1, 0, 2]), STR("k")] + [bytes([0xA1]) + (i + 3).to_bytes(2, "big") for i in range(n)] + [b"\x08"]
+    return bplist(objs, rsz=2)
+check(acc(deep(13), deep(13)) == (True, ""), "bounds: nesting of 15 levels (the root, 13 arrays and the leaf) is inside the limit of 16 and accepted")
+check(refused(deep(15), deep(15), "deeper than 16")[0], "bounds: nesting of 17 levels is refused, with the reason")
+check(refused(deep(3000), deep(3000))[0] and refused(deep(900), deep(900))[0], "bounds: nesting of 900 and of 3000 levels is refused without a RecursionError")
+share = bplist([bytes([0xD1, 1, 2]), STR("k")] + [bytes([0xAF, 0x10, 100]) + bytes([i + 3] * 100) for i in range(4)] + [b"\x08"] + [], rsz=1)
+check(refused(share, share, "more than 5000 values")[0], "bounds: sub-objects shared 100-fold over 4 levels (a million values when walked) are refused at the node limit, quickly")
+def shared(fan, levels):  # a root dictionary -> `levels` arrays, each holding `fan` references to the next -> false
+    objs = [bytes([0xD1, 1, 2]), STR("k")] + [bytes([0xAF, 0x10, fan]) + bytes([i + 3] * fan) for i in range(levels)] + [b"\x08"]
+    return bplist(objs, rsz=1)
+check(acc(shared(3, 4), shared(3, 4)) == (True, ""), "bounds: sub-objects shared 3-fold over 4 levels (about a hundred values when walked) are accepted: sharing itself is not refused")
+check(refused(shared(10, 4), shared(10, 4), "more than 5000 values")[0], "bounds: the node limit is exact in kind: 10-fold sharing over 4 levels (over ten thousand values) is refused at 5000, not at some larger bound")
+# the length rule: the SAME content, one more (unreferenced) object, so the file is longer
+short_f = bplist([bytes([0xD1, 1, 2]), STR("a"), b"\x10\x01"])
+long_f = bplist([bytes([0xD1, 1, 2]), STR("a"), b"\x10\x01", b"\x09"])
+check(plistlib.loads(short_f) == plistlib.loads(long_f) and len(long_f) > len(short_f) and refused(short_f, long_f, "the content is equal but the length differs")[0] and refused(long_f, short_f, "length differs")[0],
+      "length rule: files with EQUAL content and types but different lengths are refused (padding, or an added or dropped object that changes the length; equal length is only a coarse bound, see the RESIDUAL checks)")
+big = dump({"k": "x" * 70000}, True)
+check(len(big) > 65536 and refused(big, big, "larger than 65536")[0], "bounds: a file larger than 64 KiB is refused")
+check(I.INFO_PLIST_RESERIALIZE_MAX_BYTES == 65536 and I.INFO_PLIST_RESERIALIZE_MAX_DEPTH == 16 and I.INFO_PLIST_RESERIALIZE_MAX_NODES == 5000,
+      "bounds: the documented limits are 64 KiB, 16 levels and 5000 values")
+hugeint = bplist([bytes([0xD1, 1, 2]), STR("k"), b"\x14" + (1 << 70).to_bytes(16, "big")])
+check(refused(hugeint, hugeint)[0], "hand-built: a 16-byte integer is refused")
+for label, value in (("a date", datetime.datetime(2026, 1, 1)), ("a UID", plistlib.UID(1)), ("data", b"abc"), ("a real", 1.5)):
+    d = copy.deepcopy(content); d["ZZ"] = value
+    check(refused(dump(d, True), dump(rev(d), False), "only bool, integer, string, array and dict")[0], "type policy: %s anywhere in the content is refused (the real file has none)" % label)
+check(refused(sane, bplist([bytes([0xA0])]))[0] and refused(bplist([bytes([0xA0])]), bplist([bytes([0xA0])]))[0], "hand-built: an array as the root is refused")
+
+# ---- diagnostic confidentiality: the reason for a refusal is a FIXED text and never quotes the files or an exception
+SECRET, KEYSECRET = "SECRET-VALUE-do-not-print-0123456789", "SECRETKEY-do-not-print-9876543210"
+STRL = lambda t: b"\x5f\x10" + bytes([len(t)]) + t.encode()
+leaky = copy.deepcopy(content); leaky[KEYSECRET] = SECRET; leaky["ZZNested"] = {KEYSECRET + "2": [SECRET + "2"]}
+cases = {
+    "a changed value": (dump(leaky, True), dump(rev({**leaky, KEYSECRET: "other"}), False)),
+    "a removed key": (dump(leaky, True), dump({k: v for k, v in rev(leaky).items() if k != KEYSECRET}, False)),
+    "an XML file": (dump(leaky, True), plistlib.dumps(leaky, fmt=plistlib.FMT_XML)),
+    "data": (dump(leaky, True), dump(rev({**leaky, "ZZdata": SECRET.encode()}), False)),
+    "a date": (dump(leaky, True), dump(rev({**leaky, KEYSECRET + "d": datetime.datetime(2026, 1, 1)}), False)),
+    "a repeated key whose name is the secret": (bplist([bytes([0xD2, 1, 1, 2, 3]), STRL(KEYSECRET), b"\x10\x01", b"\x10\x02"]),) * 2,
+    "a non-string key": (bplist([bytes([0xD1, 1, 2]), b"\x10\x05", STRL(SECRET)]),) * 2,
+}
+deepsecret = {}
+node = deepsecret
+for i in range(20):
+    node[KEYSECRET] = {}; node = node[KEYSECRET]
+cases["nesting too deep, with secret keys"] = (dump(deepsecret, True),) * 2
+cases["a file over the size limit"] = (dump({KEYSECRET: SECRET * 3000}, True),) * 2
+allreasons = []
+for label, (o, n) in cases.items():
+    r = acc(o, n)
+    allreasons.append(r[1])
+    check(r[0] is False and "SECRET" not in r[1].upper().replace("SECRETLY", "") and r[1] != "" and KEYSECRET not in r[1] and SECRET not in r[1],
+          "confidentiality: the refusal reason for %s quotes none of the file's text" % label, r[1])
+orig_read = I.read_plist_exact
+try:
+    I.read_plist_exact = lambda data: (_ for _ in ()).throw(ValueError("unreadable: duplicate key '%s' and %s" % (KEYSECRET, SECRET)))
+    r = acc(A, B)
+    check(r == (False, "a file is not readable as a property list"), "confidentiality: the text of an exception raised by the reader is NEVER used (the reason is the fixed sentence)", str(r))
+finally:
+    I.read_plist_exact = orig_read
+# the same through the report: the line `same_code_check` prints for a refusal
+td2 = tempfile.mkdtemp()
+for side, content_bytes in (("u", dump(leaky, True)), ("s", dump(rev({**leaky, KEYSECRET: "other"}), False))):
+    os.makedirs(os.path.join(td2, side)); open(os.path.join(td2, side, "Info.plist"), "wb").write(content_bytes)
+buf = io.StringIO()
+rep2 = V.Report()
+with contextlib.redirect_stdout(buf):
+    V.same_code_check(rep2, os.path.join(td2, "u"), os.path.join(td2, "s"))
+lines = [l for l in buf.getvalue().splitlines() if "not accepted as a re-serialization" in l]
+check(len(lines) == 1 and "the content differs" in lines[0] and "SECRET" not in lines[0], "confidentiality: the report line for a refusal names the rule and nothing of the file", repr(lines))
+orig_read = I.read_plist_exact
+try:
+    I.read_plist_exact = lambda data: (_ for _ in ()).throw(ValueError("unreadable: duplicate key '%s'" % KEYSECRET))
+    buf = io.StringIO()
+    with contextlib.redirect_stdout(buf):
+        V.same_code_check(V.Report(), os.path.join(td2, "u"), os.path.join(td2, "s"))
+    lines = [l for l in buf.getvalue().splitlines() if "not accepted as a re-serialization" in l]
+    check(len(lines) == 1 and "SECRET" not in lines[0] and "not readable as a property list" in lines[0], "confidentiality: a reader failure that quotes the file leaves no trace in the report line for a refusal", repr(lines))
+finally:
+    I.read_plist_exact = orig_read
+
+# ---- the check FAILS CLOSED when its own machinery fails
+orig = I.plist_equal_strict
+try:
+    for exc in (RecursionError(), MemoryError(), OverflowError(), ValueError("v")):
+        def boom(*a, _e=exc, **k):
+            raise _e
+        I.plist_equal_strict = boom
+        good, r = refused(A, B)
+        check(good, "fail closed: %s raised inside the comparison is a refusal, not a crash" % type(exc).__name__, str(r))
+finally:
+    I.plist_equal_strict = orig
+orig_read = I.read_plist_exact
+try:
+    I.read_plist_exact = lambda data: (_ for _ in ()).throw(ValueError("unreadable: x"))
+    check(refused(A, B, "not readable")[0], "fail closed: a reader that cannot read the files is a refusal")
+    I.read_plist_exact = lambda data: ({"k": 1}, "xml")
+    check(refused(A, B)[0], "fail closed: a reader that says 'XML' for a binary file is a refusal")
+finally:
+    I.read_plist_exact = orig_read
+
+# ---- the file-level helper of verify_ipa (what same_code_check calls)
+td = tempfile.mkdtemp()
+pa_, pb_ = os.path.join(td, "a"), os.path.join(td, "b")
+open(pa_, "wb").write(A); open(pb_, "wb").write(B)
+r = V.info_plist_reserialization(pa_, pb_)
+check(r[0] == (ARCH_SHA, EXP_SHA, 2551, 2551) and r[1] == "", "verify_ipa: the file helper accepts the real pair and reports both digests and lengths")
+check(V.info_plist_reserialization(pa_, os.path.join(td, "missing"))[0] is None, "verify_ipa: a missing file is a refusal, not an exception")
+open(os.path.join(td, "huge"), "wb").write(b"bplist00" + b"\0" * 70000)
+check(V.info_plist_reserialization(pa_, os.path.join(td, "huge"))[0] is None and "larger than" in V.info_plist_reserialization(pa_, os.path.join(td, "huge"))[1],
+      "verify_ipa: a file over the cap is refused without being read past the cap")
+orig_cap = I.read_capped
+try:
+    I.read_capped = lambda *a: (_ for _ in ()).throw(RuntimeError("x"))
+    r = V.info_plist_reserialization(pa_, pb_)
+    check(r[0] is None and "RuntimeError" in r[1], "verify_ipa: any exception inside the acceptance path is a refusal (it is a verdict path, not a diagnostic)")
+finally:
+    I.read_capped = orig_cap
+PY
+
+# ---- through the command line: compare on directories (no signature exists here, and none is read)
+python3 -I - "$plistfix" "$tmp/rs" <<'PY'
+import base64, os, sys
+fx = {}
+for line in open(sys.argv[1]):
+    if line.split()[:1] in (["archive"], ["exported"]):
+        fx[line.split()[0]] = base64.b64decode(line.split()[2])
+for side, name in (("u", "archive"), ("s", "exported")):
+    os.makedirs(os.path.join(sys.argv[2], side), exist_ok=True)
+    open(os.path.join(sys.argv[2], side, "Info.plist"), "wb").write(fx[name])
+PY
+out="$(python3 -I "$verify" compare "$tmp/rs/u" "$tmp/rs/s" 2>&1)"; rc=$?
+if [ "$rc" -eq 0 ] && grep -F "unsigned build plus signatures only" <<<"$out" >/dev/null && grep -F "and the top-level Info.plist re-serialized with identical content and types" <<<"$out" >/dev/null \
+   && grep -F "SHA-256 34fd28f02721a5aeb93a1b9db9f25519d0840d8544bda9cc13220de27ddcb319 -> ce5bf1f3139f8d66deadec0f713cb53588882376bfd91ceb99dffa0a5617538a" <<<"$out" >/dev/null \
+   && ! grep -E "FAIL" <<<"$out" >/dev/null; then ok "compare accepts the REAL pair (archive file as the unsigned build, exported file as the signed one) and says it is a difference of serialization only, with both digests"
+else bad "compare accepts the real pair" "rc=$rc $(grep -E 'FAIL|Info.plist' <<<"$out" | head -3 | tr '\n' '|')"; fi
+NOTICE="compare authenticates NO signature"
+if grep -F "$NOTICE" <<<"$out" >/dev/null && grep -F "Never accept an IPA on \`compare\` alone" <<<"$out" >/dev/null; then ok "compare states that it authenticates no signature (here, when it accepts a re-serialization)"; else bad "compare states that it authenticates no signature"; fi
+# ...and on EVERY invocation, whatever the outcome
+nn=0; nbad=""
+chk_notice() { # NAME EXPECTED_RC (a compare command follows in "$@")
+  local name=$1 want=$2; shift 2
+  local o; o="$(python3 -I "$verify" compare "$@" 2>&1)"; local r=$?
+  nn=$((nn + 1))
+  if [ "$r" -eq "$want" ] && grep -F "$NOTICE" <<<"$o" >/dev/null; then :; else nbad="$nbad $name(rc=$r)"; fi
+}
+chk_notice "identical-bundles" 0 "$tmp/staging/Runner.app" "$tmp/staging/Runner.app"
+chk_notice "accepted-reserialization" 0 "$tmp/rs/u" "$tmp/rs/s"
+chk_notice "good-ipa" 0 "$tmp/staging/Runner.app" "$tmp/good.ipa"
+chk_notice "different-code" 1 "$tmp/staging2/Runner.app" "$tmp/good.ipa"
+chk_notice "injected-file" 1 "$tmp/staging/Runner.app" "$tmp/cmpextra.ipa"
+chk_notice "unsigned-not-a-directory" 2 "$tmp/does-not-exist" "$tmp/good.ipa"
+chk_notice "signed-neither-ipa-nor-directory" 2 "$tmp/staging/Runner.app" "$tmp/does-not-exist"
+printf 'not a zip' > "$tmp/bad.ipa"
+chk_notice "container-error" 1 "$tmp/staging/Runner.app" "$tmp/bad.ipa"
+rm -rf "$tmp/cn_changed"; mkdir -p "$tmp/cn_changed"; cp -R "$tmp/staging/Runner.app" "$tmp/cn_changed/Runner.app"; printf 'x' >> "$tmp/cn_changed/Runner.app/Runner"
+chk_notice "changed-executable" 1 "$tmp/staging/Runner.app" "$tmp/cn_changed/Runner.app"
+if [ -z "$nbad" ]; then ok "compare prints that it authenticates no signature on EVERY invocation ($nn: identical, accepted, an IPA, refused for code, injection, a bad container, a changed executable, and both usage errors)"; else bad "compare prints its notice on every invocation" "missing or wrong exit:$nbad"; fi
+python3 -I "$verify" verify staging "$tmp/good.ipa" "${common[@]}" --expect-cert-sha256 "$PIN" > "$tmp/v_notice1.txt" 2>&1
+python3 -I "$verify" verify staging "$tmp/tampercms.ipa" "${common[@]}" --expect-cert-sha256 "$PIN" > "$tmp/v_notice2.txt" 2>&1
+if ! grep -F "$NOTICE" "$tmp/v_notice1.txt" "$tmp/v_notice2.txt" >/dev/null && ! grep -F "authenticates NO signature" "$tmp/v_notice1.txt" "$tmp/v_notice2.txt" >/dev/null; then ok "verify does NOT carry the compare notice (it does authenticate signatures), for a passing and a failing IPA"; else bad "verify has no compare notice"; fi
+if python3 -I "$verify" compare --help 2>&1 | tr -s ' \n' '  ' | grep -F "authenticates NO signature" >/dev/null; then ok "the compare help text says it authenticates no signature"; else bad "the compare help text says it authenticates no signature"; fi
+
+# the evidence a run records (digests only), and the verdict of V8 as a library call
+python3 - "$verify" "$tmp/rs/u" "$tmp/rs/s" "$tmp/rs_evidence.txt" >/dev/null 2>&1 <<'PY'
+import sys
+sys.dont_write_bytecode = True
+import importlib.util
+spec = importlib.util.spec_from_file_location("v", sys.argv[1]); V = importlib.util.module_from_spec(spec); spec.loader.exec_module(V)
+rep = V.Report()
+V.same_code_check(rep, sys.argv[2], sys.argv[3])
+open(sys.argv[4], "w").write("".join("%s=%s\n" % kv for kv in rep.evidence) + "failed=%d\n" % rep.failed)
+PY
+if grep -Fx "same_code_info_plist=reserialized_identical_content_and_types" "$tmp/rs_evidence.txt" >/dev/null \
+   && grep -Fx "same_code_info_plist_sha256=unsigned 34fd28f02721a5aeb93a1b9db9f25519d0840d8544bda9cc13220de27ddcb319 signed ce5bf1f3139f8d66deadec0f713cb53588882376bfd91ceb99dffa0a5617538a" "$tmp/rs_evidence.txt" >/dev/null \
+   && grep -Fx "failed=0" "$tmp/rs_evidence.txt" >/dev/null && ! grep -F "plist_difference_" "$tmp/rs_evidence.txt" >/dev/null; then ok "the evidence file records the accepted re-serialization (digests only) and no plist_difference record"
+else bad "the evidence file records the accepted re-serialization" "$(cat "$tmp/rs_evidence.txt" 2>/dev/null | tr '\n' '|')"; fi
+if ! grep -E "Cadena|Bitcoin|cadenabitcoin" "$tmp/rs_evidence.txt" >/dev/null; then ok "neither the report nor the evidence file prints any value of the accepted plist"; else bad "no value of the accepted plist reaches the evidence file"; fi
+if ! grep -E "Cadena|Bitcoin|com\.app\.cadenabitcoin" <<<"$out" >/dev/null; then ok "the compare report prints no value of the accepted plist (digests and lengths only)"; else bad "the compare report prints no value of the accepted plist"; fi
+
+# scope isolation: ONLY the top-level Info.plist. Every other file stays byte-strict, even when it is "the same content".
+rsbundle() { # NAME -> $tmp/rsb_NAME/{u,s}: two copies of the staging app whose top-level Info.plist is a re-serialization
+  rm -rf "$tmp/rsb_$1"; mkdir -p "$tmp/rsb_$1"
+  cp -R "$tmp/staging/Runner.app" "$tmp/rsb_$1/u"; cp -R "$tmp/staging/Runner.app" "$tmp/rsb_$1/s"
+}
+reser() { # FILE-IN-s [sorted-in-u first]: write the same content sorted into u and reversed into s, for a relative path
+  python3 -I - "$tmp/rsb_$1" "$2" <<'PY'
+import os, plistlib, sys
+base, rel = sys.argv[1:3]
+pu, ps = os.path.join(base, "u", rel), os.path.join(base, "s", rel)
+if os.path.exists(pu):
+    with open(pu, "rb") as f: d = plistlib.load(f)
+else:
+    d = {"CFBundleName": "x", "A": 1, "B": [1, 2], "C": {"p": True}}
+os.makedirs(os.path.dirname(pu), exist_ok=True); os.makedirs(os.path.dirname(ps), exist_ok=True)
+if os.path.islink(ps): os.unlink(ps)
+open(pu, "wb").write(plistlib.dumps(d, fmt=plistlib.FMT_BINARY, sort_keys=True))
+open(ps, "wb").write(plistlib.dumps(dict(reversed(list(d.items()))), fmt=plistlib.FMT_BINARY, sort_keys=False))
+PY
+}
+cmpb() { out="$(python3 -I "$verify" compare "$tmp/rsb_$1/u" "$tmp/rsb_$1/s" 2>&1)"; rc=$?; }
+
+rsbundle top; reser top Info.plist; cmpb top
+if [ "$rc" -eq 0 ] && grep -F "re-serialized with identical content and types" <<<"$out" >/dev/null; then ok "scope: the top-level Info.plist of a whole bundle, re-serialized, is accepted (the rest of the bundle is byte-identical)"; else bad "scope: the top-level Info.plist of a whole bundle, re-serialized, is accepted" "rc=$rc $(grep -E 'FAIL' <<<"$out" | head -2 | tr '\n' '|')"; fi
+fw="$(cd "$tmp/staging/Runner.app" && find Frameworks -name Info.plist | head -1)"
+rsbundle fw; reser fw "$fw"; cmpb fw
+if [ "$rc" -eq 1 ] && grep -F "FAIL  files that differ from the unsigned build: $fw" <<<"$out" >/dev/null && ! grep -F "re-serialized with identical content" <<<"$out" >/dev/null; then ok "scope: the SAME re-serialization of a framework's Info.plist ($fw) is still refused"; else bad "scope: a framework Info.plist stays byte-strict" "rc=$rc $(grep -E 'FAIL|Info.plist' <<<"$out" | head -3 | tr '\n' '|')"; fi
+rsbundle appex; reser appex PlugIns/Share.appex/Info.plist; cmpb appex
+if [ "$rc" -eq 1 ] && grep -F "FAIL  files that differ from the unsigned build: PlugIns/Share.appex/Info.plist" <<<"$out" >/dev/null; then ok "scope: the same re-serialization of an app extension's Info.plist (PlugIns/Share.appex/Info.plist) is still refused"; else bad "scope: a nested app's Info.plist stays byte-strict" "rc=$rc $(grep -E 'FAIL' <<<"$out" | head -3 | tr '\n' '|')"; fi
+rsbundle other; reser other Config.plist; cmpb other
+if [ "$rc" -eq 1 ] && grep -F "FAIL  files that differ from the unsigned build: Config.plist" <<<"$out" >/dev/null; then ok "scope: another top-level property list (Config.plist) is still refused"; else bad "scope: another top-level plist stays byte-strict" "rc=$rc $(grep -E 'FAIL' <<<"$out" | head -3 | tr '\n' '|')"; fi
+rsbundle upper; reser upper info.plist; cmpb upper
+if [ -e "$tmp/staging/Runner.app/INFO.PLIST" ]; then ok "scope: (skipped: this file system ignores case, so a lower-case info.plist cannot be a different file)"
+elif [ "$rc" -eq 1 ] && grep -F "FAIL  files that differ from the unsigned build: info.plist" <<<"$out" >/dev/null; then ok "scope: a file merely NAMED like it (info.plist, lower case) is still refused"; else bad "scope: the rule is for the exact name Info.plist" "rc=$rc $(grep -E 'FAIL' <<<"$out" | head -3 | tr '\n' '|')"; fi
+rsbundle mixed; reser mixed Info.plist
+printf 'x' >> "$tmp/rsb_mixed/s/$(cd "$tmp/staging/Runner.app" && find Frameworks -name '*.json' | head -1)"; cmpb mixed
+if [ "$rc" -eq 1 ] && grep -F "FAIL  files that differ from the unsigned build: Frameworks/" <<<"$out" >/dev/null && ! grep -F "FAIL  files that differ from the unsigned build: Info.plist" <<<"$out" >/dev/null; then ok "scope: an accepted Info.plist excuses nothing else: one changed byte in another file still fails the bundle (and only that file is named)"; else bad "scope: an accepted Info.plist excuses nothing else" "rc=$rc $(grep -E 'FAIL' <<<"$out" | head -3 | tr '\n' '|')"; fi
+rsbundle exe; reser exe Info.plist; printf 'x' >> "$tmp/rsb_exe/s/Runner"; cmpb exe
+if [ "$rc" -eq 1 ] && grep -F "FAIL  files that differ from the unsigned build: Runner" <<<"$out" >/dev/null; then ok "scope: a modified executable is still refused next to an accepted Info.plist"; else bad "scope: the executable comparison is unchanged" "rc=$rc $(grep -E 'FAIL' <<<"$out" | head -3 | tr '\n' '|')"; fi
+rsbundle link; reser link Info.plist; mv "$tmp/rsb_link/s/Info.plist" "$tmp/rsb_link/s/Info.real" && ln -s Info.real "$tmp/rsb_link/s/Info.plist"; cmpb link
+if [ "$rc" -eq 1 ] && grep -F "FAIL  files that differ from the unsigned build: Info.plist" <<<"$out" >/dev/null; then ok "scope: an Info.plist that is a symbolic link is refused (a link is never compared by content)"; else bad "scope: a symlinked Info.plist is refused" "rc=$rc $(grep -E 'FAIL' <<<"$out" | head -3 | tr '\n' '|')"; fi
+rsbundle added; python3 -I - "$tmp/rsb_added" <<'PY'
+import os, plistlib, sys
+b = sys.argv[1]
+with open(os.path.join(b, "u", "Info.plist"), "rb") as f: d = plistlib.load(f)
+open(os.path.join(b, "u", "Info.plist"), "wb").write(plistlib.dumps(d, fmt=plistlib.FMT_BINARY, sort_keys=True))
+d["ZZAddedByExport"] = "x"
+open(os.path.join(b, "s", "Info.plist"), "wb").write(plistlib.dumps(dict(reversed(list(d.items()))), fmt=plistlib.FMT_BINARY, sort_keys=False))
+PY
+cmpb added
+if [ "$rc" -eq 1 ] && grep -F "FAIL  files that differ from the unsigned build: Info.plist" <<<"$out" >/dev/null && grep -F "+ ZZAddedByExport (string)" <<<"$out" >/dev/null && grep -F "not accepted as a re-serialization (the content differs" <<<"$out" >/dev/null; then ok "a re-serialization that also ADDS a key is refused, listed, and the reason says why it was not accepted"; else bad "a re-serialization that adds a key is refused" "rc=$rc $(grep -E 'FAIL|Info.plist' <<<"$out" | head -4 | tr '\n' '|')"; fi
+rsbundle xmlfmt; python3 -I - "$tmp/rsb_xmlfmt" <<'PY'
+import os, plistlib, sys
+b = sys.argv[1]
+with open(os.path.join(b, "u", "Info.plist"), "rb") as f: d = plistlib.load(f)
+open(os.path.join(b, "u", "Info.plist"), "wb").write(plistlib.dumps(d, fmt=plistlib.FMT_BINARY, sort_keys=True))
+open(os.path.join(b, "s", "Info.plist"), "wb").write(plistlib.dumps(d, fmt=plistlib.FMT_XML))
+PY
+cmpb xmlfmt
+if [ "$rc" -eq 1 ] && grep -F "not accepted as a re-serialization (the signed file is not a binary property list)" <<<"$out" >/dev/null; then ok "a binary -> XML re-serialization of the same content stays refused, with the reason"; else bad "binary -> XML stays refused" "rc=$rc $(grep -E 'FAIL|Info.plist' <<<"$out" | head -3 | tr '\n' '|')"; fi
+
+# the signature side: `verify` accepts what Apple's export does, and refuses what the SEAL does not cover
+mk resig staging info-reorder
+expect_ok "verify: an IPA signed AFTER the export re-serialized its Info.plist (sealed bytes = signed bytes) passes V7 and V8 together" staging "$tmp/resig.ipa" \
+  --expect-cert-sha256 "$PIN" --manifest "$tmp/staging.json" --unsigned-app "$tmp/staging/Runner.app"
+if grep -F "re-serialized with identical content and types" <<<"$out" >/dev/null && grep -F "Info.plist: the top-level file differs from the unsigned build in SERIALIZATION ONLY and is accepted" <<<"$out" >/dev/null && ! grep -F "authenticates NO signature" <<<"$out" >/dev/null; then ok "verify reports the accepted re-serialization (and, unlike compare, does not need the 'authenticates no signature' warning)"; else bad "verify reports the accepted re-serialization"; fi
+mk tamperreser staging tamper-info-reserialize
+expect_fail "verify: an Info.plist re-serialized AFTER signing (same content, other bytes) is refused by the slot-1 seal, independently of V8" "Info.plist was changed after signing" staging "$tmp/tamperreser.ipa" \
+  --expect-cert-sha256 "$PIN" --manifest "$tmp/staging.json" --unsigned-app "$tmp/staging/Runner.app"
+if ! grep -F "files that differ from the unsigned build" <<<"$out" >/dev/null && grep -F "differs from the unsigned build in SERIALIZATION ONLY and is accepted" <<<"$out" >/dev/null; then ok "...and V8 itself accepted that file: the refusal comes from the seal alone, which V8's relaxation does not touch"; else bad "the seal refuses it while V8 accepts it" "$(grep -E 'FAIL|Info.plist' <<<"$out" | head -3 | tr '\n' '|')"; fi
+python3 -I "$verify" compare "$tmp/staging/Runner.app" "$tmp/tamperreser.ipa" >"$tmp/cmp_tr.txt" 2>&1; crc=$?
+if [ "$crc" -eq 0 ] && grep -F "authenticates NO signature" "$tmp/cmp_tr.txt" >/dev/null; then ok "compare ALONE accepts that tampered IPA, and says, as on every invocation, that it authenticates no signature: this is why the workflow runs verify, and why compare must never be the acceptance"; else bad "compare alone authenticates nothing (documented limit)" "rc=$crc"; fi
+mk tamperinfo2 staging tamper-info
+expect_fail "verify: an Info.plist whose CONTENT changed after signing is refused by both V8 and the seal" "files that differ from the unsigned build: Info.plist" staging "$tmp/tamperinfo2.ipa" \
+  --expect-cert-sha256 "$PIN" --manifest "$tmp/staging.json" --unsigned-app "$tmp/staging/Runner.app"
+if grep -F "Info.plist was changed after signing" <<<"$out" >/dev/null; then ok "...and by the seal"; else bad "a content change after signing is also refused by the seal"; fi
+
+# ---- 17b. Phase 9 (Issue #71): a property list's PARSER MESSAGE never reaches a diagnostic ------------------------------------------
+# A parser's exception text can quote the file it read (the name of a repeated key, an unexpected element, a value that is not a number). The V8
+# difference description (describe_one_plist, from plist_difference and read_plist_exact), the Info.plist, cdhashes, entitlements and profile
+# readers now say what KIND of failure it was (the exception's class) and nothing else. Every file below carries DISTINCTIVE strings; none may
+# appear in any affected output. (Not covered, by decision: the DER entitlements parser's own messages, and messages that quote a CodeResources path.)
+pyunit "$root" <<'PY'
+import contextlib, io, os, struct, sys, tempfile
+sys.dont_write_bytecode = True
+root = sys.argv[1]
+sys.path.insert(0, os.path.join(root, "tool"))
+import ipa_inspect as I
+import verify_ipa as V
+import xml.parsers.expat
+
+
+def ok(m): print("ok   " + m)
+def bad(m, why=""):
+    print("FAIL " + m)
+    if why: print("     " + why)
+def check(c, m, why=""): ok(m) if c else bad(m, why)
+
+
+S = "SECRETNAME0123456789"
+PRE = '<?xml version="1.0" encoding="UTF-8"?><plist version="1.0">'
+GOOD = (PRE + "<dict><key>a</key><string>1</string></dict></plist>").encode()
+XML = {
+    "a repeated key": PRE + "<dict><key>%s</key><string>1</string><key>%s</key><string>2</string></dict></plist>" % (S, S),
+    "an unexpected element": PRE + "<dict><key>k</key><%s>v</%s></dict></plist>" % (S, S),
+    "an unexpected empty element": PRE + "<dict><key>k</key><%s/></dict></plist>" % S,
+    "an integer that is not a number": PRE + "<dict><key>k</key><integer>%s</integer></dict></plist>" % S,
+    "a real that is not a number": PRE + "<dict><key>k</key><real>%s</real></dict></plist>" % S,
+    "a date that is not a date": PRE + "<dict><key>k</key><date>%s</date></dict></plist>" % S,
+    "data that is not base64": PRE + "<dict><key>k</key><data>%s!!!</data></dict></plist>" % S,
+    "a mismatched closing tag": PRE + "<dict><key>k</key><string>v</%s></dict></plist>" % S,
+    "an unclosed document": PRE + "<dict><key>%s</key><string>" % S,
+    "a key outside a dictionary": PRE + "<array><key>%s</key></array></plist>" % S,
+    "a key without a value": PRE + "<dict><key>%s</key></dict></plist>" % S,
+    "an entity declaration": '<?xml version="1.0"?><!DOCTYPE plist [<!ENTITY %s "x">]><plist version="1.0"><dict/></plist>' % S,
+}
+XML = {k: v.encode() for k, v in XML.items()}
+
+
+def bplist(objs, rsz=1):
+    osz = 2 if sum(len(o) for o in objs) > 250 else 1
+    body, offs = b"bplist00", []
+    for o in objs:
+        offs.append(len(body)); body += o
+    otab = len(body)
+    body += b"".join(x.to_bytes(osz, "big") for x in offs)
+    return body + b"\0" * 5 + struct.pack(">BBBQQQ", 0, osz, rsz, len(objs), 0, otab)
+STRL = lambda t: b"\x5f\x10" + bytes([len(t)]) + t.encode()
+BIN = {
+    "a binary repeated key": bplist([bytes([0xD2, 1, 1, 2, 3]), STRL(S), b"\x10\x01", b"\x10\x02"]),
+    "a binary file with a secret string and a damaged trailer": bplist([bytes([0xD1, 1, 2]), STRL(S), b"\x10\x01"])[:-9] + b"\xff" * 9,
+    "a binary file truncated after a secret string": bplist([bytes([0xD1, 1, 2]), STRL(S), b"\x10\x01"])[:60],
+    "a binary self-referencing dictionary": bplist([bytes([0xD1, 1, 0]), STRL(S)]),
+}
+ALL = dict(XML); ALL.update(BIN)
+
+# ---- the source: read_plist_exact
+raised = 0
+for name, data in ALL.items():
+    try:
+        I.read_plist_exact(data)
+    except ValueError as e:
+        raised += 1
+        check(S not in str(e) and "SECRET" not in str(e).upper(), "read_plist_exact: %s raises a message that quotes nothing of the file" % name, str(e))
+    except BaseException as e:
+        bad("read_plist_exact: %s raised something else" % name, type(e).__name__)
+check(raised >= 10, "read_plist_exact: the distinctive files really are refused (%d of %d raised; the rest parse)" % (raised, len(ALL)))
+try:
+    I.read_plist_exact(XML["a repeated key"])
+except ValueError as e:
+    check(str(e).startswith("the parser refused it (") and str(e).endswith(")") and S not in str(e), "read_plist_exact: a repeated key's name, which a parser quotes, is replaced by the failure's CLASS ('%s')" % str(e))
+
+# ---- plist_difference, and the description that prints it
+for name, data in ALL.items():
+    for label, pair in (("signed", (GOOD, data)), ("unsigned", (data, GOOD))):
+        d = I.plist_difference(*pair)
+        check(S not in (d["error"] or "") and "SECRET" not in (d["error"] or "").upper(), "plist_difference: %s as the %s file gives an error (if any) that quotes nothing of it" % (name, label), str(d["error"]))
+td = tempfile.mkdtemp()
+leaks, described = [], 0
+for name, data in ALL.items():
+    for side_a, side_b in ((GOOD, data), (data, GOOD)):
+        for d_ in ("u", "s"):
+            os.makedirs(os.path.join(td, d_), exist_ok=True)
+        open(os.path.join(td, "u", "Info.plist"), "wb").write(side_a); open(os.path.join(td, "s", "Info.plist"), "wb").write(side_b)
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            V.same_code_check(V.Report(), os.path.join(td, "u"), os.path.join(td, "s"))
+        text = buf.getvalue()
+        if not I.plist_difference(side_a, side_b)["readable"]:  # a file that PARSES is described by its key paths, by design (never by values); only unreadable ones are judged here
+            if "SECRET" in text.upper():
+                leaks.append(name)
+            if "not readable as a property list" in text:
+                described += 1
+check(not leaks and described >= 16, "describe_one_plist: for every malformed file, as the unsigned or the signed one, the WHOLE report holds no part of the file and says it is not readable (%d described)" % described, "leaks: %s" % sorted(set(leaks)))
+buf = io.StringIO()
+open(os.path.join(td, "u", "Info.plist"), "wb").write(GOOD); open(os.path.join(td, "s", "Info.plist"), "wb").write(XML["a repeated key"])
+with contextlib.redirect_stdout(buf):
+    V.same_code_check(V.Report(), os.path.join(td, "u"), os.path.join(td, "s"))
+line = [l for l in buf.getvalue().splitlines() if "not readable as a property list" in l]
+check(len(line) == 1 and "the parser refused it (" in line[0] and "FAIL" not in line[0], "describe_one_plist: the line keeps the useful part (that it is unreadable, and the failure's class)", repr(line))
+check("FAIL  files that differ from the unsigned build: Info.plist" in [l.strip() for l in buf.getvalue().splitlines()][0:] or any("files that differ from the unsigned build: Info.plist" in l for l in buf.getvalue().splitlines()),
+      "describe_one_plist: the VERDICT is unchanged (the unreadable file is still a failed comparison)")
+
+# ---- the cdhashes attribute
+for name in ("a repeated key", "an unexpected element", "an integer that is not a number", "a mismatched closing tag"):
+    try:
+        I.parse_cdhashes_plist(XML[name])
+        bad("cdhashes: %s is refused" % name)
+    except I.Asn1Error as e:
+        check(S not in str(e) and "SECRET" not in str(e).upper(), "cdhashes: %s is refused with a message that quotes nothing of the file" % name, str(e))
+for name, data in BIN.items():
+    try:
+        I.parse_cdhashes_plist(data)
+        bad("cdhashes: %s is refused" % name)
+    except I.Asn1Error as e:
+        check(S not in str(e) and "SECRET" not in str(e).upper(), "cdhashes: %s is refused with a message that quotes nothing of the file" % name, str(e))
+
+# ---- the provisioning profile (the content openssl verified is a property list)
+orig_cms, orig_verify = I.parse_cms, I.cms_verify
+try:
+    I.parse_cms = lambda blob: {"signer": {"sha256": "x"}, "certs": []}
+    for name in ("an unexpected element", "an integer that is not a number", "a real that is not a number", "a date that is not a date"):
+        I.cms_verify = lambda blob, _d=XML[name]: {"ok": True, "why": None, "content": _d, "signer_sha256": "x"}
+        td3 = tempfile.mkdtemp(); pf = os.path.join(td3, "p"); open(pf, "wb").write(b"x")
+        try:
+            I.read_profile(pf)
+            bad("profile: %s is refused" % name)
+        except I.Asn1Error as e:
+            check(S not in str(e) and "SECRET" not in str(e).upper() and "cannot be parsed" in str(e), "profile: %s is refused with a message that quotes nothing of the file" % name, str(e))
+finally:
+    I.parse_cms, I.cms_verify = orig_cms, orig_verify
+
+# ---- the helper itself
+for exc in (ValueError("the file says " + S), xml.parsers.expat.ExpatError("x " + S), OverflowError(S), RecursionError(S), KeyError(S)):
+    t = I.plist_failure_text(exc)
+    check(S not in t, "plist_failure_text: %s -> '%s' (the text of the exception is never used)" % (type(exc).__name__, t))
+PY
+
+# ---- the Info.plist reader of the other commands, and the entitlements blob, end to end
+secret_info() { # NAME CONTENT -> a copy of the staging app whose Info.plist is CONTENT
+  rm -rf "$tmp/si_$1"; mkdir -p "$tmp/si_$1"; cp -R "$tmp/staging/Runner.app" "$tmp/si_$1/Runner.app"; printf '%s' "$2" > "$tmp/si_$1/Runner.app/Info.plist"
+}
+PRE='<?xml version="1.0" encoding="UTF-8"?><plist version="1.0">'
+nleak=0; nrun=0; leakwhere=""
+for spec in "dup|<dict><key>SECRETINFOKEY</key><string>1</string><key>SECRETINFOKEY</key><string>2</string></dict></plist>" \
+            "elem|<dict><key>k</key><SECRETINFOELEM>v</SECRETINFOELEM></dict></plist>" \
+            "int|<dict><key>k</key><integer>SECRETINFOVALUE</integer></dict></plist>" \
+            "date|<dict><key>k</key><date>SECRETINFODATE</date></dict></plist>"; do
+  name="${spec%%|*}"; body="${spec#*|}"; secret_info "$name" "$PRE$body"
+  for sub in structure certificate; do
+    if [ "$sub" = certificate ]; then o="$(python3 -I "$verify" certificate "${cflags[@]}" "$tmp/si_$name/Runner.app" 2>&1)"; else o="$(python3 -I "$verify" structure "$tmp/si_$name/Runner.app" 2>&1)"; fi
+    nrun=$((nrun + 1))
+    if grep -E "SECRETINFO" <<<"$o" >/dev/null; then nleak=$((nleak + 1)); leakwhere="$leakwhere $sub/$name"; fi
+  done
+done
+o="$(python3 -I "$verify" structure "$tmp/si_elem/Runner.app" 2>&1)"
+if [ "$nleak" -eq 0 ] && grep -F "FAIL  Info.plist is unreadable: it cannot be parsed as a property list (" <<<"$o" >/dev/null; then ok "structure and certificate: a malformed XML Info.plist naming distinctive strings is reported as unreadable, by the failure's class, and none of the $nrun runs quotes it"; else bad "no command quotes a malformed Info.plist" "leaks:$leakwhere; $(grep -E 'FAIL|Info.plist' <<<"$o" | head -2 | tr '\n' '|')"; fi
+mk badxmlinfo staging malformed-xml-info-plist
+run staging "$tmp/badxmlinfo.ipa" "${common[@]}" --expect-cert-sha256 "$PIN"
+if [ "$rc" -eq 1 ] && grep -F "FAIL  Info.plist is unreadable: it cannot be parsed as a property list (" <<<"$out" >/dev/null && ! grep -E "SECRETINFO" <<<"$out" >/dev/null; then ok "verify: a malformed XML Info.plist in an IPA fails as unreadable, by the failure's class, and nothing of it is quoted"; else bad "verify does not quote a malformed Info.plist" "rc=$rc $(grep -E 'FAIL|SECRETINFO' <<<"$out" | head -3 | tr '\n' '|')"; fi
+mk arrayinfo staging array-info-plist
+expect_fail "verify: an Info.plist that is a well-formed property list but not a dictionary is refused, with a fixed explanation" "Info.plist is unreadable: it is not a dictionary" staging "$tmp/arrayinfo.ipa" --expect-cert-sha256 "$PIN"
+mk badents staging ents-xml-malformed
+run staging "$tmp/badents.ipa" "${common[@]}" --expect-cert-sha256 "$PIN"
+if [ "$rc" -eq 1 ] && grep -F "entitlements blob is unreadable: it cannot be parsed as a property list (" <<<"$out" >/dev/null && ! grep -E "SECRETENT" <<<"$out" >/dev/null; then ok "a malformed XML entitlements blob (slot 5) naming distinctive strings fails as unreadable, by the failure's class, and nothing of it is quoted"; else bad "a malformed entitlements blob is reported without quoting it" "rc=$rc $(grep -E 'FAIL|SECRETENT' <<<"$out" | head -3 | tr '\n' '|')"; fi
 
 # ---- 10. optional: re-sign a REAL unsigned build (synthetic identity) -----------------------------
 if [ -n "${REAL_UNSIGNED_APP:-}" ]; then

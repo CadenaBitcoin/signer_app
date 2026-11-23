@@ -464,7 +464,7 @@ FINGERPRINT=<certificate SHA-256 as RECORDED in the release record by the coordi
 | V5 | Entitlements | `get-task-allow` absent or false; application identifier and team as V4; every key granted by the profile. Record the full list (`verify_ipa.py` writes it to the evidence). `aps-environment` appears only if the release record decided the push capability; when the record decides **no push capability** (proposed for 1.0.4), V7 runs with `--forbid-entitlement aps-environment` and its presence fails |
 | V6 | Environment inside the app | The production URL occurs at least once; `staging.purabitcoin.com` occurs **0** times |
 | V7 | This repository's IPA verifier | Every check passes |
-| V8 | Only signatures were added | The signed bundle is the application of **the archive that was exported** (`$WORK/archive-app`, section 8 step 6) plus signatures; only the embedded profile may be replaced. A separate `flutter build ios` is not a valid baseline |
+| V8 | Only signatures were added | The signed bundle is the application of **the archive that was exported** (`$WORK/archive-app`, section 8 step 6) plus signatures; only the embedded profile may be replaced. Every file is compared byte for byte, with ONE exception: the app's top-level `Info.plist` may differ in serialization only (a binary property list with the same keys, values and types, of the same length: equal in **content**, not byte for byte, so bytes the content does not reach are not compared; [IOS_SIGNING.md](IOS_SIGNING.md) section 3.1e). `compare` authenticates no signature and says so on every invocation; the seal of that file is checked by V7. A separate `flutter build ios` is not a valid baseline |
 | V9 | Native library | Library SHA-256 as in section 8, and the symbol inspection below |
 
 ```bash
@@ -502,9 +502,9 @@ checks revocation**; an independent source (the certificate list of the Apple ac
 cloud-managed certificate, which is **Unconfirmed**) strengthens the record but is not required by this procedure.
 If the fingerprint is not recorded, or later differs from the record: stop.
 
-**V7 and V8 have only once seen a real Apple-signed IPA** (run `44834801248`, Authorization C; [IOS_SIGNING.md](IOS_SIGNING.md)
-section 3.1; V8 failed there on the top-level `Info.plist`, cause unknown, and the file was not kept: section 3.1d describes the read-only evidence the
-next run keeps; V8 itself is unchanged): the first run may reject a legitimate detail of real Apple output (an entitlement
+**V7 and V8 have seen a real Apple-signed IPA twice** (runs `44834801248`, Authorization C, and `45148346007`, Authorization D; [IOS_SIGNING.md](IOS_SIGNING.md)
+section 3.1; V8 failed in both on the top-level `Info.plist`; the second run's evidence, section 3.1d, showed a re-serialization of identical content and types, and section 3.1e records the narrow rule now implemented for that one file; the
+rule has not yet been seen to pass on a real IPA): a run may still reject a legitimate detail of real Apple output (an entitlement
 Xcode adds, the layout of nested `CodeResources`). A rejection is **reported with its full output**
 and the build is not uploaded. A reviewed pull request may then add a documented, narrow allowance;
 an ad hoc override, an edited verifier or a skipped check is never acceptable. `--trust-anchors`

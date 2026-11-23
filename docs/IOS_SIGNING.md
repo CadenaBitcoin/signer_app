@@ -270,7 +270,7 @@ duplicate keys, before any DER was written), and whether the blob of a **Distrib
 | Unresolved | **What Xcode changed.** Not asserted harmless. The log records no key or value. |
 | Diagnostic added | When a property list differs, the comparison now lists keys added, removed and changed (with value types), says whether the content is equal in value **and type** (a difference of serialization only) and labels identity, version, platform and privilege keys. A **value** is shown only for an approved low-risk key (a fixed display list in `tool/ipa_inspect.py`: bundle identifier, versions, platform and SDK keys, `DT*` build identifiers, a few capability arrays) and only as a short string of letters, digits and `. _ + -`; for every other key the report gives the path, the kind of change, the type and a size, never the content, whatever the key is called. Every difference is counted, so the totals (added / removed / changed) are exact; at most 60 entries of each kind are kept, at most 3 files and 40 lines are listed, and when the listing is shorter than the totals the report says `LISTING INCOMPLETE: n of m` and the evidence record carries `listing_incomplete=1`. A file over 4 MiB is not read beyond the cap, and a failing diagnostic is reported as unavailable without touching the verdict. **The comparison still fails on every difference**; there is no exclusion and no acceptance allowlist (the display list is not read by any check). |
 | Output hygiene | Everything the verifier writes passes one escaping step: line breaks, carriage returns, escape sequences (including the C1 range), bidirectional and zero-width characters and surrogates become visible escapes, so text from an IPA (member names, property list keys, values, certificate fields) cannot end a line, start a GitHub workflow command or move a terminal; an evidence key is encoded reversibly (`/` is `%2F`, so two identifiers never share a key) and an evidence value has its backslashes escaped. The checks themselves still use the real names and values. Not covered: the other tools of the signing job (`tool/verify_artifact.sh`, `tool/validate_handover_archive.py`) were not changed. |
-| Proposed, NOT active | If a future real run shows `serialization only` for exactly the app's top-level `Info.plist`: accept it only when the two files are equal after reading each with an explicit format (binary or XML, no entities, no repeated key), with the same keys, the same value **types** (`True` is not `1`, `1` is not `1.0`), the same values, the same array order, and when the CodeDirectory's Info.plist seal matches the **IPA's** bytes (already checked). Any key added, removed or changed, however harmless it looks, stays a failure until it is reviewed on its own. This needs its own review and tests; it is not implemented. |
+| Proposed in Phase 2, IMPLEMENTED in Phase 9 | If a future real run shows `serialization only` for exactly the app's top-level `Info.plist`: accept it only when the two files are equal after reading each with an explicit format, with the same keys, the same value **types** (`True` is not `1`, `1` is not `1.0`), the same values, the same array order, and when the CodeDirectory's Info.plist seal matches the **IPA's** bytes (already checked by `verify`). Any key added, removed or changed, however harmless it looks, stays a failure. Run `45148346007` showed exactly that case, and the rule is implemented in its narrower form (binary to binary only, bounded, equal length, no date, UID, data or real): **section 3.1e**. |
 | Smallest evidence for a future signing run | The signed `Payload/Runner.app/Info.plist` itself (public data) and its SHA-256, and the verifier's own report of the difference, which now prints the delta without any workflow change. Retaining the signed IPA's `Info.plist` and the raw DER blobs in the evidence folder would settle both questions in one run; that workflow change is made in Phase 7C and described in section 3.1d (the evidence is captured by `verify_ipa.py capture-evidence`; V8 itself is unchanged and stays byte-strict). |
 
 ### 3.1b Phase 3 preparation of the DER experiment: variants, evidence recovery, logging exception (prepared 2026-11-21; nothing run, nothing activated)
@@ -366,7 +366,7 @@ yet both were 2,551 bytes (archive: `Info.plist` SHA-256 `34fd28f0…`; the expo
 known**. The existing hypothesis (a different serialisation of the same content) is **unproven**: it fits the equal length, and nothing else
 is shown. The same run left no copy of the DER entitlements blob of the Distribution-signed executable, and a failed export leaves its
 `Packaging.log` in a temporary directory that nothing collected. Phase 7C makes the **next** authorized signing run keep what is needed. It is
-evidence only: **V8 stays byte-strict, V7 and V9 and the DER rules are unchanged, and no relaxation is made before the evidence exists.**
+evidence only: **V8 stays byte-strict, V7 and V9 and the DER rules are unchanged, and no relaxation is made before the evidence exists.** (The evidence now exists, and Phase 9 relaxes V8 for exactly one file: section 3.1e.)
 
 **The step.** `Capture the Info.plist and DER entitlements evidence` in `.github/workflows/ios-hosted-signing.yml` runs
 `tool/verify_ipa.py capture-evidence`. It comes after V7, V8, V9 and the digest check and before the evidence is sealed; it has `if: always()` (so
@@ -417,6 +417,72 @@ not kept, so a hostile or unexpectedly sensitive `Info.plist` loses its bytes (i
 CodeDirectory. The step runs only in a signing run, which needs its own written authorization and a refreshed G2S record: this change alters the
 workflow and two gate-bound tool files (`tool/ipa_inspect.py`, `tool/verify_ipa.py`), so their recorded blobs are out of date until that record
 pull request. Nothing here authorizes or prepares a run.
+
+### 3.1e Phase 9: V8 accepts ONE re-serialization, the top-level Info.plist (implemented; no signing run authorized)
+
+**Why.** The Distribution-signed export of Authorization D (run `45148346007`) is the first whose evidence was kept: Authorization C's run (`44834801248`) had produced a signed export too, but nothing of its IPA was retained. Phase 7C's capture showed what it was built to show. The exported top-level `Info.plist` and the
+archive's are both binary property lists of 2,551 bytes with the **same 40 keys, values and types**; the export wrote them in another key order (the archive's
+are alphabetical, the exported file's are not) and laid the objects out differently (96 objects each, the same trailer, 83 identical leaf encodings). V8 compares every
+file byte for byte, so it refused an app whose only difference was serialization. The CodeDirectory's slot-1 seal matched the exported file. Why Xcode re-serializes is
+**not shown** by the evidence, and whether its key order is the same in every run is **unknown** (one exported sample exists). The real pair is kept as a test fixture:
+`tool/fixtures/apple_runner_info_plist_run45148346007.txt`. This section implements the rule that section 3.1a recorded as "proposed, not active" for exactly this
+situation (a real run showing "serialization only" for the top-level `Info.plist`).
+
+**Semantic equality is not bytewise immutability.** For this one file V8 no longer proves that the signed bytes are the archive's bytes. It proves that the two files have the same **content** as Python reads it (keys, values,
+types, array order). Bytes that the content does not reach, such as objects that no dictionary or array refers to, are **not compared**, and the files are different byte strings by design. Every other file is still proven byte for byte.
+
+**The rule** (`tool/ipa_inspect.py` `info_plist_reserialized_only`, called from `same_code_check` in `tool/verify_ipa.py` for the relative path `Info.plist` only).
+The signed file is accepted in place of a byte-identical one only when **all** of this holds, and every error, a `RecursionError` and a `MemoryError` included, is a refusal:
+
+| Condition | Value |
+|---|---|
+| Which file | The app's **top-level** `Info.plist`, by exact name. Nested apps and extensions (`PlugIns/X.appex/Info.plist`), frameworks, every other property list and every other resource stay **byte-strict**; Mach-O files are compared as before; a symbolic link is never compared by content |
+| Format | **Both** files are binary property lists (`bplist00`, no bytes before the magic). Binary to XML, XML to binary and XML to XML are refused (only binary to binary was observed) |
+| Reader | `read_plist_exact`: explicit format, a repeated dictionary key refused, no entity declaration; the root is a dictionary |
+| Size and shape | At most **64 KiB** per file, nesting at most **16 levels**, at most **5000 values** counted with multiplicity (an iterative walk, so a self-referencing or heavily shared structure ends at a limit and never recurses) |
+| Accepted types | boolean, integer (64-bit range), string, array, dictionary (string keys). A date, a UID, data, a real or a 16-byte integer is refused: the real file has none, and they are where Python's and Apple's readers are most likely to differ |
+| Equality | `plist_equal_strict`: equal in **value and type** all the way down (`True` is not `1`, `1` is not `1.0`), arrays in the same order, dictionaries without regard to key order at any depth |
+| Length | **Equal length**, a coarse extra bound and **not** a guarantee about bytes. A re-serialization of the same objects keeps its size, so a length change (padding, an added or a dropped object) is refused. A same-length difference in bytes the content does not reach is **not** excluded: an unreferenced object replaced in place, or one object added while another of the same size is dropped (the real pair: 2,551 and 2,551 bytes; a test pins that a changed unreferenced `true` is accepted) |
+
+What the verdict looks like: V8's PASS line says that the top-level `Info.plist` was re-serialized with identical content and types; an `INFO` line gives both lengths and both
+SHA-256 digests (never a value); the evidence file records `same_code_info_plist` and the two digests. The `INFO` line says that the files are equal in content, **not byte for byte**. A refusal keeps the existing failure and its diagnostics and adds one
+`INFO` line with the reason: a **fixed sentence** that names a rule and never quotes the files or the text of an exception (a reader's message can quote the file, so it is never used; a test pins this). Any added, removed or changed key, however harmless, and any other file that differs by a single byte, remain failures.
+
+**What this does NOT do: it authenticates nothing.** That the signed bytes are the bytes Apple's signature seals is checked, independently, by `verify`
+(`check_code_signature` in `tool/verify_ipa.py`: the CodeDirectory's slot-1 seal of this very file, and the CMS signature over that CodeDirectory), **whether or not V8
+accepts the file**. **The standalone `compare` command reads no CodeDirectory, no seal and no CMS signature and authenticates no signature**: it says so on **every invocation**, whatever the outcome (a `NOTE` line before anything can fail),
+and its help text says so. `verify` does not print that note, because it does authenticate. An IPA must never be accepted on `compare` alone; the hosted workflow runs `verify` (which also runs this comparison, with `--unsigned-app`) and then `compare`.
+The tests pin both halves: an `Info.plist` re-serialized **after** signing (same content, other bytes) is accepted by V8 and by `compare`, and refused by `verify` ("Info.plist was changed after signing").
+
+**Residual risks, accepted and documented.**
+
+1. **Unreferenced objects.** A binary property list can hold objects that no dictionary or array refers to. They are not part of the content, so two files that differ only in such
+   objects are "equal" here (the real files carry two unreferenced `true` objects each, and a test pins that a changed one is accepted). **They are still bytes of the signed app, and this rule
+   does not compare them with the archive's**: the distinction between semantic equality and bytewise immutability is real and is not removed by any condition above. After signing, the slot-1 seal
+   covers every byte of the file, so a later change is caught; before signing, nothing compares those bytes. The equal-length condition is a coarse bound, **not** a guarantee: it refuses a length
+   change, and it does not exclude an unreferenced object replaced in place or one added while another of the same size is dropped. No reader of the content reaches such an object; that is the whole of the argument, and it is an argument, not a proof.
+2. **Python is not Apple's parser.** Equality is judged with Python's `plistlib`; the app is read by CoreFoundation. A construct the two read differently could make files that look equal here differ for the
+   app. The limits above (binary only, no repeated key, no date, UID, data or real, bounded size, depth and node count, string keys, 64-bit integers) keep the accepted language to what the real file uses,
+   and the real pair was read by `plistlib` **and** by an independent reader written for the audit with the same result; they do not prove that CoreFoundation agrees on every file. `plistlib`'s behavior
+   also depends on the Python that runs the tool (a self-referencing dictionary is parsed by recent versions, which is why the walk is iterative and bounded).
+3. **Determinism.** Whether Xcode writes the same key order in every run, and in other Xcode versions, is not known. If a later export changes the format, the length or the content, V8 fails closed and the
+   Phase 7C evidence shows what changed.
+4. **Diagnostics never carry a property-list parser's own message.** A parser's exception text can quote the file it read (the name of a repeated key, an unexpected element, a value that is not a number). The V8 difference description
+   (`describe_one_plist`, through `plist_difference` and `read_plist_exact`), the capture evidence's typed comparison, the `Info.plist` reader of `verify`, `structure` and `certificate`, the `cdhashes` attribute reader, the entitlements-blob reader and the
+   provisioning-profile reader say what KIND of failure it was (the exception's class, or a fixed sentence) and nothing else; `plist_failure_text` is the one helper. The decisions are unchanged: an unreadable file is still unreadable, and a failure
+   the reader did not anticipate (plistlib raises `AttributeError` for a date that is not a date) is now a refusal, not a crash. **Not covered, by decision:** the DER entitlements parser's own messages (they can name an entitlement key), a message that names
+   a path listed by `CodeResources`, and a readable property list's difference listing, which shows key *paths* by design and never values.
+5. **Not covered by this change:** V9 (the native library inspection) has still never run on a real IPA; the certificate chain, App Store Connect acceptance and runtime behavior are not verified here.
+
+**Tests** (`tool/test_verify_ipa.sh` section 17): the real pair (digests, facts read with `plistlib`, the sealed hash); positive cases (the real pair in both directions, reversed and nested key order);
+fifteen one-change-at-a-time refusals (an added or removed key, changed strings, booleans and integers, boolean to integer, integer to real, an array reordered, shortened, changed deep inside nested
+dictionaries, a renamed key); real bytes edited, truncated, extended, with a corrupted offset table and trailer; format changes; hostile structures (a repeated key, a self-referencing dictionary, nesting of 900 and 3000
+levels, 100-fold shared sub-objects, a non-string key, a 16-byte integer, an oversized file, dates, UIDs, data, reals); the exact limits; the length rule; failing closed when the comparison or the reader raises;
+diagnostic confidentiality (no refusal reason quotes a key, a value or the text of an exception; malformed XML and binary property lists carrying distinctive strings through every reader named in item 4 of the residual risks, end to end); scope isolation (framework, app extension, another property list, a lower-case name, a changed byte in another file, a changed executable, a symbolic link, an added key, binary to XML);
+the `compare` notice on every invocation; and `verify` against `compare` for the seal. The mutation run of the new code is reported with the change.
+
+**Authorization.** This changes a verification rule (the CTO decided it on the evidence of run `45148346007`) and two gate-bound tool files (`tool/ipa_inspect.py`, `tool/verify_ipa.py`): their recorded G2S blobs are out of date
+until a reviewed record pull request refreshes them, and **no G2S authorization is open**. Nothing here authorizes or prepares a signing run, and the workflow is unchanged.
 
 ### 3.2 Signing-job separation: findings (2026-10-22, credential-free)
 
