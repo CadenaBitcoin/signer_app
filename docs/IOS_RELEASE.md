@@ -623,6 +623,10 @@ this check.
 **Only after G2 is recorded** (section 1) **and every check of section 9 has passed.** Nothing in this
 procedure submits for review.
 
+**Hosted route.** The signed IPA of the hosted workflow never leaves its runner, so for the hosted route the upload is a step of the same run: when the release record's operation is `sign-verify-and-upload` (record status `G2 AUTHORIZED`),
+the workflow validates and uploads the IPA that passed V1 to V9, with Apple's `altool` and the team API key, and only then ([IOS_HOSTED_SIGNING.md](IOS_HOSTED_SIGNING.md) section 9). Steps 3 to 6 below (processing, the build shown, no tester assignment, the ledger) apply to it unchanged;
+step 1 (Transporter on a Mac) and step 2 (no API key) describe the operator route.
+
 1. Upload **the exact IPA that passed section 9** with **Apple's Transporter app** (the method Flutter's own output names).
    Record its SHA-256 immediately before the upload and again from the file Transporter used; they must be equal. **Do not
    use Xcode Organizer's integrated *Upload*:** it signs and uploads in one step, so the file that was verified would not be

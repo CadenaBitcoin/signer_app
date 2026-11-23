@@ -10,6 +10,9 @@
 > procedure: [IOS_RELEASE.md](IOS_RELEASE.md); record: [release-records/ios-1.0.4-1000035.md](release-records/ios-1.0.4-1000035.md).
 > Every statement about Apple's behaviour below is labelled **Unconfirmed** until a run has shown it.
 >
+> **Upload (section 9).** Everything above describes the signing-only operation. The same workflow can also upload the SAME verified IPA, but **only** when the release record's
+> `G2S-OPERATION` is `sign-verify-and-upload` (record status `G2 AUTHORIZED`, D1, D2, D4 and D5 decided); otherwise it uploads nothing, as stated here.
+>
 > **Revised after the independent security audit of this pull request** (findings F1 to F10, section 8): the key text no longer
 > reaches `xcodebuild`'s environment, the authorization is bound to the implementation and to the release decisions, the archive
 > is validated before and after extraction, the authorization cannot outlive a withdrawal through a re-run, input validation is
@@ -349,3 +352,32 @@ the extracted tree, ignoring case and Unicode normalization, and resolves symbol
 (2) the gate's Markdown fence parsing follows CommonMark, so a marker hidden behind a `~~~` line inside a backtick block, or behind a
 shorter fence inside a longer one, is no longer live; (3) the key text is unset right after it is written, before `chmod` or any other
 process starts, and a test wraps the programs the step runs and fails if any of them has the key text in its environment.
+
+## 9. The upload operation: sign, verify and upload the SAME IPA (`sign-verify-and-upload`)
+
+**What it is.** The workflow can, when the release record says so, upload to App Store Connect the very IPA it has just exported and verified, from the same runner, and
+nothing else. Without that record it behaves exactly as sections 1 to 8 describe: it signs and verifies and uploads nothing. Delivery to internal TestFlight needs this operation
+because the signed IPA never leaves the runner (it is not an artifact, and a public repository cannot hold it), so it can be uploaded only from inside the run that verified it.
+
+**How it is authorized (two separate answers).** The gate (`tool/check_signing_authorization.sh`) accepts exactly two values of `G2S-OPERATION`: `sign-and-verify-only` and `sign-verify-and-upload`.
+The second additionally requires the record status **`G2 AUTHORIZED`** and the decisions **D1, D2, D4 and D5** to be decided, on top of everything G2S needs (the same blob binding of the workflow, the gate and the tools,
+the approved SHA, version, bundle ID and team, the current tip of `development`). The `authorize` job exposes the answer as `upload_authorized`: true only when the gate passed **and** the record names the upload operation.
+The lines of an earlier signing-only authorization can therefore never authorize an upload, and a withdrawn authorization authorizes nothing. The authorization itself is the CTO's written decision and the merged record pull request
+(sections 5 and 5.1 apply unchanged: one operation, consumed when the credential step starts, secrets removed afterwards, withdrawal by reviewed pull request). G3 (tester assignment), G4 (App Review) and G5 (release) are **not** given by it.
+
+**What the signing job does, in order** (all three upload steps run only when `upload_authorized` is true; none has `always()`, `failure()` or `continue-on-error`, so GitHub runs them **only if every earlier step succeeded**, V1 to V9 and the digest check included):
+
+1. **Probe Apple's upload tool** (no secret; before the export). `xcrun altool --help` must offer a complete interface: the current one (`--upload-package` with `--api-key` and `--api-issuer`, `--platform`, `--apple-id`, `--bundle-version`,
+   `--bundle-short-version-string`) or the legacy one (`--upload-app` with `--apiKey` and `--apiIssuer`). Neither means the run stops here, **before any credential is used** and before the export. The syntax is chosen from what the runner's Xcode actually offers, not assumed.
+2. The export and the verification as before.
+3. **Re-check** (no secret). The authorization is read again with the live tip of `development` (a withdrawal merged while the run is going stops the upload), the record's operation is `sign-verify-and-upload`, the IPA's digest equals the one recorded at the export and after the verification,
+   and its bundle ID, version and build equal the verified ones (V1) and the release record's.
+4. **Validate and upload** (the second and last step with the three secrets). The key text is written to `AuthKey_<id>.p8` in an empty mode-700 directory of `RUNNER_TEMP` (the key ID and issuer ID must have the shape Apple issues before any file name or argument is built from them), removed from the environment before any other process starts,
+   and altool runs with no secret in its environment. `altool --validate-app` runs first (Apple's own check; it uploads nothing); only if it succeeds is the **one** upload run, of the same file. There is no loop and no retry. Everything kept passes the redaction filter of the export step; the key file is removed on every exit.
+5. **Check again** that no key file remains (always), then the evidence steps as before. Evidence added: `upload-tool-probe.txt`, `upload-tool-help.txt`, `upload-precheck.txt`, `upload-validate.log`, `upload.log` (redacted) and `upload-result.txt` (`uploaded=yes|no`, the exit codes, the digest of the uploaded file).
+
+**What a failure means.** A failed validation uploads nothing. A failed **upload** leaves no IPA anywhere (it was never an artifact): the operation is consumed, the evidence says what Apple answered, and a new run needs the CTO's explicit decision (look in App Store Connect for a build 1.0.4 (1000035) first; do not use GitHub's Re-run).
+A successful upload is **not** availability to testers: Apple processes the build, the export-compliance question is answered in App Store Connect, and assignment to the internal group is G3.
+
+**Constants and limits.** `APP_APPLE_ID` (`6753348211`) is the App Store Connect record of the production app, taken from the release record (section 5 item 2, coordinator-reported); altool's current interface needs it, and a wrong value is refused by Apple. The credential is the same environment's three secrets;
+which key (role) is loaded is the CTO's decision and is not verifiable from the run. Unconfirmed until a run has shown it: that the runner's altool offers one of the two interfaces (the probe decides, before any credential), and Apple's acceptance of the build.

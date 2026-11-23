@@ -70,6 +70,11 @@ for pair in "authorize|Validate the inputs|vin_a" "build|Validate the inputs|vin
   f="$(sf "$j" "$n")" && eval "STEP_$v=\"$f\"" || { bad "the workflow has exactly one step '$n' in job $j"; eval "STEP_$v=/nonexistent"; }
 done
 
+for pair in "sign|Probe Apple|uprobe" "sign|Re-check the upload authorization|upre" "sign|Validate and upload the verified IPA|uup" "sign|Check again that no key file remains|ukey"; do
+  IFS='|' read -r j n v <<<"$pair"
+  f="$(sf "$j" "$n")" && eval "STEP_$v=\"$f\"" || { bad "the workflow has exactly one step '$n' in job $j"; eval "STEP_$v=/nonexistent"; }
+done
+
 # ============================================================================================================================
 # 1. Structure (parsed YAML, not strings)
 # ============================================================================================================================
@@ -93,13 +98,13 @@ chk("exactly the jobs authorize, build and sign", set(jobs) == {"authorize", "bu
 
 sign = [s for s in idx if s["job"] == "sign"]
 sec_i = [s["i"] for s in sign if s["env"] and any("secrets." in str(v) for v in s["env"].values())]
-chk("exactly one step of the signing job reads secrets", len(sec_i) == 1, str(sec_i))
+chk("exactly two steps of the signing job read secrets: the export and the upload", len(sec_i) == 2, str(sec_i))
 secret_step = next((s for s in sign if s["i"] in sec_i), None)
+upload_step = next((s for s in sign if s["i"] in sec_i and s["name"].startswith("Validate and upload the verified IPA")), None)
 if secret_step:
-    chk("that step's environment holds exactly the three secrets and nothing else", sorted(secret_step["env"]) == ["APPLE_API_ISSUER_ID", "APPLE_API_KEY_ID", "APPLE_API_KEY_P8"], str(sorted(secret_step["env"])))
-    chk("and its name is the documented one", secret_step["name"].startswith("Export and sign with the cloud-managed Distribution certificate"))
-others = [s for s in idx if (s["job"], s["i"]) != ("sign", sec_i[0] if sec_i else -1) and ("secrets." in json.dumps({"e": s["env"], "w": s["with"], "r": s["run"], "i": s["if"]}))]
-chk("no other step of any job refers to a secret", not others, str([(s["job"], s["name"]) for s in others]))
+    chk("the first of them is the export step, with exactly the three secrets and nothing else", sorted(secret_step["env"]) == ["APPLE_API_ISSUER_ID", "APPLE_API_KEY_ID", "APPLE_API_KEY_P8"] and secret_step["name"].startswith("Export and sign with the cloud-managed Distribution certificate"), str(sorted(secret_step["env"])))
+chk("the second is the upload step, with exactly the three secrets and nothing else", upload_step is not None and sorted(upload_step["env"]) == ["APPLE_API_ISSUER_ID", "APPLE_API_KEY_ID", "APPLE_API_KEY_P8"] and sec_i and upload_step["i"] == sec_i[-1] and upload_step["i"] != sec_i[0])
+others = [s for s in idx if (s["job"], s["i"]) not in {("sign", i) for i in sec_i} and ("secrets." in json.dumps({"e": s["env"], "w": s["with"], "r": s["run"], "i": s["if"]}))]
 chk("no job or workflow level environment, secret or variable", not any(jobs[j].get("env") for j in jobs) and "secrets." not in json.dumps(data["top_env"]) and all("secrets." not in json.dumps(jobs[j]) for j in jobs))
 chk("only the signing job has an environment, and it is ios-hosted-signing", [j for j in jobs if jobs[j].get("environment")] == ["sign"] and jobs["sign"]["environment"] == "ios-hosted-signing")
 chk("the trigger is workflow_dispatch only", list((data["on"] or {}).keys()) == ["workflow_dispatch"])
@@ -107,6 +112,7 @@ chk("the trigger is workflow_dispatch only", list((data["on"] or {}).keys()) == 
 ar_i = next((s["i"] for s in sign if s["name"].startswith("Check the archive digest")), None)
 pre = [s for s in sign if sec_i and s["i"] < sec_i[0]]
 post = [s for s in sign if sec_i and s["i"] > sec_i[0]]
+UPLOAD_STEPS = ("Probe Apple", "Re-check the upload authorization", "Validate and upload the verified IPA")
 # no code of the approved commit, of the archive or of the hand-over is executed anywhere in the signing job
 INTERP = re.compile(r"(?:^|[;&|(`]|\$\()\s*(?:sudo\s+)?(bash|/bin/bash|sh|/bin/sh|zsh|source|\.|python3?|perl|ruby|node|osascript|swift|make|xcrun|env)\s+((?:-\S+\s+)*)(\S+)", re.M)
 OK_TARGET = re.compile(r'^"?(tools/tool/[A-Za-z_]+\.(py|sh)|\$RUNNER_TEMP/(redact|findlog)\.py|\$\{RUNNER_TEMP\}/(redact|findlog)\.py|-u|-)"?$')   # redact.py and findlog.py are written by the secret step itself (heredocs), never read from a checkout
@@ -118,6 +124,8 @@ for s in sign:
         if interp in ("env",):
             continue   # `env -u NAME command` is checked through its command below
         if interp == "xcrun":
+            if s["name"].startswith("Probe Apple") and target == "altool":   # the one probe of Apple's upload tool, before any secret exists
+                continue
             bad_exec.append((s["name"], m.group(0).strip())); continue
         if not OK_TARGET.match(target):
             bad_exec.append((s["name"], m.group(0).strip()))
@@ -157,6 +165,55 @@ if ar:
     chk("the archive is extracted exactly once, and the digest is compared before anything is read", t.count("tar -xf") == 1 and t.find("shasum") < a)
 chk("tar -x appears nowhere else in the signing job", sum((s["run"] or "").count("tar -x") for s in sign) == 1)
 chk("the key never reaches an artifact: the only artifact paths are evidence/ and the unsigned tar", all((s["with"] or {}).get("path") in ("evidence/", "handover/Runner.xcarchive.tar") for s in idx if s["uses"] and s["uses"].startswith("actions/upload-artifact@")))
+# ---- the upload is gated, and a failed verification (or any failed step) means no upload ------------------------------------------------
+# GitHub gives a step whose `if` has no status function the condition `success() && (expression)`: it runs only if every earlier step of the job
+# succeeded. That rule is SIMULATED here on the real steps and conditions of the signing job: whichever step fails, the upload steps do not run;
+# when the dispatch is not authorized for upload they never run; when everything succeeds and it is authorized, exactly they do.
+chk("the authorize job exposes upload_authorized from its gate step", jobs["authorize"].get("outputs", {}).get("upload_authorized") == "${{ steps.gate.outputs.upload_authorized }}")
+chk("the signing job itself runs only when the dispatch is authorized to sign", jobs["sign"].get("if") == "needs.authorize.outputs.authorized == 'true'")
+UP_PREFIX = ("Probe Apple", "Re-check the upload authorization", "Validate and upload the verified IPA")
+def step_runs(st, failed, upload_ok):
+    expr = (st["if"] or "").strip() if st["if"] is not None else ""
+    if not expr:
+        return not failed
+    if "always()" in expr:
+        return True
+    if "failure()" in expr:
+        return failed
+    if expr == "needs.authorize.outputs.upload_authorized == 'true'":
+        return (not failed) and upload_ok
+    raise ValueError("a condition this simulation does not know: %r" % expr)
+def simulate(fail_name, upload_ok):
+    failed, ran = False, []
+    for st in sign:
+        if step_runs(st, failed, upload_ok):
+            ran.append(st["name"])
+            if st["name"] == fail_name:
+                failed = True
+    return ran
+try:
+    all_ok = simulate(None, True)
+    ups_ran = [n for n in all_ok if n.startswith(UP_PREFIX)]
+    chk("simulation: when every step succeeds and the upload is authorized, the probe, the pre-check and the upload all run", len(ups_ran) == 3, str(ups_ran))
+    not_authorized = simulate(None, False)
+    chk("simulation: when the dispatch is NOT authorized for upload (the record names the signing-only operation, or nothing), none of the three runs, whatever else happens", not [n for n in not_authorized if n.startswith(UP_PREFIX)])
+    chk("simulation: ...and the verification and the evidence steps still run in that case (an unauthorized upload changes nothing else)", len(not_authorized) == len(all_ok) - 3)
+    leaks_ = []
+    for st in sign:
+        if st["name"] in all_ok and not st["name"].startswith(UP_PREFIX[0]):
+            ran = simulate(st["name"], True)
+            late = [n for n in ran if n.startswith(UP_PREFIX[1:])]
+            # a step that fails AFTER the probe and BEFORE the pre-check/upload must stop both; a step that comes after the upload cannot matter
+            pos = [s["name"] for s in sign].index(st["name"]); pos_pre = [s["name"] for s in sign].index(next(n for n in all_ok if n.startswith(UP_PREFIX[1])))
+            if pos < pos_pre and late:
+                leaks_.append(st["name"])
+    chk("simulation: a failure of ANY earlier step of the signing job (the export, V1 to V9, the digest check, the archive and hash checks, the key-file check) stops the pre-check and the upload", not leaks_, str(leaks_))
+    verif = [n for n in all_ok if re.match(r"(Unpack the exported IPA|Signature seals|Embedded profile|Environment inside|Repository IPA verifier|Native library identity|Fix the IPA digest)", n)]
+    chk("simulation: the seven steps that carry V1 to V9 and the digest check are all among the steps whose failure was simulated", len(verif) == 7, str(verif))
+    evid = simulate("Repository IPA verifier, pinned on the certificate, and \"signatures only\" comparison (V7, V8)", True)
+    chk("simulation: after a failed V7/V8 the evidence steps still run (capture, seal, report, upload of the text evidence) and no upload step does", any(n.startswith("Capture the Info.plist") for n in evid) and any(n.startswith("Upload the text evidence") for n in evid) and not [n for n in evid if n.startswith(UP_PREFIX[1:])], str(evid[-6:]))
+except ValueError as e:
+    chk("simulation: every condition of the signing job is one the simulation understands", False, str(e))
 print("\n".join(res))
 PY
 while IFS= read -r line; do
@@ -227,13 +284,13 @@ authorize_ws() { # DIR : decided rows, the D14 row and the G2S lines that match 
     echo "G2S-AUTHORIZATION: https://github.com/CadenaBitcoin/signer_app/issues/71#issuecomment-1234567890"
   } >> "$rec"
 }
-GATE_RC=0; GATE_AUTH=""
+GATE_RC=0; GATE_AUTH=""; GATE_UP=""
 run_authorize() { # WS TIP [VAR=value ...]   (the authorize job's gate step, in WS as the workspace)
   local ws="$1" tip="$2" t; shift 2; t="$(mktemp -d -p "$tmp")"; : > "$t/out"; : > "$t/sum"
   ( cd "$ws" && env -i PATH="$stubdir:$PATH" HOME="$HOME" REAL_GIT="$REAL_GIT" STUB_TIP="$tip" GITHUB_REF=refs/heads/development GITHUB_EVENT_NAME=workflow_dispatch \
       GITHUB_SHA="$WFSHA" GITHUB_SERVER_URL=https://example.invalid GITHUB_REPOSITORY=example/repo RUNNER_TEMP="$t" GITHUB_STEP_SUMMARY="$t/sum" GITHUB_OUTPUT="$t/out" \
       APPROVED_SHA="$SHA" EXPECTED_VERSION="$VER" BUNDLE_ID="$BID" TEAM_ID="$TEAM" "$@" bash -e "$STEP_gate" > "$t/stdout" 2>&1 ); GATE_RC=$?
-  GATE_AUTH="$(sed -n 's/^authorized=//p' "$t/out")"
+  GATE_AUTH="$(sed -n 's/^authorized=//p' "$t/out")"; GATE_UP="$(sed -n 's/^upload_authorized=//p' "$t/out")"
 }
 RECHECK_RC=0
 run_recheck() { # WS TIP [VAR=value ...]   (the signing job's re-check; WS is copied to tools/)
@@ -295,6 +352,30 @@ w="$tmp/ws_rec"; rm -rf "$w"; cp -r "$good" "$w"; sed -i 's/^| D14 | \(.*\)| Dec
 fi
 # G2S needs less than G2: the upload-time rows are NOT needed (and X1, X2 stay open) -- but they are not decided here either
 run_authorize "$good" "$WFSHA"; [ "$GATE_AUTH" = true ] && grep -q '^| X2 | .*| Open |' "$good/$REC"; chk "G2S does not require X1, X2, D1, D2, D4 or D5 (they stay open for the upload gate G2)" $?
+# ---- 3a. The UPLOAD authorization as wired: upload_authorized is true ONLY for the operation sign-verify-and-upload, on top of a passing gate
+up="$tmp/ws_up"; mkws "$up"; authorize_ws "$up"
+sed -i -E 's/`G1 AUTHORIZED`/`G2 AUTHORIZED`/; s/^G2S-OPERATION: .*/G2S-OPERATION: sign-verify-and-upload/' "$up/$REC"; decide_rows "$up/$REC" D1 D2 D4 D5
+upcase() { # NAME WS TIP WANT_AUTH WANT_UP [VAR=value ...]
+  local name="$1" ws="$2" tip="$3" wa="$4" wu="$5"; shift 5
+  run_authorize "$ws" "$tip" "$@"; [ "$GATE_RC" -eq 0 ] && [ "$GATE_AUTH" = "$wa" ] && [ "$GATE_UP" = "$wu" ]; chk "authorize job: $name -> authorized=$wa, upload_authorized=$wu" $? "rc=$GATE_RC auth='$GATE_AUTH' up='$GATE_UP'"
+}
+upcase "a complete upload authorization (operation sign-verify-and-upload, G2, D1 D2 D4 D5, everything G2S needs)" "$up" "$WFSHA" true true
+upcase "a complete SIGN-ONLY authorization (sign-and-verify-only): it can sign and can never upload" "$good" "$WFSHA" true false
+upcase "the record before any authorization" "$base" "$WFSHA" false false
+upcase "an upload authorization read from a historical revision (the tip moved on)" "$up" "$OLDSHA" false false
+upcase "an upload authorization when the tip cannot be read" "$up" "" false false
+upcase "an upload authorization dispatched from a branch other than development" "$up" "$WFSHA" false false GITHUB_REF=refs/heads/issue/x
+upcase "an upload authorization started by an event other than workflow_dispatch" "$up" "$WFSHA" false false GITHUB_EVENT_NAME=push
+for spec in 'a record status of G1 (an upload needs G2)|s/`G2 AUTHORIZED`/`G1 AUTHORIZED`/' 'a withdrawn authorization|s/^G2S-STATUS: AUTHORIZED$/G2S-STATUS: WITHDRAWN/' 'an operation with a trailing space|s/^G2S-OPERATION: .*/G2S-OPERATION: sign-verify-and-upload /' 'an operation that merely contains upload|s/^G2S-OPERATION: .*/G2S-OPERATION: sign-and-upload/' 'another approved SHA|s/^G2S-APPROVED-SHA: .*/G2S-APPROVED-SHA: '"$OLDSHA"'/' 'a stale tool blob|s/(tool\/verify_ipa\.py=)[0-9a-f]{40}/\10000000000000000000000000000000000000000/'; do
+  w="$tmp/ws_upx"; rm -rf "$w"; cp -r "$up" "$w"; sed -i -E "${spec#*|}" "$w/$REC"; upcase "an upload authorization with ${spec%%|*}" "$w" "$WFSHA" false false
+done
+for id in D1 D2 D4 D5; do
+  w="$tmp/ws_upx"; rm -rf "$w"; cp -r "$up" "$w"; awk -v id="$id" 'index($0, "| " id " | ") == 1 { sub(/\| Decided \| CTO \| 2026-11-21 \|[ ]*$/, "| Proposed, not decided | TBD | TBD |") } { print }' "$w/$REC" > "$w/$REC.n" && mv "$w/$REC.n" "$w/$REC"
+  upcase "an upload authorization while decision $id is still Proposed" "$w" "$WFSHA" false false
+done
+for f in .github/workflows/ios-hosted-signing.yml tool/check_signing_authorization.sh tool/verify_ipa.py tool/ipa_inspect.py; do
+  w="$tmp/ws_upx"; rm -rf "$w"; cp -r "$up" "$w"; printf '\n# changed after the authorization\n' >> "$w/$f"; upcase "an upload authorization with $f changed after it was given" "$w" "$WFSHA" false false
+done
 # a gate usage error stops the job (never "authorized")
 w="$tmp/ws_rec"; rm -rf "$w"; cp -r "$good" "$w"; rm "$w/tool/ipa_inspect.py"; run_authorize "$w" "$WFSHA"; [ "$GATE_RC" -ne 0 ]; chk "authorize job: a gate that cannot run fails the job (exit $GATE_RC)" $?
 
@@ -388,6 +469,219 @@ for mode in 0 1; do
   grep -q 'REDACTED' "$SEC/evidence/export.log"; chk "credential step ($label): the evidence shows where material was redacted" $?
   if [ "$mode" = 1 ]; then [ -f "$SEC/evidence/export-diagnosis.txt" ]; chk "credential step (failure): the diagnosis evidence is written" $?; fi
 done
+# ============================================================================================================================
+# 4b. The UPLOAD: the probe, the pre-check and the upload step, run with SYNTHETIC input, a stub `xcrun altool` and synthetic credentials
+# ============================================================================================================================
+FAKEKEYID=FAKEKEY123
+FAKEISSUER=aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee
+IPAC="synthetic ipa bytes for the upload tests"
+IPAH="$(printf '%s' "$IPAC" | shasum -a 256 | awk '{print $1}')"
+
+# ---- the probe: which interface does the runner's altool offer? (decided BEFORE any credential exists)
+run_probe() { # VARIANT: package | legacy | none | partial | missing
+  PRB="$(mktemp -d -p "$tmp")"; mkdir -p "$PRB/evidence" "$PRB/tmp" "$PRB/stub"
+  cat > "$PRB/stub/xcrun" <<'EOF'
+#!/bin/bash
+case "$1" in
+  --find) [ "${STUB_VARIANT:-}" = missing ] && exit 1; echo /Applications/Xcode_26.3.app/Contents/Developer/usr/bin/altool; exit 0 ;;
+  altool) [ "${2:-}" = "--help" ] || exit 2; cat "$STUB_HELP_FILE"; exit 0 ;;
+esac
+exit 2
+EOF
+  printf '#!/bin/bash\necho "Xcode 26.3"\necho "Build version 17C529"\n' > "$PRB/stub/xcodebuild"; chmod +x "$PRB/stub/xcrun" "$PRB/stub/xcodebuild"
+  case "$1" in
+    package) cat > "$PRB/help.txt" <<'EOF'
+OVERVIEW: altool - Command-line tool for interacting with the App Store Connect API.
+USAGE: xcrun altool [--upload-package | --upload-app -f] <file> --platform <platform> --apple-id <id> --bundle-id <id> --bundle-version <string> --bundle-short-version-string <string> [--wait]
+       xcrun altool --validate-app <file> --platform <platform> --apple-id <id> --bundle-id <id> --bundle-version <string> --bundle-short-version-string <string>
+OPTIONS:
+  --api-key <string>      Required for JWT authentication.
+  --api-issuer <uuid>     Required if --api-key is specified.
+EOF
+    ;;
+    legacy) cat > "$PRB/help.txt" <<'EOF'
+USAGE: altool --validate-app -f <file> -t <type> [--apiKey <key> --apiIssuer <issuer>]
+       altool --upload-app -f <file> -t <type> [--apiKey <key> --apiIssuer <issuer>]
+EOF
+    ;;
+    partial) cat > "$PRB/help.txt" <<'EOF'
+USAGE: xcrun altool --upload-package <file> --validate-app <file> --platform <p> --apple-id <id> --bundle-version <v> --bundle-short-version-string <s> --api-key <k>
+EOF
+    ;;
+    *) printf 'USAGE: altool --notarize-app <file> --primary-bundle-id <id>\n' > "$PRB/help.txt" ;;
+  esac
+  ( cd "$PRB" && env -i PATH="$PRB/stub:$PATH" HOME="$HOME" RUNNER_TEMP="$PRB/tmp" STUB_VARIANT="$1" STUB_HELP_FILE="$PRB/help.txt" bash -e "$STEP_uprobe" > "$PRB/stdout" 2>&1 ); PRB_RC=$?
+}
+run_probe package; [ "$PRB_RC" -eq 0 ] && [ "$(cat "$PRB/tmp/upload-syntax")" = package ] && grep -qx 'syntax=package' "$PRB/evidence/upload-tool-probe.txt" && [ -s "$PRB/evidence/upload-tool-help.txt" ]; chk "probe: an altool with --upload-package, --api-key and --api-issuer is the 'package' interface (evidence kept)" $? "rc=$PRB_RC"
+run_probe legacy; [ "$PRB_RC" -eq 0 ] && [ "$(cat "$PRB/tmp/upload-syntax")" = legacy ] && grep -qx 'syntax=legacy' "$PRB/evidence/upload-tool-probe.txt"; chk "probe: an altool with --upload-app, --apiKey and --apiIssuer is the 'legacy' interface" $? "rc=$PRB_RC"
+for v in none partial missing; do
+  run_probe "$v"; [ "$PRB_RC" -ne 0 ] && [ ! -e "$PRB/tmp/upload-syntax" ] && grep -q 'Stopping before any credential is used' "$PRB/stdout"; chk "probe: a tool that offers no complete interface ($v) stops the run BEFORE any credential is used, and no syntax is recorded" $? "rc=$PRB_RC"
+done
+run_probe none; grep -qx 'syntax=none' "$PRB/evidence/upload-tool-probe.txt"; chk "probe: the refusal is kept as evidence (syntax=none)" $?
+
+# ---- the pre-check: the authorization and the exact IPA, read again right before the upload (no secret)
+run_pre() { # WS TIP [SETUP-snippet evaluated with $d] [VAR=value ...]
+  local ws="$1" tip="$2" setup="${3:-}"; shift 3 2>/dev/null || shift $#
+  PRE_DIR="$(mktemp -d -p "$tmp")"; local d="$PRE_DIR"
+  mkdir -p "$d/evidence" "$d/tmp"; cp -r "$ws" "$d/tools"
+  printf '%s' "$IPAC" > "$d/tmp/Runner.ipa"
+  printf 'xcodebuild_exportArchive_exit=0\nipa_sha256_after_export=%s\nipa_size=1\n' "$IPAH" > "$d/evidence/export-result.txt"
+  printf 'ipa_sha256_after_export=%s\nipa_sha256_after_verification=%s\nipa_size=1\n' "$IPAH" "$IPAH" > "$d/evidence/ipa-digest.txt"
+  printf 'CFBundleIdentifier=%s\nCFBundleShortVersionString=1.0.4\nCFBundleVersion=1000035\nCFBundleDisplayName=Cadena Bitcoin\n' "$BID" > "$d/evidence/v1-identity.txt"
+  printf 'package\n' > "$d/tmp/upload-syntax"; : > "$d/env"
+  [ -z "$setup" ] || eval "$setup"
+  ( cd "$d" && env -i PATH="$stubdir:$PATH" HOME="$HOME" REAL_GIT="$REAL_GIT" STUB_TIP="$tip" RUNNER_TEMP="$d/tmp" GITHUB_ENV="$d/env" IPA="$d/tmp/Runner.ipa" GITHUB_SHA="$WFSHA" \
+      GITHUB_SERVER_URL=https://example.invalid GITHUB_REPOSITORY=example/repo APPROVED_SHA="$SHA" EXPECTED_VERSION="$VER" BUNDLE_ID="$BID" TEAM_ID="$TEAM" "$@" bash -e "$STEP_upre" > "$d/stdout" 2>&1 ); PRE_RC=$?
+}
+pre_refused() { # NAME WS TIP [SETUP]
+  run_pre "$2" "$3" "${4:-}"; [ "$PRE_RC" -ne 0 ] && [ ! -s "$PRE_DIR/env" ] && [ ! -e "$PRE_DIR/tmp/asc-private-keys" ]; chk "pre-check: $1 -> refused; nothing is handed to the upload step" $? "rc=$PRE_RC env=$(cat "$PRE_DIR/env" | tr '\n' ' ')"
+}
+run_pre "$up" "$WFSHA"
+[ "$PRE_RC" -eq 0 ] && grep -qx 'UPLOAD_SYNTAX=package' "$PRE_DIR/env" && grep -qx "UPLOAD_BUNDLE_ID=$BID" "$PRE_DIR/env" && grep -qx 'UPLOAD_SHORT_VERSION=1.0.4' "$PRE_DIR/env" && grep -qx 'UPLOAD_BUILD=1000035' "$PRE_DIR/env" && grep -qx "UPLOAD_IPA_SHA256=$IPAH" "$PRE_DIR/env" && [ "$(stat -c %a "$PRE_DIR/tmp/asc-private-keys")" = 700 ] && [ -z "$(ls -A "$PRE_DIR/tmp/asc-private-keys")" ] && grep -qx 'operation=sign-verify-and-upload' "$PRE_DIR/evidence/upload-precheck.txt"; chk "pre-check: a complete upload authorization and the exact IPA pass; the identity, the digest and the syntax are handed on, and an empty mode-700 key directory exists" $? "rc=$PRE_RC $(tail -n 3 "$PRE_DIR/stdout")"
+[ "$(wc -l < "$PRE_DIR/env" | tr -d ' ')" -eq 5 ]; chk "pre-check: exactly five non-secret values are written to GITHUB_ENV" $?
+pre_refused "the signing-only authorization (sign-and-verify-only) can never give an upload" "$good" "$WFSHA"
+pre_refused "the tip of development moved on (for example a withdrawal was merged while the run was going)" "$up" "$OLDSHA"
+pre_refused "the tip of development cannot be read" "$up" ""
+w="$tmp/ws_upx"; rm -rf "$w"; cp -r "$up" "$w"; sed -i 's/`G2 AUTHORIZED`/`G1 AUTHORIZED`/' "$w/$REC"; pre_refused "the record status is G1 (an upload needs G2 AUTHORIZED)" "$w" "$WFSHA"
+for id in D1 D2 D4 D5; do
+  w="$tmp/ws_upx"; rm -rf "$w"; cp -r "$up" "$w"; awk -v id="$id" 'index($0, "| " id " | ") == 1 { sub(/\| Decided \| CTO \| 2026-11-21 \|[ ]*$/, "| Proposed, not decided | TBD | TBD |") } { print }' "$w/$REC" > "$w/$REC.n" && mv "$w/$REC.n" "$w/$REC"
+  pre_refused "decision $id is not decided" "$w" "$WFSHA"
+done
+w="$tmp/ws_upx"; rm -rf "$w"; cp -r "$up" "$w"; sed -i 's/^G2S-STATUS: AUTHORIZED$/G2S-STATUS: WITHDRAWN/' "$w/$REC"; pre_refused "the authorization was withdrawn" "$w" "$WFSHA"
+w="$tmp/ws_upx"; rm -rf "$w"; cp -r "$up" "$w"; sed -i 's/^G2S-OPERATION: .*/G2S-OPERATION: sign-verify-and-upload /' "$w/$REC"; pre_refused "an operation line with a trailing space" "$w" "$WFSHA"
+w="$tmp/ws_upx"; rm -rf "$w"; cp -r "$up" "$w"; sed -i 's/^G2S-GATE-BLOB: .*/G2S-GATE-BLOB: 0000000000000000000000000000000000000000/' "$w/$REC"; pre_refused "the record names another gate" "$w" "$WFSHA"
+w="$tmp/ws_upx"; rm -rf "$w"; cp -r "$up" "$w"; printf '\n# changed after the authorization\n' >> "$w/.github/workflows/ios-hosted-signing.yml"; pre_refused "the workflow changed after the authorization" "$w" "$WFSHA"
+pre_refused "the IPA changed after it was exported and verified (the same size, other bytes)" "$up" "$WFSHA" 'printf "%s" "SYNTHETIC ipa bytes for the upload tests" > "$d/tmp/Runner.ipa"'
+pre_refused "the digest recorded at the export is another one" "$up" "$WFSHA" 'printf "ipa_sha256_after_export=%s\n" "$(printf x | shasum -a 256 | cut -d" " -f1)" > "$d/evidence/export-result.txt"'
+pre_refused "the digest recorded after the verification is another one" "$up" "$WFSHA" 'printf "ipa_sha256_after_verification=%s\n" "$(printf x | shasum -a 256 | cut -d" " -f1)" > "$d/evidence/ipa-digest.txt"'
+pre_refused "the digests are missing" "$up" "$WFSHA" ': > "$d/evidence/ipa-digest.txt"'
+pre_refused "the verified bundle identifier is another one" "$up" "$WFSHA" 'sed -i "s/^CFBundleIdentifier=.*/CFBundleIdentifier=com.example.other/" "$d/evidence/v1-identity.txt"'
+pre_refused "the verified version is another one" "$up" "$WFSHA" 'sed -i "s/^CFBundleShortVersionString=.*/CFBundleShortVersionString=1.0.5/" "$d/evidence/v1-identity.txt"'
+pre_refused "the verified build number is another one" "$up" "$WFSHA" 'sed -i "s/^CFBundleVersion=.*/CFBundleVersion=1000036/" "$d/evidence/v1-identity.txt"'
+pre_refused "no upload-tool syntax was probed" "$up" "$WFSHA" 'rm "$d/tmp/upload-syntax"'
+pre_refused "the probed syntax is something else" "$up" "$WFSHA" 'printf "evil; rm -rf /\n" > "$d/tmp/upload-syntax"'
+pre_refused "the IPA is missing" "$up" "$WFSHA" 'rm "$d/tmp/Runner.ipa"'
+pre_refused "the IPA is a symbolic link" "$up" "$WFSHA" 'mv "$d/tmp/Runner.ipa" "$d/tmp/real.ipa"; ln -s real.ipa "$d/tmp/Runner.ipa"'
+run_pre "$up" "$WFSHA"; ! grep -q 'secrets\.\|APPLE_API' "$STEP_upre"; chk "pre-check: the step refers to no secret and no APPLE_API variable" $?
+
+# ---- the upload step itself
+UPSEC=""
+run_upload() { # VALIDATE_RC UPLOAD_RC SYNTAX [SETUP-snippet evaluated with $UP] [VAR=value ...]
+  local vrc="$1" urc="$2" syn="$3" setup="${4:-}"; shift 4 2>/dev/null || shift $#
+  UP="$(mktemp -d -p "$tmp")"; mkdir -p "$UP/evidence" "$UP/tmp/asc-private-keys" "$UP/stub"; chmod 700 "$UP/tmp/asc-private-keys"
+  printf '%s' "$IPAC" > "$UP/tmp/Runner.ipa"
+  cat > "$UP/stub/xcrun" <<'EOF'
+#!/bin/bash
+# STUB xcrun altool: records the call, reports what a child of the upload step can see (names and counts, never values), and plays altool at its worst:
+# it prints the key ID, the issuer ID, a key line, a JWT-shaped token and a bearer token into its own output.
+[ "${1:-}" = altool ] || exit 2
+shift
+echo "CALL: $*" >> "$STUB_CALLS"
+{
+  echo "env var names with APPLE_API: $(env | cut -d= -f1 | grep -c APPLE_API)"
+  echo "env values containing the key text: $(env | grep -c TESTONLYFAKEKEY)"
+  echo "env values containing the key id other than KEYFILE: $(env | grep -v "^KEYFILE=" | grep -c FAKEKEY123)"
+  echo "env values containing the issuer id: $(env | grep -c aaaaaaaa-bbbb)"
+  echo "key file readable: $([ -r "$KEYFILE" ] && echo yes || echo no) mode: $(stat -c %a "$KEYFILE" 2>/dev/null)"
+  echo "key directory is the one altool is told: $([ "${API_PRIVATE_KEYS_DIR:-}" = "$(dirname "$KEYFILE")" ] && echo yes || echo no)"
+} >> "$STUB_REPORT"
+echo "key id FAKEKEY123 issuer aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee path $KEYFILE"
+sed -n '2p' "$KEYFILE"
+echo "token $STUB_JWT end; Authorization: Bearer abcdefgh12345678"
+echo "-----BEGIN PRIVATE KEY-----"
+case " $* " in
+  *" --validate-app "*)
+    [ "${STUB_TOUCH_IPA:-0}" = 1 ] && printf x >> "$IPA"                                   # the IPA changes DURING the validation
+    [ "${STUB_BREAK_LOG:-0}" = 1 ] && rm -f "$RUNNER_TEMP/validate.raw.log"                # the raw validation log disappears: its redaction cannot succeed
+    exit "${STUB_VALIDATE_RC:-0}" ;;
+  *" --upload-package "*|*" --upload-app "*) echo "Delivery UUID: 12345678-1234-1234-1234-123456789012"; exit "${STUB_UPLOAD_RC:-0}" ;;
+esac
+exit 9
+EOF
+  chmod +x "$UP/stub/xcrun"
+  ENVBIN="$(type -P env)"; GREPBIN="$(type -P grep)"
+  for tool in chmod head rm cat mkdir tail grep wc shasum stat awk date env ls; do
+    real="$(type -P "$tool" 2>/dev/null)" && [ -x "$real" ] || continue
+    printf '#!/bin/bash\necho %s >> "$LEAKLOG.calls"\nif %s | %s -q TESTONLYFAKEKEY; then echo %s >> "$LEAKLOG"; fi\nexec %s "$@"\n' "$tool" "$ENVBIN" "$GREPBIN" "$tool" "$real" > "$UP/stub/$tool"; chmod +x "$UP/stub/$tool"
+  done
+  : > "$UP/report.txt"; : > "$UP/calls.txt"
+  [ -z "$setup" ] || eval "$setup"
+  ( cd "$UP" && env -i PATH="$UP/stub:$PATH" HOME="$HOME" RUNNER_TEMP="$UP/tmp" IPA="$UP/tmp/Runner.ipa" UPLOAD_SYNTAX="$syn" UPLOAD_BUNDLE_ID="$BID" UPLOAD_SHORT_VERSION=1.0.4 UPLOAD_BUILD=1000035 \
+      UPLOAD_IPA_SHA256="$IPAH" APP_APPLE_ID=6753348211 LEAKLOG="$UP/leak.log" STUB_REPORT="$UP/report.txt" STUB_CALLS="$UP/calls.txt" STUB_VALIDATE_RC="$vrc" STUB_UPLOAD_RC="$urc" STUB_JWT="$FAKEJWT" \
+      APPLE_API_KEY_P8="${UPKEY-$FAKEKEY}" APPLE_API_KEY_ID="${UPKEYID-$FAKEKEYID}" APPLE_API_ISSUER_ID="${UPISSUER-$FAKEISSUER}" "$@" bash -e "$STEP_uup" > "$UP/stdout" 2>&1 ); UP_RC=$?
+}
+up_leaks() { grep -rE 'FAKEKEY123|aaaaaaaa-bbbb|TESTONLYFAKEKEY|eyJhbGciOi|abcdefgh12345678' "$UP/stdout" "$UP/evidence" 2>/dev/null | wc -l | tr -d ' '; }
+up_clean() { # NAME : the key is gone, nothing leaked, no process saw the key text
+  [ -z "$(find "$UP" -name '*.p8')" ]; chk "upload step ($1): the key file is removed afterwards" $?
+  [ "$(up_leaks)" = 0 ]; chk "upload step ($1): no key ID, issuer ID, key line, JWT or bearer token in the job log or the kept evidence" $? "$(grep -rhE 'FAKEKEY123|aaaaaaaa-bbbb|TESTONLYFAKEKEY|eyJhbGciOi|abcdefgh12345678' "$UP/stdout" "$UP/evidence" 2>/dev/null | head -3)"
+  [ -f "$UP/leak.log" ] || : > "$UP/leak.log"; [ ! -s "$UP/leak.log" ]; chk "upload step ($1): no program the step starts has the key text in its environment" $? "saw it: $(sort -u "$UP/leak.log" | tr '\n' ' ')"
+}
+# --- success, current interface
+run_upload 0 0 package
+[ "$UP_RC" -eq 0 ]; chk "upload step (success): exit status $UP_RC is 0" $? "$(tail -n 4 "$UP/stdout")"
+[ "$(wc -l < "$UP/calls.txt" | tr -d ' ')" -eq 2 ] && sed -n 1p "$UP/calls.txt" | grep -q -- '--validate-app' && sed -n 2p "$UP/calls.txt" | grep -q -- '--upload-package'; chk "upload step (success): Apple's validation runs first, then exactly ONE upload" $? "$(cat "$UP/calls.txt")"
+for n in 1 2; do
+  c="$(sed -n ${n}p "$UP/calls.txt")"
+  case "$c" in *"$UP/tmp/Runner.ipa"*"--platform ios"*"--apple-id 6753348211"*"--bundle-id $BID"*"--bundle-version 1000035"*"--bundle-short-version-string 1.0.4"*"--api-key $FAKEKEYID"*"--api-issuer $FAKEISSUER"*) r=0 ;; *) r=1 ;; esac
+  chk "upload step (success): call $n names THE verified IPA, the production record, the exact identity and the key" $r "$c"
+done
+grep -q '^env values containing the key text: 0$' "$UP/report.txt" && ! grep -q 'env var names with APPLE_API: [1-9]' "$UP/report.txt" && grep -q '^env values containing the key id other than KEYFILE: 0$' "$UP/report.txt" && grep -q '^env values containing the issuer id: 0$' "$UP/report.txt"; chk "upload step (success): altool's environment holds no APPLE_API_* variable, no key text and no issuer ID, and the key ID only inside the key file's name (KEYFILE), which altool needs" $?
+[ "$(grep -c 'key file readable: yes mode: 600' "$UP/report.txt")" -eq 2 ] && [ "$(grep -c 'key directory is the one altool is told: yes' "$UP/report.txt")" -eq 2 ]; chk "upload step (success): while altool runs the key file is readable, mode 600, in the directory altool is told (API_PRIVATE_KEYS_DIR)" $?
+grep -qx 'uploaded=yes' "$UP/evidence/upload-result.txt" && grep -qx 'validate_exit=0' "$UP/evidence/upload-result.txt" && grep -qx 'upload_exit=0' "$UP/evidence/upload-result.txt" && grep -qx "ipa_sha256=$IPAH" "$UP/evidence/upload-result.txt"; chk "upload step (success): the result is recorded (uploaded=yes, both exit codes, the digest of the uploaded file)" $?
+grep -q 'REDACTED' "$UP/evidence/upload.log" && grep -q 'REDACTED' "$UP/evidence/upload-validate.log" && grep -q 'Delivery UUID' "$UP/evidence/upload.log"; chk "upload step (success): the redacted logs show where material was redacted and keep Apple's delivery message" $?
+up_clean "success"
+[ -f "$UP/leak.log.calls" ] && grep -qx chmod "$UP/leak.log.calls" && grep -qx rm "$UP/leak.log.calls" && grep -qx head "$UP/leak.log.calls"; chk "upload step: the wrappers saw chmod, rm and head run (the environment check above is not vacuous)" $?
+# the redacted evidence must pass the seal
+( cd "$UP" && env -i PATH="$PATH" HOME="$HOME" bash -e "$STEP_seal" > "$UP/seal.out" 2>&1 ); [ $? -eq 0 ] && [ -f "$UP/evidence/SHA256SUMS.txt" ] && [ -f "$UP/evidence/upload-result.txt" ]; chk "upload step (success): the evidence it kept passes the evidence seal (nothing token- or key-shaped is left in it)" $? "$(tail -n 3 "$UP/seal.out")"
+# --- success, legacy interface
+run_upload 0 0 legacy
+[ "$UP_RC" -eq 0 ] && sed -n 1p "$UP/calls.txt" | grep -q -- "--validate-app -f $UP/tmp/Runner.ipa -t ios --apiKey $FAKEKEYID --apiIssuer $FAKEISSUER" && sed -n 2p "$UP/calls.txt" | grep -q -- "--upload-app -f $UP/tmp/Runner.ipa -t ios --apiKey $FAKEKEYID --apiIssuer $FAKEISSUER"; chk "upload step (legacy interface): validate-app then upload-app, the same file, -t ios and the camel-case key options" $? "$(cat "$UP/calls.txt")"
+up_clean "legacy interface"
+# --- the validation fails: NO upload
+run_upload 5 0 package
+[ "$UP_RC" -ne 0 ] && [ "$(wc -l < "$UP/calls.txt" | tr -d ' ')" -eq 1 ] && ! grep -q -- '--upload' "$UP/calls.txt" && grep -qx 'uploaded=no' "$UP/evidence/upload-result.txt" && grep -qx 'validate_exit=5' "$UP/evidence/upload-result.txt" && grep -q 'upload_exit=not attempted' "$UP/evidence/upload-result.txt"; chk "upload step (the validation fails): the step fails and NO upload command is ever run" $? "rc=$UP_RC $(cat "$UP/calls.txt")"
+[ -s "$UP/evidence/upload-validate.log" ] && [ ! -e "$UP/evidence/upload.log" ]; chk "upload step (the validation fails): the validation log is kept (redacted), there is no upload log" $?
+up_clean "the validation fails"
+# --- the IPA changes between the validation and the upload: NO upload (its digest is computed again, against the verified one)
+run_upload 0 0 package '' STUB_TOUCH_IPA=1
+[ "$UP_RC" -ne 0 ] && [ "$(wc -l < "$UP/calls.txt" | tr -d ' ')" -eq 1 ] && ! grep -q -- '--upload' "$UP/calls.txt" && grep -qx 'uploaded=no' "$UP/evidence/upload-result.txt" && grep -qx 'upload_exit=not attempted (the IPA changed after the validation)' "$UP/evidence/upload-result.txt" && grep -q 'IPA changed after the validation' "$UP/stdout"; chk "upload step (the IPA changes during the validation): the validation succeeded, but NO upload command is run, the result says why, and the step fails" $? "rc=$UP_RC $(cat "$UP/calls.txt")"
+up_clean "the IPA changes during the validation"
+# --- the redaction of the validation log fails: NO upload (fail closed)
+run_upload 0 0 package '' STUB_BREAK_LOG=1
+[ "$UP_RC" -ne 0 ] && [ "$(wc -l < "$UP/calls.txt" | tr -d ' ')" -eq 1 ] && ! grep -q -- '--upload' "$UP/calls.txt" && grep -qx 'uploaded=no' "$UP/evidence/upload-result.txt" && grep -qx 'upload_exit=not attempted (the redaction of the validation log failed)' "$UP/evidence/upload-result.txt" && [ ! -e "$UP/evidence/upload-validate.log" ] && [ ! -e "$UP/evidence/upload.log" ]; chk "upload step (the redaction of the validation log fails): the validation succeeded, but NO upload command is run, no log is kept, the result says why, and the step fails" $? "rc=$UP_RC $(cat "$UP/calls.txt")"
+up_clean "the redaction of the validation log fails"
+# --- the upload fails: reported, never repeated
+run_upload 0 7 package
+[ "$UP_RC" -ne 0 ] && [ "$(wc -l < "$UP/calls.txt" | tr -d ' ')" -eq 2 ] && grep -qx 'uploaded=no' "$UP/evidence/upload-result.txt" && grep -qx 'upload_exit=7' "$UP/evidence/upload-result.txt" && grep -q 'BEFORE any new run' "$UP/stdout"; chk "upload step (the upload fails): the step fails, the upload ran exactly once (no retry), the result says uploaded=no, and the message says to look in App Store Connect before a new run" $? "rc=$UP_RC"
+up_clean "the upload fails"
+# --- inputs that must stop the step before any file or process exists
+nocall() { # NAME  (a refusal: no altool call, no key file, a non-zero status)
+  [ "$UP_RC" -ne 0 ] && [ ! -s "$UP/calls.txt" ]; chk "upload step ($1): the step stops and altool is never run" $? "rc=$UP_RC"
+  [ -z "$(find "$UP" -name '*.p8')" ]; chk "upload step ($1): no key file exists afterwards" $?
+  [ "$(up_leaks)" = 0 ]; chk "upload step ($1): nothing of the credentials is printed or kept" $?
+}
+run_upload 0 0 package 'chmod 600 "$UP/tmp/Runner.ipa"; printf "%s" "changed after the re-check" > "$UP/tmp/Runner.ipa"'; nocall "the IPA changed since the pre-check"
+for badid in "../../evil" "short" "fakekey123" "FAKEKEY1234" $'FAKEKEY123\nX' "FAKE KEY12" '$(touch pwned)' ; do
+  UPKEYID="$badid" run_upload 0 0 package; nocall "a key ID of the wrong shape: $(printf '%s' "$badid" | head -c 14 | tr '\n' '_')"; [ ! -e "$UP/pwned" ] && [ ! -e "$UP/evil" ] && [ ! -e "$UP/tmp/evil.p8" ]; chk "upload step (bad key ID): no file was created from it anywhere" $?
+done
+UPISSUER="not-a-uuid" run_upload 0 0 package; nocall "an issuer ID that is not a UUID"
+UPISSUER=$'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee\n--extra-option' run_upload 0 0 package; nocall "an issuer ID with a second line (an extra option)"
+UPKEY="" run_upload 0 0 package; nocall "an empty key text"
+UPKEY="not a pem file" run_upload 0 0 package; nocall "a stored key that is not a PEM file"
+run_upload 0 0 weird; nocall "an unknown upload-tool syntax"
+run_upload 0 0 package 'rm -rf "$UP/tmp/asc-private-keys"'; nocall "the key directory is missing (the pre-check did not run)"
+unset UPKEY UPKEYID UPISSUER
+# --- the key-file check after the upload
+KC="$(mktemp -d -p "$tmp")"; mkdir -p "$KC/evidence" "$KC/tmp/asc-private-keys" "$KC/home"; : > "$KC/tmp/asc-private-keys/AuthKey_LEFTOVER12.p8"; : > "$KC/tmp/apple-api-key.p8"
+( cd "$KC" && env -i PATH="$PATH" HOME="$KC/home" RUNNER_TEMP="$KC/tmp" bash -e "$STEP_ukey" > "$KC/out" 2>&1 ); [ $? -ne 0 ] && [ ! -e "$KC/tmp/asc-private-keys" ] && [ ! -e "$KC/tmp/apple-api-key.p8" ] && grep -q 'A key file remained after the upload step' "$KC/out"; chk "key check after the upload: leftover key files are reported (the step fails), removed, and the directory is removed" $?
+! grep -qE 'LEFTOVER12|AuthKey_|apple-api-key|\.p8' "$KC/out"; chk "key check after the upload: nothing printed names a key file or contains the key ID (not the error, not the log)" $? "$(grep -E 'LEFTOVER12|AuthKey_|apple-api-key|\.p8' "$KC/out" | head -2)"
+# ... also when the removal itself FAILS (a read-only directory): the commands' own error messages name the file, so they must be discarded
+KC="$(mktemp -d -p "$tmp")"; mkdir -p "$KC/evidence" "$KC/tmp/ro" "$KC/home"; : > "$KC/tmp/ro/AuthKey_READONLY99.p8"; chmod 500 "$KC/tmp/ro"
+( cd "$KC" && env -i PATH="$PATH" HOME="$KC/home" RUNNER_TEMP="$KC/tmp" bash -e "$STEP_ukey" > "$KC/out" 2>&1 ); kc_rc=$?; chmod -R u+rwx "$KC/tmp" 2>/dev/null
+[ "$kc_rc" -ne 0 ] && ! grep -qE 'READONLY99|AuthKey_|\.p8' "$KC/out"; chk "key check after the upload: when the removal fails too, the step still fails and still prints no key file name or key ID" $? "rc=$kc_rc $(grep -E 'READONLY99|AuthKey_|\.p8' "$KC/out" | head -2)"
+KC="$(mktemp -d -p "$tmp")"; mkdir -p "$KC/evidence" "$KC/tmp" "$KC/home"
+( cd "$KC" && env -i PATH="$PATH" HOME="$KC/home" RUNNER_TEMP="$KC/tmp" bash -e "$STEP_ukey" > "$KC/out" 2>&1 ); [ $? -eq 0 ] && grep -qx 'key_file_removed_after_upload_step=yes' "$KC/evidence/key-removed-after-upload.txt"; chk "key check after the upload: with no key file the evidence says so (key_file_removed_after_upload_step=yes)" $?
+
 # ============================================================================================================================
 # 5. The evidence seal: tokens and key markers never reach an artifact
 # ============================================================================================================================
@@ -798,6 +1092,38 @@ m("X12_capture_no_ipa_search", "the capture step does not look for the IPA in th
 m("X13_capture_no_baseline", "the capture step is not given the archive's app", '--archive-app "${BASELINE_APP:-}"', '--archive-app ""')
 m("X14_capture_out_elsewhere", "the capture writes into the evidence root instead of its own folder", '--out evidence/v8-capture --evidence-dir evidence', '--out evidence --evidence-dir evidence')
 m("X15_log_failure_hidden", "a failed redaction of the distribution log is hidden", 'red=1; { echo "packaging_log=withheld: the redaction failed"', ':; { echo "packaging_log=withheld: the redaction failed"')
+# The upload: each edit that would let a failed verification, an unauthorized dispatch, another file or a leaked credential through
+m('UP1_precheck_not_gated', 'the pre-check step runs whether or not the upload is authorized', "      - name: Re-check the upload authorization and the exact IPA to upload (no secret yet)\n        if: needs.authorize.outputs.upload_authorized == 'true'\n", '      - name: Re-check the upload authorization and the exact IPA to upload (no secret yet)\n')
+m('UP2_upload_runs_after_failure', 'the upload step runs even after a failed step (always())', "      - name: Validate and upload the verified IPA (the second and last step with secrets)\n        if: needs.authorize.outputs.upload_authorized == 'true'\n", "      - name: Validate and upload the verified IPA (the second and last step with secrets)\n        if: always() && needs.authorize.outputs.upload_authorized == 'true'\n")
+m('UP2b_upload_only_after_failure', 'the upload step runs after a failed step (failure())', "      - name: Validate and upload the verified IPA (the second and last step with secrets)\n        if: needs.authorize.outputs.upload_authorized == 'true'\n", "      - name: Validate and upload the verified IPA (the second and last step with secrets)\n        if: failure() && needs.authorize.outputs.upload_authorized == 'true'\n")
+m('UP3_operation_not_required', 'any passing authorization grants the upload (the operation is not read)', '            [ "$op" = "sign-verify-and-upload" ] && upload_authorized=true\n', '            upload_authorized=true\n')
+m('UP4_output_missing', 'the authorize job no longer exposes upload_authorized', '      upload_authorized: ${{ steps.gate.outputs.upload_authorized }}\n', '')
+m('UP5_validation_failure_ignored', 'an upload is attempted after a failed validation', '          if [ "$proceed" -eq 1 ]; then\n            # 2. Upload THE SAME file, once.', '          if true; then\n            # 2. Upload THE SAME file, once.')
+m('UP6_digest_not_compared', 'the pre-check no longer compares the IPA with the verified digests', '[[ "$now" =~ $re_hex64 ]] && [ "$now" = "$exported" ] && [ "$now" = "$verified" ] || fail', 'true || fail')
+m('UP7_gate_verdict_ignored', "the pre-check ignores the gate's verdict", '|| { cat "$RUNNER_TEMP/upload-gate.txt"; fail "The release record no longer authorizes this run."; }', '|| true')
+m('UP8_operation_not_rechecked', "the pre-check does not re-read the record's operation", '[ "$op" = "sign-verify-and-upload" ] || fail "The release record\'s operation is \'$op\', not sign-verify-and-upload."', 'true')
+m('UP9_stale_tip_precheck', 'the pre-check compares the revision with itself instead of the live tip', '--workflow-sha "$GITHUB_SHA" --development-tip "$tip" > "$RUNNER_TEMP/upload-gate.txt"', '--workflow-sha "$GITHUB_SHA" --development-tip "$GITHUB_SHA" > "$RUNNER_TEMP/upload-gate.txt"')
+m('UP10_key_text_stays_in_env', "the key text stays in the environment of the upload step's processes", '          unset APPLE_API_KEY_P8\n          chmod 600 "$KEYFILE" 2>/dev/null\n', '          :\n          chmod 600 "$KEYFILE" 2>/dev/null\n')
+m('UP11_upload_env_not_stripped', "altool's upload runs with the secrets in its environment", '            env -u APPLE_API_KEY_P8 -u APPLE_API_KEY_ID -u APPLE_API_ISSUER_ID xcrun altool "${UPLOAD[@]}"', '            xcrun altool "${UPLOAD[@]}"')
+m('UP12_validate_env_not_stripped', "altool's validation runs with the secrets in its environment", '          env -u APPLE_API_KEY_P8 -u APPLE_API_KEY_ID -u APPLE_API_ISSUER_ID xcrun altool "${VALIDATE[@]}"', '          xcrun altool "${VALIDATE[@]}"')
+m('UP13_upload_log_not_redacted', 'the upload log is kept without redaction', '            redact "$RUNNER_TEMP/upload.raw.log" evidence/upload.log || red=1', '            cp "$RUNNER_TEMP/upload.raw.log" evidence/upload.log')
+m('UP14_validate_log_not_redacted', 'the validation log is kept without redaction', '          redact "$RUNNER_TEMP/validate.raw.log" evidence/upload-validate.log || red=1', '          cp "$RUNNER_TEMP/validate.raw.log" evidence/upload-validate.log')
+m('UP15_no_trap', 'the upload step has no trap that removes the key file', '          trap cleanup EXIT\n          # (Errors of these three commands', '          # (Errors of these three commands')
+m('UP16_shape_check_removed', 'the key ID and issuer ID shape check is removed', '[[ "$APPLE_API_KEY_ID" =~ $re_key ]] && [[ "$APPLE_API_ISSUER_ID" =~ $re_issuer ]] ||', 'true ||')
+m('UP17_second_upload', 'a second upload attempt', '            urc=$?\n            redact "$RUNNER_TEMP/upload.raw.log"', '            urc=$?\n            env -u APPLE_API_KEY_P8 -u APPLE_API_KEY_ID -u APPLE_API_ISSUER_ID xcrun altool "${UPLOAD[@]}" > "$RUNNER_TEMP/upload2.raw.log" 2>&1\n            redact "$RUNNER_TEMP/upload.raw.log"')
+m('UP18_upload_in_report_step', 'an upload command in another step', '      - name: Report (job summary)\n        if: always()\n        run: |\n          set +e\n', '      - name: Report (job summary)\n        if: always()\n        run: |\n          set +e\n          xcrun altool --upload-package "$IPA" --api-key x --api-issuer y\n')
+m('UP19_upload_continue_on_error', 'the upload step is continue-on-error', "      - name: Validate and upload the verified IPA (the second and last step with secrets)\n        if: needs.authorize.outputs.upload_authorized == 'true'\n", "      - name: Validate and upload the verified IPA (the second and last step with secrets)\n        if: needs.authorize.outputs.upload_authorized == 'true'\n        continue-on-error: true\n")
+m('UP20_probe_never_stops', 'the probe never stops the run', '          if [ -z "$altool_path" ] || [ "$syntax" = none ]; then', '          if false; then')
+m('UP21_ipa_not_rechecked_before_upload', "the IPA's digest is not compared again right before the upload", '[ "$(shasum -a 256 "$IPA" | awk \'{print $1}\')" = "$UPLOAD_IPA_SHA256" ] || { echo "::error::The IPA changed since it was re-checked. Nothing was uploaded."; exit 1; }', ':')
+m('UP22_probe_not_gated', 'the probe runs (and can fail) for every dispatch, authorized or not', "      - name: Probe Apple's upload tool (no secret; stops here, before any credential, if it cannot be used)\n        if: needs.authorize.outputs.upload_authorized == 'true'\n", "      - name: Probe Apple's upload tool (no secret; stops here, before any credential, if it cannot be used)\n")
+m('UP23_legacy_validate_skipped', 'the legacy interface uploads without validating', '              VALIDATE=(--validate-app -f "$IPA" "${COMMON[@]}")', '              VALIDATE=(--version)')
+m('UP24_upload_flag_changed', 'the upload command names another operation', 'UPLOAD=(--upload-package "$IPA" "${COMMON[@]}")', 'UPLOAD=(--validate-app "$IPA" "${COMMON[@]}")')
+m('UP25_wrong_ipa_uploaded', 'another file than the verified IPA is uploaded', 'UPLOAD=(--upload-package "$IPA" "${COMMON[@]}")', 'UPLOAD=(--upload-package "$RUNNER_TEMP/other.ipa" "${COMMON[@]}")')
+m('UP26_apple_id_dropped', 'the App Store Connect record is not named', 'COMMON=(--platform ios --apple-id "$APP_APPLE_ID" --bundle-id', 'COMMON=(--platform ios --bundle-id')
+m('UP27_cleanup_prints_key_name', "the final key-file check prints the key file's name", 'echo "::error::A key file remained after the upload step ($nleft file(s)); removal was attempted. The name is deliberately not shown."', 'echo "::error::A key file remains: $left"')
+m('UP28_cleanup_rm_messages_shown', "the final key-file check shows the removal commands' own error messages", '            rm -P -f $left >/dev/null 2>&1 || rm -f $left >/dev/null 2>&1\n', '            rm -P -f $left || rm -f $left\n')
+m('UP29_redaction_failure_does_not_stop_upload', 'a failed redaction of the validation log no longer stops the upload', '            if [ "$red" -ne 0 ]; then\n              skip_reason="the redaction of the validation log failed"\n', '            if false; then\n              skip_reason="the redaction of the validation log failed"\n')
+m('UP30_ipa_not_rechecked_after_validation', "the IPA's digest is not computed again after the validation", '            elif [ "$(shasum -a 256 "$IPA" | awk \'{print $1}\')" != "$UPLOAD_IPA_SHA256" ]; then\n', '            elif false; then\n')
 res = []
 for mid, desc, old, new, which in M:
     cnt = src.count(old)

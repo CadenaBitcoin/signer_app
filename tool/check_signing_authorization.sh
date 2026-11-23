@@ -7,7 +7,8 @@
 #   tool/check_signing_authorization.sh --print-field KEY --record FILE --tools-root DIR
 #
 # Prints every reason and exits
-#   0  the release record carries a complete, matching "sign and verify only" authorization (G2S);
+#   0  the release record carries a complete, matching authorization of ONE hosted operation: "sign and verify only" (G2S), or "sign, verify and
+#      upload the SAME verified IPA" (G2S-OPERATION sign-verify-and-upload; record status G2 AUTHORIZED, and D1, D2, D4 and D5 decided);
 #   1  it does not (the default: a record without the G2S lines is NOT authorized);
 #   2  the call itself is wrong (missing or malformed argument, unreadable file).
 #
@@ -16,8 +17,11 @@
 # and the merged pull request that adds the lines below (docs/IOS_HOSTED_SIGNING.md section 5). It is an automated
 # tripwire so that the workflow cannot sign before that decision exists; it is not the authorization.
 #
-# G2S is exactly: sign and verify ONE approved iOS release artifact. No upload, no tester distribution. G2 (signing plus
-# the one upload) and G3 to G5 are separate and are not read here.
+# Two operations exist, and the record names exactly one of them in G2S-OPERATION:
+#   sign-and-verify-only    sign and verify ONE approved iOS release artifact. No upload, no tester distribution.
+#   sign-verify-and-upload  the same, and then ONE upload of the SAME verified IPA to App Store Connect (the workflow's upload steps run only when the
+#                           record names this operation). It needs the record status `G2 AUTHORIZED` and the upload-time decisions D1, D2, D4 and D5
+#                           (UPLOAD_DECISIONS below) in addition. It is NOT tester assignment (G3), App Review (G4) or release (G5): those are not read here.
 #
 # The record must contain, each on a line of its own, at column 0, exactly once, with LF line endings, and NOT inside a
 # fenced code block or an HTML comment (those are not what a reader of the record sees, so they never count):
@@ -61,6 +65,11 @@ TOOL_FILES="tool/build_manifest.py tool/ipa_inspect.py tool/validate_handover_ar
 # D4 (production App Store Connect record), D5 (production gate), X1 (export compliance, App Privacy), X2 (privacy
 # manifest) and the prerequisites of record section 4.1. The signed IPA never leaves the runner under G2S.
 REQUIRED_DECISIONS="D3 D6 D7 D8 D9 D10 D11 D12 D14"
+# Also required, and only for the operation sign-verify-and-upload: D1 (Issue #22 residual risk), D2 (zero-value wallets), D4 (the production
+# App Store Connect record), D5 (the production gate). X1 and X2 (export compliance, privacy manifest) are answered with Apple and are not read here.
+UPLOAD_DECISIONS="D1 D2 D4 D5"
+OP_SIGN="sign-and-verify-only"
+OP_UPLOAD="sign-verify-and-upload"
 
 RE_SHA='^[0-9a-f]{40}$'
 RE_VERSION='^[0-9]+\.[0-9]+\.[0-9]+\+[0-9]+$'
@@ -191,7 +200,15 @@ expect() { # KEY EXPECTED
 }
 
 expect G2S-STATUS "AUTHORIZED"
-expect G2S-OPERATION "sign-and-verify-only"
+# The operation: exactly one of the two. A value that merely contains the word upload ("sign-and-upload") is refused like any other.
+mode=""
+if getfield G2S-OPERATION; then
+  case "$FIELD" in
+    "$OP_SIGN") mode=sign; yes "G2S-OPERATION = $OP_SIGN" ;;
+    "$OP_UPLOAD") mode=upload; yes "G2S-OPERATION = $OP_UPLOAD (ONE signing, verification and upload of the SAME verified IPA)" ;;
+    *) no "G2S-OPERATION is '$FIELD', expected $OP_SIGN or $OP_UPLOAD" ;;
+  esac
+fi
 expect G2S-APPROVED-SHA "$sha"
 expect G2S-VERSION "$version"
 expect G2S-BUNDLE-ID "$bundle"
@@ -218,7 +235,9 @@ st_count="$(printf '%s\n' "$st_lines" | grep -c . || true)"
 if [ "$st_count" -ne 1 ]; then no "the record must carry exactly one '**Record Status: \`...\`**' line (found $st_count)"
 else
   case "$st_lines" in
-    '**Record Status: `G1 AUTHORIZED`**'|'**Record Status: `G2 AUTHORIZED`**') yes "record status allows this stage ($st_lines)" ;;
+    '**Record Status: `G2 AUTHORIZED`**') yes "record status allows this stage ($st_lines)" ;;
+    '**Record Status: `G1 AUTHORIZED`**')
+      if [ "$mode" = upload ]; then no "an upload needs the record status G2 AUTHORIZED (it is G1 AUTHORIZED)"; else yes "record status allows this stage ($st_lines)"; fi ;;
     *) no "record status is not G1 AUTHORIZED or G2 AUTHORIZED ($st_lines)" ;;
   esac
 fi
@@ -231,18 +250,23 @@ else no "the record's APPROVED_SHA row does not name $sha"; fi
 cell() { # ID N_FROM_RIGHT (1 = Date, 2 = By, 3 = Status)
   grep "^| $1 | " "$eff" | awk -F'|' -v k="$2" '{ n = NF; if ($n ~ /^[ \t]*$/) n--; v = $(n - k + 1); gsub(/^[ \t]+|[ \t]+$/, "", v); print v }'
 }
-for id in $REQUIRED_DECISIONS; do
+needed="$REQUIRED_DECISIONS"; [ "$mode" = upload ] && needed="$needed $UPLOAD_DECISIONS"
+for id in $needed; do
   n="$(grep -c "^| $id | " "$eff" || true)"
-  if [ "$n" -ne 1 ]; then no "decision row $id must appear exactly once in the decision table (found $n); G2S needs: $REQUIRED_DECISIONS"; continue; fi
+  if [ "$n" -ne 1 ]; then no "decision row $id must appear exactly once in the decision table (found $n); this operation needs: $needed"; continue; fi
   st="$(cell "$id" 3)"; by="$(cell "$id" 2)"; dt="$(cell "$id" 1)"
   if [ "$st" = "Decided" ] && [ -n "$by" ] && [ "$by" != "TBD" ] && isexact "$dt" "$RE_DATE"; then yes "decision $id is Decided (by $by, $dt)"
-  else no "decision $id is not decided (Status '$st', By '$by', Date '$dt'); G2S needs Status 'Decided', a name and a date"; fi
+  else no "decision $id is not decided (Status '$st', By '$by', Date '$dt'); this operation needs Status 'Decided', a name and a date"; fi
 done
 
 # The workflow revision must be the tip of development: a re-run of an old run cannot outlive a withdrawal.
 if [ "$wfsha" = "$tip" ]; then yes "this workflow revision ($wfsha) is the current tip of development"
 else no "this workflow revision ($wfsha) is not the current tip of development ($tip): a historical or re-run workflow cannot sign; start a new run from the tip"; fi
 
-if [ "$fail" -eq 0 ]; then echo "AUTHORIZED: hosted signing and verification only (no upload, no G2 upload gate, no G3 to G5)"; exit 0; fi
+if [ "$fail" -eq 0 ]; then
+  if [ "$mode" = upload ]; then echo "AUTHORIZED: hosted signing, verification and ONE upload of the SAME verified IPA (no tester assignment G3, no App Review G4, no release G5)"
+  else echo "AUTHORIZED: hosted signing and verification only (no upload, no G2 upload gate, no G3 to G5)"; fi
+  exit 0
+fi
 echo "Signing stays refused. The CTO's written decision and a merged, reviewed record pull request add the G2S lines and decide the rows above (docs/IOS_HOSTED_SIGNING.md section 5)."
 exit 1

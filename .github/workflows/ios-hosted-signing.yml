@@ -1,4 +1,5 @@
-# iOS HOSTED SIGNING: sign and verify ONLY (Issue #71, iOS 1.0.4 (1000035)). Not an upload, not a release.
+# iOS HOSTED SIGNING: sign and verify, and ONLY when the release record authorizes it, upload the SAME verified IPA (Issue #71, iOS 1.0.4 (1000035)).
+# Not a release, not tester assignment, not App Review. Without the record's operation `sign-verify-and-upload` it is sign and verify ONLY and NOT an upload.
 # Design, manual configuration, authorization and open questions: docs/IOS_HOSTED_SIGNING.md.
 #
 # WHAT IT DOES (three jobs, started by hand only):
@@ -21,11 +22,15 @@
 #                   secret; the key file exists for that one command, the key text is removed from the environment before
 #                   Xcode starts, and a trap removes the file);
 #                3. verifies the exported IPA (docs/IOS_RELEASE.md section 9, V1 to V9, tool/verify_ipa.py) with no secret present;
-#                4. keeps TEXT evidence only: the certificate fingerprint to record before any later upload, the checks, hashes.
+#                4. ONLY when the record's operation is `sign-verify-and-upload` (authorize job output upload_authorized): after V1 to V9 and the digest
+#                   check have ALL succeeded, uploads that same IPA from this runner with Apple's `altool` (validate, then upload). Two steps of this job hold
+#                   the secrets (export, upload); neither is part of a verification, and the upload is the last of the signing job's work;
+#                5. keeps TEXT evidence only: the certificate fingerprint, the checks, hashes, and the upload's redacted result.
 #
 # WHAT IT MUST NEVER DO, and tool/test_ios_hosted_signing.sh checks this statically:
-#   - upload anything to Apple or anywhere: no altool, Transporter, `destination upload`, App Store Connect API call, TestFlight
-#     or review call. The IPA never leaves the runner: it is not an artifact (docs/IOS_SIGNING.md section 2, item 8);
+#   - upload anything to Apple or anywhere EXCEPT through the one gated step below (altool, from this runner, the same IPA, only when the record's
+#     operation is `sign-verify-and-upload`): no Transporter, no `destination upload`, no other App Store Connect API call, no TestFlight, tester
+#     assignment or review call. The IPA never leaves the runner except to Apple: it is not an artifact (docs/IOS_SIGNING.md section 2, item 8);
 #   - run on a push, a pull request or a schedule; use pull_request_target or workflow_run; run on a branch other than `development`;
 #   - expose a secret to the build job, to a dependency, to a step that is not named below, or to a log;
 #   - build, rebuild or change the approved source; pass a version override; sign anything but the archive of this run;
@@ -79,6 +84,9 @@ env:
   RUST_LIB: flutter_plugin/flutter_plugin/ios/Classes/libdlcplazacryptlib.a
   EXPECTED_RUST_LIB_SHA256: 203dcd7abe4187de0b756638a55f691b2d5c680b17d4fbfa7dda550ed703949b
   CONTENT_PATHS: "lib ios flutter_plugin pubspec.yaml pubspec.lock config/build android"
+  # The App Store Connect record of the production app (an identifier, not a secret; coordinator-reported in the release record, section 5 item 2).
+  # altool's current interface needs it; a wrong value is refused by Apple, it cannot send the IPA to another app (the bundle ID is inside the IPA).
+  APP_APPLE_ID: "6753348211"
 
 jobs:
   # ------------------------------------------------------------------------------------------------------------------
@@ -88,6 +96,7 @@ jobs:
     timeout-minutes: 5
     outputs:
       authorized: ${{ steps.gate.outputs.authorized }}
+      upload_authorized: ${{ steps.gate.outputs.upload_authorized }}
     steps:
       - name: Validate the inputs
         env:
@@ -150,10 +159,18 @@ jobs:
             if [ "$rc" -eq 0 ]; then authorized=true
             elif [ "$rc" -ne 1 ]; then cat "$RUNNER_TEMP/gate.txt"; echo "::error::The authorization check could not run (exit $rc)."; exit 1; fi
           fi
+          # The UPLOAD is a separate answer: yes only when the gate passed AND the record names the operation sign-verify-and-upload (for which the gate has
+          # also required the record status G2 AUTHORIZED and D1, D2, D4 and D5). The lines of an earlier sign-and-verify-only authorization can never give it.
+          upload_authorized=false
+          if [ "$authorized" = true ]; then
+            op="$(bash tool/check_signing_authorization.sh --print-field G2S-OPERATION --record "$record" --tools-root . 2>/dev/null || true)"
+            [ "$op" = "sign-verify-and-upload" ] && upload_authorized=true
+          fi
           cat "$RUNNER_TEMP/gate.txt"
           echo "authorized=$authorized" >> "$GITHUB_OUTPUT"
+          echo "upload_authorized=$upload_authorized" >> "$GITHUB_OUTPUT"
           {
-            echo "Authorized: **$authorized**"
+            echo "Authorized: **$authorized**; upload of the verified IPA authorized: **$upload_authorized**"
             echo '```'
             cat "$RUNNER_TEMP/gate.txt"
             echo '```'
@@ -575,8 +592,40 @@ jobs:
             echo "provisioning profiles installed: $(ls "$HOME/Library/MobileDevice/Provisioning Profiles" 2>/dev/null | wc -l | tr -d ' ')"
           } | tee evidence/signing-material-before.txt
 
+      # Apple's upload tool, looked at BEFORE any credential exists. The runner's Xcode decides which interface it offers (the current `--upload-package` with
+      # --api-key and --api-issuer, or the legacy `--upload-app` with --apiKey and --apiIssuer); this step reads `altool --help` and refuses to go on when neither
+      # is complete, so a missing or changed tool stops the run here, with the export (and so the authorization's single use) still ahead.
+      - name: Probe Apple's upload tool (no secret; stops here, before any credential, if it cannot be used)
+        if: needs.authorize.outputs.upload_authorized == 'true'
+        run: |
+          set -uo pipefail
+          set +e
+          mkdir -p evidence
+          altool_path="$(xcrun --find altool 2>/dev/null)"
+          help_text="$(xcrun altool --help 2>&1)"; help_rc=$?
+          printf '%s\n' "$help_text" | head -n 150 > evidence/upload-tool-help.txt
+          has() { printf '%s\n' "$help_text" | grep -F -- "$1" >/dev/null; }
+          syntax=none
+          if has '--upload-package' && has '--validate-app' && has '--api-key' && has '--api-issuer' && has '--platform' && has '--apple-id' && has '--bundle-version' && has '--bundle-short-version-string'; then
+            syntax=package
+          elif has '--upload-app' && has '--validate-app' && has '--apiKey' && has '--apiIssuer'; then
+            syntax=legacy
+          fi
+          {
+            echo "altool_path=${altool_path:-none}"
+            echo "altool_help_exit=$help_rc"
+            echo "xcode=$(xcodebuild -version | sed -n 1p)"
+            echo "syntax=$syntax"
+          } > evidence/upload-tool-probe.txt
+          cat evidence/upload-tool-probe.txt
+          if [ -z "$altool_path" ] || [ "$syntax" = none ]; then
+            echo "::error::Apple's upload tool, altool, does not offer a supported interface on this runner (evidence: upload-tool-probe.txt, upload-tool-help.txt). Stopping before any credential is used; nothing was signed or uploaded."
+            exit 1
+          fi
+          printf '%s\n' "$syntax" > "$RUNNER_TEMP/upload-syntax"
+
       # ---------------------------------------------------------------------------------------------------------------
-      # THE ONLY STEP THAT HOLDS A SECRET. It runs Apple's xcodebuild and a text redaction filter, nothing from the
+      # THE FIRST OF TWO STEPS THAT HOLD A SECRET (the other uploads: see below). It runs Apple's xcodebuild and a text redaction filter, nothing from the
       # repository and no dependency. The key file exists for this one command (mode 600, in RUNNER_TEMP, outside the
       # workspace and outside every artifact path) and a trap removes it on every exit. Nothing is printed with set -x.
       # Cloud-managed signing: signingStyle automatic + -allowProvisioningUpdates + the App Store Connect team API key. Apple
@@ -895,6 +944,198 @@ jobs:
           { echo "ipa_sha256_after_export=$before"; echo "ipa_sha256_after_verification=$after"; echo "ipa_size=$(stat -f%z "$IPA")"; } | tee evidence/ipa-digest.txt
           [ "$before" = "$after" ] || { echo "::error::The IPA changed between the export and the end of verification."; exit 1; }
 
+      # ----------------------------------------------------------------------------------------------------------------------------------
+      # THE UPLOAD of the SAME verified IPA. Two steps, both only when the authorize job said upload_authorized (the record's operation is
+      # sign-verify-and-upload). Neither has `always()` or `failure()` in its condition, so GitHub runs them only if EVERY earlier step of this job
+      # succeeded: V1 to V9 and the digest check are earlier steps, so a failed verification means no upload. Neither is continue-on-error.
+      # The first holds no secret. The second is the only other step with secrets; it validates, then uploads, nothing else.
+      # ----------------------------------------------------------------------------------------------------------------------------------
+      - name: Re-check the upload authorization and the exact IPA to upload (no secret yet)
+        if: needs.authorize.outputs.upload_authorized == 'true'
+        env:
+          APPROVED_SHA: ${{ inputs.approved_sha }}
+          EXPECTED_VERSION: ${{ inputs.expected_version }}
+        run: |
+          set -uo pipefail
+          set +e
+          mkdir -p evidence
+          fail() { echo "::error::$1 Nothing was uploaded and this step used no secret."; exit 1; }
+          [ -n "${IPA:-}" ] && [ -f "$IPA" ] && [ ! -L "$IPA" ] || fail "The verified IPA is missing."
+          # The authorization, read again NOW with the live tip of development: a withdrawal merged while this run was going stops the upload here.
+          record="tools/docs/release-records/ios-${EXPECTED_VERSION%%+*}-${EXPECTED_VERSION##*+}.md"
+          tip="$(git ls-remote "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY.git" refs/heads/development 2>/dev/null | awk '$2 == "refs/heads/development" { print $1 }')"
+          [ -n "$tip" ] || fail "The current tip of development could not be read."
+          gate_line="$(grep '^G2S-GATE-BLOB: ' "$record" || true)"
+          have_line="G2S-GATE-BLOB: $(git hash-object tools/tool/check_signing_authorization.sh)"
+          [ "$gate_line" = "$have_line" ] || fail "The record has no single G2S-GATE-BLOB line naming this gate."
+          bash tools/tool/check_signing_authorization.sh --record "$record" --approved-sha "$APPROVED_SHA" --version "$EXPECTED_VERSION" \
+            --bundle-id "$BUNDLE_ID" --team-id "$TEAM_ID" --tools-root tools --workflow-sha "$GITHUB_SHA" --development-tip "$tip" > "$RUNNER_TEMP/upload-gate.txt" 2>&1 \
+            || { cat "$RUNNER_TEMP/upload-gate.txt"; fail "The release record no longer authorizes this run."; }
+          op="$(bash tools/tool/check_signing_authorization.sh --print-field G2S-OPERATION --record "$record" --tools-root tools)"
+          [ "$op" = "sign-verify-and-upload" ] || fail "The release record's operation is '$op', not sign-verify-and-upload."
+          # The exact IPA: the file that was exported, verified and digested is the file that will be uploaded (the digest is checked three times).
+          re_hex64='^[0-9a-f]{64}$'
+          now="$(shasum -a 256 "$IPA" | awk '{print $1}')"
+          exported="$(sed -n 's/^ipa_sha256_after_export=//p' evidence/export-result.txt)"
+          verified="$(sed -n 's/^ipa_sha256_after_verification=//p' evidence/ipa-digest.txt)"
+          [[ "$now" =~ $re_hex64 ]] && [ "$now" = "$exported" ] && [ "$now" = "$verified" ] || fail "The IPA is not the file that was exported and verified (digests: now $now, export $exported, verification $verified)."
+          bid="$(sed -n 's/^CFBundleIdentifier=//p' evidence/v1-identity.txt)"
+          ver="$(sed -n 's/^CFBundleShortVersionString=//p' evidence/v1-identity.txt)"
+          bld="$(sed -n 's/^CFBundleVersion=//p' evidence/v1-identity.txt)"
+          [ "$bid" = "$BUNDLE_ID" ] && [ "$ver+$bld" = "$EXPECTED_VERSION" ] || fail "The IPA says $bid $ver+$bld, expected $BUNDLE_ID $EXPECTED_VERSION."
+          syntax="$(cat "$RUNNER_TEMP/upload-syntax" 2>/dev/null)"
+          case "$syntax" in package|legacy) ;; *) fail "No upload-tool syntax was probed." ;; esac
+          # The private-key directory the upload step will use: empty, mode 700, created here so that the secret step starts no process before the key is written.
+          rm -rf "$RUNNER_TEMP/asc-private-keys"
+          mkdir -m 700 "$RUNNER_TEMP/asc-private-keys" || fail "The key directory could not be created."
+          {
+            echo "UPLOAD_SYNTAX=$syntax"
+            echo "UPLOAD_BUNDLE_ID=$bid"
+            echo "UPLOAD_SHORT_VERSION=$ver"
+            echo "UPLOAD_BUILD=$bld"
+            echo "UPLOAD_IPA_SHA256=$now"
+          } >> "$GITHUB_ENV"
+          {
+            echo "operation=sign-verify-and-upload"
+            echo "ipa_sha256=$now"
+            echo "digest_equal_after_export_after_verification_and_now=yes"
+            echo "bundle_id=$bid"; echo "version=$ver"; echo "build=$bld"
+            echo "tool_syntax=$syntax"
+            echo "development_tip_read_now=$tip"
+          } | tee evidence/upload-precheck.txt
+
+      - name: Validate and upload the verified IPA (the second and last step with secrets)
+        if: needs.authorize.outputs.upload_authorized == 'true'
+        env:
+          APPLE_API_KEY_P8: ${{ secrets.APPLE_API_KEY_P8 }}
+          APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
+          APPLE_API_ISSUER_ID: ${{ secrets.APPLE_API_ISSUER_ID }}
+        run: |
+          set -uo pipefail
+          # No errexit: a failing altool must still leave redacted evidence, and the trap removes the key file on every exit.
+          set +e
+          set +x
+          umask 077
+          unset BASH_ENV ENV DYLD_INSERT_LIBRARIES DYLD_LIBRARY_PATH DYLD_FRAMEWORK_PATH
+          [ -n "$APPLE_API_KEY_P8" ] && [ -n "$APPLE_API_KEY_ID" ] && [ -n "$APPLE_API_ISSUER_ID" ] || { echo "::error::A secret of the environment ios-hosted-signing is missing (docs/IOS_HOSTED_SIGNING.md section 4)."; exit 1; }
+          # The key ID names a file and the issuer ID is an argument: both must have the exact shape Apple gives them. (Shell builtins only: no process has started.)
+          re_key='^[A-Z0-9]{10}$'
+          re_issuer='^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$'
+          [[ "$APPLE_API_KEY_ID" =~ $re_key ]] && [[ "$APPLE_API_ISSUER_ID" =~ $re_issuer ]] || { echo "::error::The key ID or the issuer ID does not have the shape Apple issues."; exit 1; }
+          export KEYDIR="$RUNNER_TEMP/asc-private-keys"
+          export KEYFILE="$KEYDIR/AuthKey_${APPLE_API_KEY_ID}.p8"
+          cleanup() { rm -P -f "$KEYFILE" 2>/dev/null || rm -f "$KEYFILE"; }
+          trap cleanup EXIT
+          # (Errors of these three commands are not shown: the shell's message would name the file, and so the key ID.)
+          { printf '%s\n' "$APPLE_API_KEY_P8" > "$KEYFILE"; } 2>/dev/null
+          unset APPLE_API_KEY_P8
+          chmod 600 "$KEYFILE" 2>/dev/null
+          [ "$(head -n 1 "$KEYFILE" 2>/dev/null)" = "-----BEGIN PRIVATE KEY-----" ] || { echo "::error::The stored key is not a PEM PKCS#8 file (.p8), or it could not be stored."; exit 1; }
+          export API_PRIVATE_KEYS_DIR="$KEYDIR"
+          mkdir -p evidence
+
+          # The same redaction filter as the export step: it removes the exact key ID, issuer ID, key lines and key path, PEM markers, JWT-shaped and bearer tokens,
+          # and FAILS (nothing is kept) if an exact value is still present afterwards.
+          cat > "$RUNNER_TEMP/redact.py" <<'PY'
+          import os, re, sys
+          vals = [os.environ.get("APPLE_API_KEY_ID", ""), os.environ.get("APPLE_API_ISSUER_ID", ""), os.environ.get("KEYFILE", "")]
+          vals += [l.strip() for l in open(os.environ["KEYFILE"], encoding="utf-8", errors="replace").read().splitlines()]
+          vals = sorted({v for v in vals if len(v) >= 6}, key=len, reverse=True)
+          data = open(sys.argv[1], "rb").read(4000000).decode("utf-8", "replace")
+          for v in vals:
+              data = data.replace(v, "[REDACTED]")
+          data = re.sub(r"eyJ[A-Za-z0-9_-]{4,}\.[A-Za-z0-9_-]{4,}(\.[A-Za-z0-9_-]*)?", "[REDACTED]", data)
+          data = re.sub(r"(?i)(bearer|authorization:?)\s+[A-Za-z0-9._~+/=-]{8,}", r"\1 [REDACTED]", data)
+          data = re.sub(r"-----(BEGIN|END)[A-Z ]*PRIVATE KEY-----", "[REDACTED]", data)
+          if "PRIVATE KEY" in data:
+              data = data.replace("PRIVATE KEY", "[REDACTED]")
+          if any(v in data for v in vals):
+              sys.exit(3)
+          open(sys.argv[2], "w").write(data)
+          PY
+          red=0
+          redact() { python3 -I "$RUNNER_TEMP/redact.py" "$1" "$2" || { echo "::error::The redaction of $1 failed; nothing of it is kept."; rm -f "$2"; return 1; }; }
+
+          # The command lines, by the interface the probe found. The IPA is the file the previous step re-checked; nothing is rebuilt or exported again.
+          case "$UPLOAD_SYNTAX" in
+            package)
+              COMMON=(--platform ios --apple-id "$APP_APPLE_ID" --bundle-id "$UPLOAD_BUNDLE_ID" --bundle-version "$UPLOAD_BUILD" --bundle-short-version-string "$UPLOAD_SHORT_VERSION" --api-key "$APPLE_API_KEY_ID" --api-issuer "$APPLE_API_ISSUER_ID")
+              VALIDATE=(--validate-app "$IPA" "${COMMON[@]}")
+              UPLOAD=(--upload-package "$IPA" "${COMMON[@]}") ;;
+            legacy)
+              COMMON=(-t ios --apiKey "$APPLE_API_KEY_ID" --apiIssuer "$APPLE_API_ISSUER_ID")
+              VALIDATE=(--validate-app -f "$IPA" "${COMMON[@]}")
+              UPLOAD=(--upload-app -f "$IPA" "${COMMON[@]}") ;;
+            *) echo "::error::No upload-tool syntax was probed."; exit 1 ;;
+          esac
+          [ "$(shasum -a 256 "$IPA" | awk '{print $1}')" = "$UPLOAD_IPA_SHA256" ] || { echo "::error::The IPA changed since it was re-checked. Nothing was uploaded."; exit 1; }
+          urc=-1
+          # 1. Validate (Apple's own pre-upload validation; it uploads nothing). A failure ends the step: there is no upload after a failed validation.
+          env -u APPLE_API_KEY_P8 -u APPLE_API_KEY_ID -u APPLE_API_ISSUER_ID xcrun altool "${VALIDATE[@]}" > "$RUNNER_TEMP/validate.raw.log" 2>&1
+          vrc=$?
+          redact "$RUNNER_TEMP/validate.raw.log" evidence/upload-validate.log || red=1
+          # 1b. Before the upload, and only if the validation succeeded: the validation log must have been kept (redaction is fail-closed), and the file
+          # on disk must STILL be the verified IPA (its digest is computed again now, after the validation and immediately before the upload).
+          proceed=0
+          skip_reason="the validation failed"
+          if [ "$vrc" -eq 0 ]; then
+            if [ "$red" -ne 0 ]; then
+              skip_reason="the redaction of the validation log failed"
+            elif [ "$(shasum -a 256 "$IPA" | awk '{print $1}')" != "$UPLOAD_IPA_SHA256" ]; then
+              skip_reason="the IPA changed after the validation"
+            else
+              proceed=1
+            fi
+          fi
+          if [ "$proceed" -eq 1 ]; then
+            # 2. Upload THE SAME file, once. No loop, no retry: a failure is reported and a person decides.
+            env -u APPLE_API_KEY_P8 -u APPLE_API_KEY_ID -u APPLE_API_ISSUER_ID xcrun altool "${UPLOAD[@]}" > "$RUNNER_TEMP/upload.raw.log" 2>&1
+            urc=$?
+            redact "$RUNNER_TEMP/upload.raw.log" evidence/upload.log || red=1
+          fi
+          cleanup
+          {
+            echo "ipa_sha256=$UPLOAD_IPA_SHA256"
+            echo "bundle_id=$UPLOAD_BUNDLE_ID"; echo "version=$UPLOAD_SHORT_VERSION"; echo "build=$UPLOAD_BUILD"
+            echo "tool_syntax=$UPLOAD_SYNTAX"
+            echo "validate_exit=$vrc"
+            if [ "$proceed" -eq 1 ]; then echo "upload_exit=$urc"; else echo "upload_exit=not attempted ($skip_reason)"; fi
+            if [ "$proceed" -eq 1 ] && [ "$urc" -eq 0 ]; then echo "uploaded=yes"; else echo "uploaded=no"; fi
+            echo "finished_utc=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          } > evidence/upload-result.txt
+          cat evidence/upload-result.txt
+          [ "$red" -eq 0 ] || { echo "::error::A redaction failed. The log of this step is withheld; the result above stands."; exit 1; }
+          echo "---- altool (redacted), last 40 lines ----"
+          if [ "$proceed" -eq 1 ]; then tail -n 40 evidence/upload.log; else tail -n 40 evidence/upload-validate.log; fi
+          if [ "$vrc" -ne 0 ]; then
+            echo "::error::Apple's validation of the IPA failed (exit $vrc). Nothing was uploaded. The signed IPA is gone with the runner; read evidence/upload-validate.log."
+            exit 1
+          fi
+          if [ "$proceed" -ne 1 ]; then
+            echo "::error::Nothing was uploaded: $skip_reason. The signed IPA is gone with the runner."
+            exit 1
+          fi
+          if [ "$urc" -ne 0 ]; then
+            echo "::error::The upload failed (exit $urc). The signed IPA is gone with the runner. Look in App Store Connect for a build 1.0.4 (1000035) BEFORE any new run, and do not use GitHub's Re-run."
+            exit 1
+          fi
+          echo "The IPA was uploaded. Processing in App Store Connect follows; it is not an approval, and no tester has been assigned."
+
+      - name: Check again that no key file remains (after the upload step)
+        if: always()
+        run: |
+          set +e
+          mkdir -p evidence
+          left="$(find "$RUNNER_TEMP" "$HOME" -maxdepth 4 \( -name 'apple-api-key.p8' -o -name 'AuthKey_*.p8' \) 2>/dev/null | head -n 5)"
+          # The name of a key file contains the key ID: it is NEVER printed, not even in an error (the commands' own messages are discarded too).
+          if [ -n "$left" ]; then
+            nleft="$(printf '%s\n' "$left" | wc -l | tr -d ' ')"
+            echo "::error::A key file remained after the upload step ($nleft file(s)); removal was attempted. The name is deliberately not shown."
+            rm -P -f $left >/dev/null 2>&1 || rm -f $left >/dev/null 2>&1
+          fi
+          rm -rf "$RUNNER_TEMP/asc-private-keys" >/dev/null 2>&1
+          [ -z "$left" ] && echo "key_file_removed_after_upload_step=yes" | tee evidence/key-removed-after-upload.txt
+
       # Phase 7C (Issue #71). READ-ONLY EVIDENCE for the open V8 question (what did the export change in the app's top-level Info.plist?) and for
       # the DER entitlements blob of the Distribution-signed executable. It runs even when V7 or V8 failed (if: always()), uses no secret and no
       # network, writes only under evidence/, keeps no IPA and no profile, decides nothing, and is NOT continue-on-error: if the export
@@ -944,7 +1185,7 @@ jobs:
               echo "### Signing certificate SHA-256 (public value; the coordinator records it BEFORE any upload)"
               echo '```'; cat evidence/certificate-sha256.txt; cat evidence/pin.txt 2>/dev/null; echo '```'
             fi
-            for f in evidence/export-result.txt evidence/ipa-digest.txt evidence/v1-identity.txt evidence/v4-profile-summary.txt evidence/v6-environment.txt evidence/v9-native.txt evidence/export-diagnosis.txt evidence/packaging-log-source.txt evidence/v8-capture/status.txt; do
+            for f in evidence/export-result.txt evidence/ipa-digest.txt evidence/v1-identity.txt evidence/v4-profile-summary.txt evidence/v6-environment.txt evidence/v9-native.txt evidence/export-diagnosis.txt evidence/packaging-log-source.txt evidence/v8-capture/status.txt evidence/upload-tool-probe.txt evidence/upload-precheck.txt evidence/upload-result.txt; do
               [ -f "$f" ] || continue   # an optional file that does not exist is not an error (a successful run has no export-diagnosis.txt)
               echo "### ${f#evidence/}"; echo '```'; cat "$f"; echo '```'
             done
