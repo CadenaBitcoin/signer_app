@@ -39,7 +39,7 @@ uses no secret, keeps no IPA, and fails only if evidence that should exist canno
 | V4, V5 profile, entitlements | Selected profile fields (name, team, expiry, application identifier, no devices, no `get-task-allow`) and the signed entitlements; `aps-environment` fails (D6) |
 | V6 environment | Production URL at least once, `staging.purabitcoin.com` zero times |
 | V7 verifier | `verify_ipa.py verify production ... --repo <approved checkout> --unsigned-app <archive app> --forbid-entitlement aps-environment --expect-cert-sha256 <pin>` |
-| V8 signatures only | `verify_ipa.py compare <archive app> <signed app>`; the baseline is the app of the archive that was exported, not a second build |
+| V8 signatures only | `verify_ipa.py compare <archive app> <signed app>`; the baseline is the app of the archive that was exported, not a second build. Byte-strict for every file except the top-level `Info.plist`, which may differ in serialization only (IOS_SIGNING.md section 3.1e); `compare` authenticates no signature (and says so on every invocation), `verify` does; the accepted file is equal in content, not byte for byte |
 | V9 native library | The pinned library SHA-256 (carried from the build job), the nine expected exports, no forbidden names; the known D1 symbol is reported, not hidden |
 | IPA integrity | SHA-256 after export and again after verification; they must match |
 
@@ -278,7 +278,7 @@ procedures, written into the release record (section 4.2, "One operation"):
 2. **Developer role versus cloud-managed Distribution signing.** Section 2. **Unconfirmed.** Failure here is a result, not a bug.
 3. **Apple-account side effects.** Even without upload, the export may create an Xcode-managed Distribution certificate and an App Store
    profile in the team's account. This is D7's consequence and part of what G2S would authorize.
-4. **V7 and V8 have never seen a real Apple-signed IPA** ([IOS_RELEASE.md](IOS_RELEASE.md) section 9): they may reject a legitimate
+4. **V7 and V8 have seen real Apple-signed IPAs only in failed runs (the first two; see IOS_SIGNING.md sections 3.1d and 3.1e for what the second showed)** ([IOS_RELEASE.md](IOS_RELEASE.md) section 9): they may reject a legitimate
    detail (an entitlement Xcode adds, the layout of nested `CodeResources`, a `SwiftSupport` folder). A rejection is reported in full and is
    evidence; a reviewed pull request may add a narrow allowance. Nothing is edited ad hoc and no check is skipped.
 5. **The pin is circular on the first run** (section 1). Only the coordinator's recording, before the upload, makes it a pin.

@@ -382,7 +382,10 @@ def sign_slice(sl, ident, team, specials, ents_xml, dual, adhoc, certs, main):
     sp[2] = req
     ents_blob = der_blob = None
     if ents_xml is not None:
-        ents_blob = struct.pack(">II", I.CSMAGIC_ENTITLEMENTS, 8 + len(ents_xml)) + ents_xml
+        blob_xml = ents_xml
+        if "ents-xml-malformed" in MUT:  # slot 5 holds a MALFORMED XML property list that names distinctive strings (the DER blob stays the real one)
+            blob_xml = b'<?xml version="1.0"?><plist version="1.0"><dict><key>SECRETENTKEY</key><SECRETENTELEMENT/></dict></plist>'
+        ents_blob = struct.pack(">II", I.CSMAGIC_ENTITLEMENTS, 8 + len(blob_xml)) + blob_xml
         sp[5] = ents_blob
         if "no-der" not in MUT:
             ents = plistlib.loads(ents_xml)
@@ -763,6 +766,11 @@ def sign_app(app_in, out_ipa, certdir, team, mutations):
         info["CFBundleDisplayName"] = info["CFBundleDisplayName"] + " X"
         with open(os.path.join(app, "Info.plist"), "wb") as f:
             plistlib.dump(info, f)
+    if "tamper-info-reserialize" in mut:  # AFTER signing: the SAME content (keys, values, types) in another serialization. V8 accepts that; the slot-1 seal must NOT
+        with open(os.path.join(app, "Info.plist"), "rb") as f:
+            same = plistlib.load(f)
+        with open(os.path.join(app, "Info.plist"), "wb") as f:
+            plistlib.dump(dict(reversed(list(same.items()))), f, fmt=plistlib.FMT_BINARY, sort_keys=False)
     if "add-file" in mut:
         with open(os.path.join(app, "injected.dylib"), "wb") as f:
             f.write(b"payload")
@@ -793,6 +801,12 @@ def sign_app(app_in, out_ipa, certdir, team, mutations):
     if "garbage-info-plist" in mut:
         with open(os.path.join(app, "Info.plist"), "wb") as f:
             f.write(b"\x00garbage, not a plist\xff")
+    if "array-info-plist" in mut:  # AFTER signing: a well-formed property list whose root is an array, not a dictionary
+        with open(os.path.join(app, "Info.plist"), "wb") as f:
+            plistlib.dump(["not", "a", "dictionary"], f)
+    if "malformed-xml-info-plist" in mut:  # AFTER signing: malformed XML that names distinctive strings (an unexpected element), for the message-confidentiality tests
+        with open(os.path.join(app, "Info.plist"), "wb") as f:
+            f.write(b'<?xml version="1.0"?><plist version="1.0"><dict><key>k</key><SECRETINFOELEM>v</SECRETINFOELEM></dict></plist>')
     if "truncated-profile" in mut:
         pp = os.path.join(app, "embedded.mobileprovision")
         with open(pp, "r+b") as f:

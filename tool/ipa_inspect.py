@@ -242,7 +242,7 @@ class _StrictDict(dict):
 
     def __setitem__(self, key, value):
         if key in self:
-            raise Asn1Error("duplicate key %r in the cdhashes property list" % (key,))
+            raise Asn1Error("a repeated key in the cdhashes property list")  # the key's name is never quoted
         dict.__setitem__(self, key, value)
 
 
@@ -269,8 +269,8 @@ def parse_cdhashes_plist(data):
         raise Asn1Error("the cdhashes attribute is neither an XML nor a binary property list")
     try:
         plist = plistlib.loads(data, fmt=fmt, dict_type=_StrictDict)
-    except (ValueError, xml.parsers.expat.ExpatError, struct.error, OverflowError, RecursionError) as e:
-        raise Asn1Error("the cdhashes property list is unreadable: %s" % e)
+    except _PLIST_PARSE_ERRORS as e:
+        raise Asn1Error("the cdhashes property list is unreadable (%s)" % type(e).__name__)  # never the parser's own text: it can quote the file
     if not isinstance(plist, dict):
         raise Asn1Error("the cdhashes property list is not a dictionary")
     hashes = plist.get("cdhashes")
@@ -976,10 +976,23 @@ def der_blob_diagnostic(blob, raw=False):
     return out
 
 
+# What a property-list parser can raise on a malformed file (plistlib raises AttributeError for a date that is not a date). Every one is a refusal, never a crash.
+_PLIST_PARSE_ERRORS = (ValueError, xml.parsers.expat.ExpatError, struct.error, OverflowError, RecursionError, AttributeError, TypeError, IndexError, KeyError)
+
+
+def plist_failure_text(exc):
+    """A FIXED explanation for a failure to read a property list, for use in a message. The text of the exception itself is NEVER used: a
+    parser's message can quote the file (the name of a repeated key, the name of an unexpected element, a value that is not a number), and a
+    diagnostic must not carry input-derived content. What is kept is the CLASS of the failure, which is code-defined and useful."""
+    if isinstance(exc, KeyError):
+        return "a required key is missing"
+    return "it cannot be parsed as a property list (%s)" % type(exc).__name__
+
+
 class _UniqueKeyDict(dict):
     def __setitem__(self, key, value):
         if key in self:
-            raise ValueError("duplicate key %r" % (key,))
+            raise ValueError("a repeated key")  # the key's name is never quoted
         dict.__setitem__(self, key, value)
 
 
@@ -1002,8 +1015,8 @@ def read_plist_exact(data):
         raise ValueError("neither a binary nor an XML property list")
     try:
         return plistlib.loads(data, fmt=fmt, dict_type=_UniqueKeyDict), name
-    except (ValueError, xml.parsers.expat.ExpatError, struct.error, OverflowError, RecursionError) as e:
-        raise ValueError("unreadable: %s" % e)
+    except _PLIST_PARSE_ERRORS as e:
+        raise ValueError("the parser refused it (%s)" % type(e).__name__)  # never the parser's own text: it can quote the file
 
 
 def plist_type_name(v):
@@ -1034,6 +1047,94 @@ def plist_equal_strict(a, b):
     if isinstance(a, plistlib.UID):
         return a.data == b.data
     return a == b
+
+
+# ---- the ONE accepted re-serialisation: the app's top-level Info.plist (Issue #71, Phase 9) --------------------------------------
+# Evidence (run 45148346007, Authorization D): Xcode's export rewrote the app's top-level Info.plist as a binary property list with
+# the SAME 40 keys, the SAME values and types, but another key order. V8 compares every file byte for byte, so it refused the app. The
+# comparison below is the narrow exception for exactly that case, and nothing else. It REPORTS (True or False and a reason); the caller
+# (verify_ipa.same_code_check) decides what to do with the answer, and only ever asks it about the top-level Info.plist.
+#
+# What this check can and cannot settle. It settles SEMANTIC equality: the two files have the same CONTENT as Python reads it (the same keys, the
+# same values, the same value types - True is not 1, 1 is not 1.0 - and the same array order; dictionary key order and the object layout of the
+# binary file do not matter). It does NOT settle BYTEWISE immutability: two files this function accepts are different byte strings (that is the
+# point), and bytes that the content does not reach are not compared at all. Nor does it authenticate anything: that the signed bytes are the bytes
+# Apple's signature seals is checked, independently, by `verify` (the CodeDirectory's slot-1 seal of this very file, and the CMS signature over the
+# CodeDirectory), never here. RESIDUAL RISKS, accepted and documented (docs/IOS_SIGNING.md section 3.1e):
+#   1. Unreferenced objects. A binary property list may hold objects that no dictionary or array refers to. They are not part of the content, so
+#      two files that differ only in such objects are "equal" here (the real files carry two unreferenced `true` objects each). No reader of the
+#      content reaches them, but they ARE bytes of the signed app. The equal-length condition is a coarse extra bound and NOT a guarantee: it refuses
+#      padding or an added or dropped object that changes the length, and it does not exclude unreferenced bytes replaced in place, or one object
+#      added while another of the same size is dropped. After signing, the slot-1 seal covers every byte of the file; before signing, nothing here
+#      compares those bytes with the archive's.
+#   2. The content is read with Python's plistlib; the app is read by Apple's CoreFoundation. A construct the two read differently could make
+#      equal-looking files differ for the app. The limits below (binary only, no repeated key, no date, UID, data or real, bounded size, depth and
+#      node count, string keys, 64-bit integers) keep the accepted language to what the real file uses; they do not prove that the readers agree.
+INFO_PLIST_RESERIALIZE_MAX_BYTES = 64 * 1024
+INFO_PLIST_RESERIALIZE_MAX_DEPTH = 16
+INFO_PLIST_RESERIALIZE_MAX_NODES = 5000
+_INFO_PLIST_TYPES = frozenset(("bool", "integer", "string", "array", "dict"))
+
+
+def _info_plist_walk(root):
+    """None when `root` stays inside the accepted language, otherwise a short reason. ITERATIVE (no recursion, so no RecursionError), and
+    every value visited counts, so a structure that shares sub-objects, or refers to itself, ends at the depth or the node limit."""
+    stack, nodes = [(root, 1)], 0
+    while stack:
+        v, depth = stack.pop()
+        nodes += 1
+        if nodes > INFO_PLIST_RESERIALIZE_MAX_NODES:
+            return "more than %d values" % INFO_PLIST_RESERIALIZE_MAX_NODES
+        if depth > INFO_PLIST_RESERIALIZE_MAX_DEPTH:
+            return "nested deeper than %d levels" % INFO_PLIST_RESERIALIZE_MAX_DEPTH
+        t = plist_type_name(v)
+        if t not in _INFO_PLIST_TYPES:
+            return "a value of type %s (only bool, integer, string, array and dict are accepted)" % t
+        if t == "integer" and not (-(1 << 63) <= v < (1 << 63)):
+            return "an integer outside 64 bits"
+        if t == "dict":
+            for k, x in v.items():
+                if not isinstance(k, str):
+                    return "a dictionary key that is not a string"
+                stack.append((x, depth + 1))
+        elif t == "array":
+            stack.extend((x, depth + 1) for x in v)
+    return None
+
+
+def info_plist_reserialized_only(old, new):
+    """(True, "") when `new` is a binary re-serialisation of `old` with identical content AND types; otherwise (False, why).
+    `why` names the rule and never quotes the files. Both must be binary property lists (`bplist00`, no leading bytes) of at most
+    INFO_PLIST_RESERIALIZE_MAX_BYTES, read with read_plist_exact (explicit format, a repeated key refused), with a dictionary as the root,
+    inside the accepted language (_info_plist_walk), equal under plist_equal_strict, and of EQUAL LENGTH (a coarse extra bound: a length change from
+    padding or an added or dropped object is refused; a same-length difference in bytes the content does not reach is NOT excluded). This is SEMANTIC equality, not
+    bytewise equality. Fails closed: every error, a RecursionError and a MemoryError included, is a refusal. A refusal reason is a FIXED text: it never
+    includes the text of an exception, because that text can quote the file."""
+    for what, data in (("the unsigned", old), ("the signed", new)):
+        if len(data) > INFO_PLIST_RESERIALIZE_MAX_BYTES:
+            return False, "%s file is larger than %d bytes" % (what, INFO_PLIST_RESERIALIZE_MAX_BYTES)
+        if not data.startswith(b"bplist00"):
+            return False, "%s file is not a binary property list" % what
+    try:
+        a, fa = read_plist_exact(old)
+        b, fb = read_plist_exact(new)
+        if fa != "binary" or fb != "binary":
+            return False, "a file is not read as a binary property list"
+        if not isinstance(a, dict) or not isinstance(b, dict):
+            return False, "the root of a file is not a dictionary"
+        for what, root in (("the unsigned", a), ("the signed", b)):
+            why = _info_plist_walk(root)
+            if why:
+                return False, "%s file has %s" % (what, why)
+        if not plist_equal_strict(a, b):
+            return False, "the content differs (a key, a value, a value type or an array order)"
+    except ValueError:  # the reader's message can quote the file (a repeated key's name, for one), so it is never used
+        return False, "a file is not readable as a property list"
+    except (RecursionError, MemoryError, OverflowError):
+        return False, "a file is too deeply nested or too large to compare"
+    if len(old) != len(new):
+        return False, "the content is equal but the length differs (%d and %d bytes)" % (len(old), len(new))
+    return True, ""
 
 
 # Keys that carry the identity, version, platform or privileges of an app. A change to one of them is LABELLED in the
@@ -1169,7 +1270,8 @@ def plist_difference(old_bytes, new_bytes, max_items=60):
 
 
 # ---- evidence capture helpers (Phase 7C, Issue #71): READ-ONLY. They describe bytes; they decide nothing and change no verdict. ----
-# The V8 comparison (same_code_check in verify_ipa.py) stays byte-strict. These functions exist so that the next signing run can
+# The V8 comparison (same_code_check in verify_ipa.py) is byte-strict for every file, with ONE exception (info_plist_reserialized_only above, Phase 9).
+# These functions exist so that the next signing run can
 # KEEP the two Info.plist files, the DER entitlements blob and the facts about them, instead of only the verdict.
 EVIDENCE_READ_CAP = 1 << 20          # at most this many bytes of one file are read at all
 EVIDENCE_PLIST_MAX_BYTES = 65536     # a property list larger than this is described (size, digest) but its bytes are not kept (the real one is 2.5 KB)
@@ -1369,11 +1471,16 @@ def read_signature(path):
             item["entitlements_blob"] = slots[SLOT_ENTITLEMENTS]
             blob = slots[SLOT_ENTITLEMENTS]
             try:
-                if struct.unpack(">I", blob[:4])[0] != CSMAGIC_ENTITLEMENTS:
-                    raise ValueError("entitlements blob magic")
-                item["entitlements"] = plistlib.loads(blob[8:])
-            except Exception as e:  # unreadable plist is a finding, not a crash
-                item["problems"].append("entitlements blob is unreadable: %s" % e)
+                magic_ok = struct.unpack(">I", blob[:4])[0] == CSMAGIC_ENTITLEMENTS
+            except struct.error:
+                magic_ok = False
+            if not magic_ok:
+                item["problems"].append("entitlements blob is unreadable: its magic is wrong or it is too short")
+            else:
+                try:
+                    item["entitlements"] = plistlib.loads(blob[8:])
+                except Exception as e:  # unreadable plist is a finding, not a crash
+                    item["problems"].append("entitlements blob is unreadable: %s" % plist_failure_text(e))
         item["der_entitlements_blob"] = slots.get(SLOT_DER_ENTITLEMENTS)
         item["der_entitlements"] = None
         if item["der_entitlements_blob"] is not None:
@@ -1579,7 +1686,10 @@ def read_profile(path):
         v["ok"], err = False, "the signer certificate read from the structure is not the one openssl verified"
     if v["content"] is None:
         raise Asn1Error(err or "the provisioning profile carries no verified content")
-    plist = plistlib.loads(v["content"])
+    try:
+        plist = plistlib.loads(v["content"])
+    except _PLIST_PARSE_ERRORS as e:
+        raise Asn1Error("the profile's property list " + plist_failure_text(e))  # never the parser's own text
     return {"plist": plist, "signer": cms["signer"], "certs": cms["certs"], "signature_valid": v["ok"],
             "signature_error": err}
 

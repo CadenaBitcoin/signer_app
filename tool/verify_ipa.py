@@ -491,10 +491,11 @@ def verify(args):
         try:
             with open(plist_path, "rb") as f:
                 info = plistlib.load(f)
-            if not isinstance(info, dict):
-                raise ValueError("not a dictionary")
         except Exception as e:  # any malformed plist is a failure, never a crash and never a pass
-            rep.fail("Info.plist is unreadable: %s" % e)
+            rep.fail("Info.plist is unreadable: %s" % I.plist_failure_text(e))  # never the parser's own text
+            return finish(rep, args)
+        if not isinstance(info, dict):
+            rep.fail("Info.plist is unreadable: it is not a dictionary")
             return finish(rep, args)
         bundle_id = info.get("CFBundleIdentifier", "")
         exe_name = info.get("CFBundleExecutable", "")
@@ -838,7 +839,33 @@ def describe_one_plist(rep, rel, a, b):
                                                  " listing_incomplete=1" if incomplete else ""))
 
 
+def info_plist_reserialization(a, b):
+    """The two top-level Info.plist FILES (unsigned, signed) -> ((digest, digest, length, length) or None, why). Reads at most the cap
+    plus one byte of each; anything unreadable, larger, or refused by ipa_inspect.info_plist_reserialized_only is a refusal."""
+    try:
+        old = I.read_capped(a, I.INFO_PLIST_RESERIALIZE_MAX_BYTES)
+        new = I.read_capped(b, I.INFO_PLIST_RESERIALIZE_MAX_BYTES)
+        if old is None or new is None:
+            return None, "a file is larger than %d bytes" % I.INFO_PLIST_RESERIALIZE_MAX_BYTES
+        ok, why = I.info_plist_reserialized_only(old, new)
+        if not ok:
+            return None, why
+        return (hashlib.sha256(old).hexdigest(), hashlib.sha256(new).hexdigest(), len(old), len(new)), ""
+    except Exception as e:  # a VERDICT path, unlike the diagnostics: whatever goes wrong is a refusal (KeyboardInterrupt is not caught)
+        return None, "the files could not be compared (%s)" % type(e).__name__
+
+
 def same_code_check(rep, unsigned, signed):
+    """V8: is `signed` the unsigned build plus signatures only? Every file is compared byte for byte (Mach-O files with the signature
+    excluded), with ONE exception: the app's TOP-LEVEL Info.plist, which may differ in serialization only (see
+    ipa_inspect.info_plist_reserialized_only for the exact rule and its residual risks; nested and framework Info.plist files, every
+    other property list and every other resource stay byte-strict).
+
+    For that one file V8 therefore settles SEMANTIC equality (content and types), not bytewise immutability: bytes the content does not reach may differ.
+
+    THIS FUNCTION AUTHENTICATES NO SIGNATURE. That the signed Info.plist is the file Apple's signature seals (the CodeDirectory's slot-1
+    seal, and the CMS signature over that CodeDirectory) is checked by `verify` (check_code_signature), never here. The `compare` command, which
+    calls this function alone, says so on every invocation."""
     def added_ok(r):
         # signing adds the profile at the top and one CodeResources seal per bundle; nothing else
         if r in ("embedded.mobileprovision", "_CodeSignature/CodeResources"):
@@ -849,6 +876,7 @@ def same_code_check(rep, unsigned, signed):
     missing = sorted(uf - sf)
     extra = sorted(r for r in sf - uf if not added_ok(r))
     changed, same_macho, same_plain = [], 0, 0
+    reserialized, refused_reserialization = None, None  # the top-level Info.plist: (unsigned digest, signed digest, lengths) / why not
     differing_plists = []  # (relative path, unsigned file, signed file): described below, never excused
     for rel in sorted(uf & sf):
         a, b = os.path.join(unsigned, rel), os.path.join(signed, rel)
@@ -872,6 +900,12 @@ def same_code_check(rep, unsigned, signed):
             # judged on its own by `verify`; it is never part of the code.
             continue
         else:
+            if rel == "Info.plist":  # the TOP-LEVEL file only; nested Info.plist files are named like "PlugIns/X.appex/Info.plist"
+                accepted, why = info_plist_reserialization(a, b)
+                if accepted:
+                    reserialized = accepted
+                    continue
+                refused_reserialization = why
             changed.append(rel)
             if rel.endswith(".plist"):
                 differing_plists.append((rel, a, b))
@@ -881,9 +915,17 @@ def same_code_check(rep, unsigned, signed):
               "files missing from the IPA: %s" % ", ".join(missing[:8]))
     rep.check(not extra, "the IPA adds no file beyond the profile and the signatures",
               "files added to the IPA: %s" % ", ".join(extra[:8]))
-    rep.check(not changed, "the IPA is the unsigned build plus signatures only (%d executables identical apart from the signature, %d other files byte-identical)" % (same_macho, same_plain),
+    rep.check(not changed, "the IPA is the unsigned build plus signatures only (%d executables identical apart from the signature, %d other files byte-identical%s)" % (
+                  same_macho, same_plain, ", and the top-level Info.plist re-serialized with identical content and types" if reserialized else ""),
               "files that differ from the unsigned build: %s" % "; ".join(changed[:6]))
     describe_plist_differences(rep, differing_plists)
+    if reserialized:
+        rep.ev("same_code_info_plist", "reserialized_identical_content_and_types")
+        rep.ev("same_code_info_plist_sha256", "unsigned %s signed %s" % (reserialized[0], reserialized[1]))
+        rep.info("Info.plist: the top-level file differs from the unsigned build in SERIALIZATION ONLY and is accepted: binary property list, "
+                 "%d byte(s) -> %d byte(s), SHA-256 %s -> %s, identical keys, values and types: equal in content, NOT byte for byte (docs/IOS_SIGNING.md section 3.1e)" % (reserialized[2], reserialized[3], reserialized[0], reserialized[1]))
+    elif refused_reserialization:
+        rep.info("Info.plist: not accepted as a re-serialization (%s); it stays a failure" % refused_reserialization)
 
 
 def finish(rep, args, unverified=True):
@@ -945,7 +987,7 @@ def certificate(args):
                 info = plistlib.load(f)
             exe_name = info["CFBundleExecutable"]
         except Exception as e:
-            rep.fail("Info.plist is unreadable: %s" % e)
+            rep.fail("Info.plist is unreadable: %s" % I.plist_failure_text(e))  # never the parser's own text
             return finish(rep, args, unverified=False)
         if not isinstance(exe_name, str) or not exe_name or "/" in exe_name or exe_name.startswith("."):
             rep.fail("CFBundleExecutable %r is not a plain file name" % (exe_name,))
@@ -1076,7 +1118,7 @@ def structure(args):
                 info = plistlib.load(f)
             exe_name, bundle_id = info["CFBundleExecutable"], info["CFBundleIdentifier"]
         except Exception as e:
-            rep.fail("Info.plist is unreadable: %s" % e)
+            rep.fail("Info.plist is unreadable: %s" % I.plist_failure_text(e))  # never the parser's own text
             return finish(rep, args, unverified=False)
         if not isinstance(exe_name, str) or not exe_name or "/" in exe_name:
             rep.fail("CFBundleExecutable %r is not a plain file name" % (exe_name,))
@@ -1093,9 +1135,20 @@ def structure(args):
 # ---- compare ------------------------------------------------------------------------------------
 
 
+COMPARE_NOTICE = ("NOTE  compare authenticates NO signature: it reads no CodeDirectory, no seal and no CMS signature (`verify` does). "
+                  "Never accept an IPA on `compare` alone.")
+
+
 def compare(args):
     """Is SIGNED (a Runner.app directory or an .ipa) the UNSIGNED bundle plus signatures only?
-    This is the check for the signing job: nothing was recompiled, changed or injected."""
+    This is the check for the signing job: nothing was recompiled, changed or injected.
+
+    `compare` AUTHENTICATES NO SIGNATURE: it does not read a CodeDirectory, a seal or a CMS signature, and it says so (COMPARE_NOTICE) on every
+    invocation. The signed top-level Info.plist may differ from the unsigned one in serialization only (same_code_check: equal content, not equal
+    bytes); that it is the file Apple's signature seals is checked by `verify`. Never accept an IPA on `compare` alone."""
+    # Said on EVERY invocation, whatever the outcome, before anything can fail: this command reads no signature at all.
+    emit(COMPARE_NOTICE)
+    sys.stdout.flush()  # before any error can be written to the other stream
     rep = Report()
     if not os.path.isdir(args.unsigned):
         die("%s is not a directory" % args.unsigned)
@@ -1530,7 +1583,9 @@ def main(argv):
     st = sub.add_parser("structure", help="check the signing structure of an app or IPA without judging the identity")
     st.add_argument("target", help="a Runner.app directory or an .ipa")
     st.add_argument("--evidence")
-    c = sub.add_parser("compare", help="is SIGNED the UNSIGNED bundle plus signatures only?")
+    c = sub.add_parser("compare", help="is SIGNED the UNSIGNED bundle plus signatures only? (authenticates NO signature: use `verify` for that)",
+                       description="Is SIGNED the UNSIGNED bundle plus signatures only? This command authenticates NO signature: it reads no CodeDirectory, no seal and no CMS signature "
+                                   "(`verify` does). Every file must be byte-identical, except that the top-level Info.plist may differ in serialization only.")
     c.add_argument("unsigned", help="the unsigned Runner.app directory")
     c.add_argument("signed", help="the signed Runner.app directory or the .ipa")
     cap = sub.add_parser("capture-evidence", help="keep the Info.plist files and the DER entitlements blob as text evidence (read-only; decides nothing)")
