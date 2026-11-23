@@ -590,7 +590,10 @@ sed -n '2p' "$KEYFILE"
 echo "token $STUB_JWT end; Authorization: Bearer abcdefgh12345678"
 echo "-----BEGIN PRIVATE KEY-----"
 case " $* " in
-  *" --validate-app "*) exit "${STUB_VALIDATE_RC:-0}" ;;
+  *" --validate-app "*)
+    [ "${STUB_TOUCH_IPA:-0}" = 1 ] && printf x >> "$IPA"                                   # the IPA changes DURING the validation
+    [ "${STUB_BREAK_LOG:-0}" = 1 ] && rm -f "$RUNNER_TEMP/validate.raw.log"                # the raw validation log disappears: its redaction cannot succeed
+    exit "${STUB_VALIDATE_RC:-0}" ;;
   *" --upload-package "*|*" --upload-app "*) echo "Delivery UUID: 12345678-1234-1234-1234-123456789012"; exit "${STUB_UPLOAD_RC:-0}" ;;
 esac
 exit 9
@@ -639,6 +642,14 @@ run_upload 5 0 package
 [ "$UP_RC" -ne 0 ] && [ "$(wc -l < "$UP/calls.txt" | tr -d ' ')" -eq 1 ] && ! grep -q -- '--upload' "$UP/calls.txt" && grep -qx 'uploaded=no' "$UP/evidence/upload-result.txt" && grep -qx 'validate_exit=5' "$UP/evidence/upload-result.txt" && grep -q 'upload_exit=not attempted' "$UP/evidence/upload-result.txt"; chk "upload step (the validation fails): the step fails and NO upload command is ever run" $? "rc=$UP_RC $(cat "$UP/calls.txt")"
 [ -s "$UP/evidence/upload-validate.log" ] && [ ! -e "$UP/evidence/upload.log" ]; chk "upload step (the validation fails): the validation log is kept (redacted), there is no upload log" $?
 up_clean "the validation fails"
+# --- the IPA changes between the validation and the upload: NO upload (its digest is computed again, against the verified one)
+run_upload 0 0 package '' STUB_TOUCH_IPA=1
+[ "$UP_RC" -ne 0 ] && [ "$(wc -l < "$UP/calls.txt" | tr -d ' ')" -eq 1 ] && ! grep -q -- '--upload' "$UP/calls.txt" && grep -qx 'uploaded=no' "$UP/evidence/upload-result.txt" && grep -qx 'upload_exit=not attempted (the IPA changed after the validation)' "$UP/evidence/upload-result.txt" && grep -q 'IPA changed after the validation' "$UP/stdout"; chk "upload step (the IPA changes during the validation): the validation succeeded, but NO upload command is run, the result says why, and the step fails" $? "rc=$UP_RC $(cat "$UP/calls.txt")"
+up_clean "the IPA changes during the validation"
+# --- the redaction of the validation log fails: NO upload (fail closed)
+run_upload 0 0 package '' STUB_BREAK_LOG=1
+[ "$UP_RC" -ne 0 ] && [ "$(wc -l < "$UP/calls.txt" | tr -d ' ')" -eq 1 ] && ! grep -q -- '--upload' "$UP/calls.txt" && grep -qx 'uploaded=no' "$UP/evidence/upload-result.txt" && grep -qx 'upload_exit=not attempted (the redaction of the validation log failed)' "$UP/evidence/upload-result.txt" && [ ! -e "$UP/evidence/upload-validate.log" ] && [ ! -e "$UP/evidence/upload.log" ]; chk "upload step (the redaction of the validation log fails): the validation succeeded, but NO upload command is run, no log is kept, the result says why, and the step fails" $? "rc=$UP_RC $(cat "$UP/calls.txt")"
+up_clean "the redaction of the validation log fails"
 # --- the upload fails: reported, never repeated
 run_upload 0 7 package
 [ "$UP_RC" -ne 0 ] && [ "$(wc -l < "$UP/calls.txt" | tr -d ' ')" -eq 2 ] && grep -qx 'uploaded=no' "$UP/evidence/upload-result.txt" && grep -qx 'upload_exit=7' "$UP/evidence/upload-result.txt" && grep -q 'BEFORE any new run' "$UP/stdout"; chk "upload step (the upload fails): the step fails, the upload ran exactly once (no retry), the result says uploaded=no, and the message says to look in App Store Connect before a new run" $? "rc=$UP_RC"
@@ -661,8 +672,13 @@ run_upload 0 0 weird; nocall "an unknown upload-tool syntax"
 run_upload 0 0 package 'rm -rf "$UP/tmp/asc-private-keys"'; nocall "the key directory is missing (the pre-check did not run)"
 unset UPKEY UPKEYID UPISSUER
 # --- the key-file check after the upload
-KC="$(mktemp -d -p "$tmp")"; mkdir -p "$KC/evidence" "$KC/tmp/asc-private-keys" "$KC/home"; : > "$KC/tmp/asc-private-keys/AuthKey_LEFTOVER12.p8"
-( cd "$KC" && env -i PATH="$PATH" HOME="$KC/home" RUNNER_TEMP="$KC/tmp" bash -e "$STEP_ukey" > "$KC/out" 2>&1 ); [ $? -ne 0 ] && [ ! -e "$KC/tmp/asc-private-keys" ] && grep -q 'A key file remains' "$KC/out"; chk "key check after the upload: a leftover key file is reported (the step fails), removed, and the directory is removed" $?
+KC="$(mktemp -d -p "$tmp")"; mkdir -p "$KC/evidence" "$KC/tmp/asc-private-keys" "$KC/home"; : > "$KC/tmp/asc-private-keys/AuthKey_LEFTOVER12.p8"; : > "$KC/tmp/apple-api-key.p8"
+( cd "$KC" && env -i PATH="$PATH" HOME="$KC/home" RUNNER_TEMP="$KC/tmp" bash -e "$STEP_ukey" > "$KC/out" 2>&1 ); [ $? -ne 0 ] && [ ! -e "$KC/tmp/asc-private-keys" ] && [ ! -e "$KC/tmp/apple-api-key.p8" ] && grep -q 'A key file remained after the upload step' "$KC/out"; chk "key check after the upload: leftover key files are reported (the step fails), removed, and the directory is removed" $?
+! grep -qE 'LEFTOVER12|AuthKey_|apple-api-key|\.p8' "$KC/out"; chk "key check after the upload: nothing printed names a key file or contains the key ID (not the error, not the log)" $? "$(grep -E 'LEFTOVER12|AuthKey_|apple-api-key|\.p8' "$KC/out" | head -2)"
+# ... also when the removal itself FAILS (a read-only directory): the commands' own error messages name the file, so they must be discarded
+KC="$(mktemp -d -p "$tmp")"; mkdir -p "$KC/evidence" "$KC/tmp/ro" "$KC/home"; : > "$KC/tmp/ro/AuthKey_READONLY99.p8"; chmod 500 "$KC/tmp/ro"
+( cd "$KC" && env -i PATH="$PATH" HOME="$KC/home" RUNNER_TEMP="$KC/tmp" bash -e "$STEP_ukey" > "$KC/out" 2>&1 ); kc_rc=$?; chmod -R u+rwx "$KC/tmp" 2>/dev/null
+[ "$kc_rc" -ne 0 ] && ! grep -qE 'READONLY99|AuthKey_|\.p8' "$KC/out"; chk "key check after the upload: when the removal fails too, the step still fails and still prints no key file name or key ID" $? "rc=$kc_rc $(grep -E 'READONLY99|AuthKey_|\.p8' "$KC/out" | head -2)"
 KC="$(mktemp -d -p "$tmp")"; mkdir -p "$KC/evidence" "$KC/tmp" "$KC/home"
 ( cd "$KC" && env -i PATH="$PATH" HOME="$KC/home" RUNNER_TEMP="$KC/tmp" bash -e "$STEP_ukey" > "$KC/out" 2>&1 ); [ $? -eq 0 ] && grep -qx 'key_file_removed_after_upload_step=yes' "$KC/evidence/key-removed-after-upload.txt"; chk "key check after the upload: with no key file the evidence says so (key_file_removed_after_upload_step=yes)" $?
 
@@ -1082,7 +1098,7 @@ m('UP2_upload_runs_after_failure', 'the upload step runs even after a failed ste
 m('UP2b_upload_only_after_failure', 'the upload step runs after a failed step (failure())', "      - name: Validate and upload the verified IPA (the second and last step with secrets)\n        if: needs.authorize.outputs.upload_authorized == 'true'\n", "      - name: Validate and upload the verified IPA (the second and last step with secrets)\n        if: failure() && needs.authorize.outputs.upload_authorized == 'true'\n")
 m('UP3_operation_not_required', 'any passing authorization grants the upload (the operation is not read)', '            [ "$op" = "sign-verify-and-upload" ] && upload_authorized=true\n', '            upload_authorized=true\n')
 m('UP4_output_missing', 'the authorize job no longer exposes upload_authorized', '      upload_authorized: ${{ steps.gate.outputs.upload_authorized }}\n', '')
-m('UP5_validation_failure_ignored', 'an upload is attempted after a failed validation', '          if [ "$vrc" -eq 0 ]; then\n            # 2. Upload THE SAME file, once.', '          if true; then\n            # 2. Upload THE SAME file, once.')
+m('UP5_validation_failure_ignored', 'an upload is attempted after a failed validation', '          if [ "$proceed" -eq 1 ]; then\n            # 2. Upload THE SAME file, once.', '          if true; then\n            # 2. Upload THE SAME file, once.')
 m('UP6_digest_not_compared', 'the pre-check no longer compares the IPA with the verified digests', '[[ "$now" =~ $re_hex64 ]] && [ "$now" = "$exported" ] && [ "$now" = "$verified" ] || fail', 'true || fail')
 m('UP7_gate_verdict_ignored', "the pre-check ignores the gate's verdict", '|| { cat "$RUNNER_TEMP/upload-gate.txt"; fail "The release record no longer authorizes this run."; }', '|| true')
 m('UP8_operation_not_rechecked', "the pre-check does not re-read the record's operation", '[ "$op" = "sign-verify-and-upload" ] || fail "The release record\'s operation is \'$op\', not sign-verify-and-upload."', 'true')
@@ -1104,6 +1120,10 @@ m('UP23_legacy_validate_skipped', 'the legacy interface uploads without validati
 m('UP24_upload_flag_changed', 'the upload command names another operation', 'UPLOAD=(--upload-package "$IPA" "${COMMON[@]}")', 'UPLOAD=(--validate-app "$IPA" "${COMMON[@]}")')
 m('UP25_wrong_ipa_uploaded', 'another file than the verified IPA is uploaded', 'UPLOAD=(--upload-package "$IPA" "${COMMON[@]}")', 'UPLOAD=(--upload-package "$RUNNER_TEMP/other.ipa" "${COMMON[@]}")')
 m('UP26_apple_id_dropped', 'the App Store Connect record is not named', 'COMMON=(--platform ios --apple-id "$APP_APPLE_ID" --bundle-id', 'COMMON=(--platform ios --bundle-id')
+m('UP27_cleanup_prints_key_name', "the final key-file check prints the key file's name", 'echo "::error::A key file remained after the upload step ($nleft file(s)); removal was attempted. The name is deliberately not shown."', 'echo "::error::A key file remains: $left"')
+m('UP28_cleanup_rm_messages_shown', "the final key-file check shows the removal commands' own error messages", '            rm -P -f $left >/dev/null 2>&1 || rm -f $left >/dev/null 2>&1\n', '            rm -P -f $left || rm -f $left\n')
+m('UP29_redaction_failure_does_not_stop_upload', 'a failed redaction of the validation log no longer stops the upload', '            if [ "$red" -ne 0 ]; then\n              skip_reason="the redaction of the validation log failed"\n', '            if false; then\n              skip_reason="the redaction of the validation log failed"\n')
+m('UP30_ipa_not_rechecked_after_validation', "the IPA's digest is not computed again after the validation", '            elif [ "$(shasum -a 256 "$IPA" | awk \'{print $1}\')" != "$UPLOAD_IPA_SHA256" ]; then\n', '            elif false; then\n')
 res = []
 for mid, desc, old, new, which in M:
     cnt = src.count(old)

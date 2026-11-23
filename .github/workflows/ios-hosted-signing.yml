@@ -1074,7 +1074,20 @@ jobs:
           env -u APPLE_API_KEY_P8 -u APPLE_API_KEY_ID -u APPLE_API_ISSUER_ID xcrun altool "${VALIDATE[@]}" > "$RUNNER_TEMP/validate.raw.log" 2>&1
           vrc=$?
           redact "$RUNNER_TEMP/validate.raw.log" evidence/upload-validate.log || red=1
+          # 1b. Before the upload, and only if the validation succeeded: the validation log must have been kept (redaction is fail-closed), and the file
+          # on disk must STILL be the verified IPA (its digest is computed again now, after the validation and immediately before the upload).
+          proceed=0
+          skip_reason="the validation failed"
           if [ "$vrc" -eq 0 ]; then
+            if [ "$red" -ne 0 ]; then
+              skip_reason="the redaction of the validation log failed"
+            elif [ "$(shasum -a 256 "$IPA" | awk '{print $1}')" != "$UPLOAD_IPA_SHA256" ]; then
+              skip_reason="the IPA changed after the validation"
+            else
+              proceed=1
+            fi
+          fi
+          if [ "$proceed" -eq 1 ]; then
             # 2. Upload THE SAME file, once. No loop, no retry: a failure is reported and a person decides.
             env -u APPLE_API_KEY_P8 -u APPLE_API_KEY_ID -u APPLE_API_ISSUER_ID xcrun altool "${UPLOAD[@]}" > "$RUNNER_TEMP/upload.raw.log" 2>&1
             urc=$?
@@ -1086,16 +1099,20 @@ jobs:
             echo "bundle_id=$UPLOAD_BUNDLE_ID"; echo "version=$UPLOAD_SHORT_VERSION"; echo "build=$UPLOAD_BUILD"
             echo "tool_syntax=$UPLOAD_SYNTAX"
             echo "validate_exit=$vrc"
-            if [ "$vrc" -eq 0 ]; then echo "upload_exit=$urc"; else echo "upload_exit=not attempted (the validation failed)"; fi
-            if [ "$vrc" -eq 0 ] && [ "$urc" -eq 0 ]; then echo "uploaded=yes"; else echo "uploaded=no"; fi
+            if [ "$proceed" -eq 1 ]; then echo "upload_exit=$urc"; else echo "upload_exit=not attempted ($skip_reason)"; fi
+            if [ "$proceed" -eq 1 ] && [ "$urc" -eq 0 ]; then echo "uploaded=yes"; else echo "uploaded=no"; fi
             echo "finished_utc=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
           } > evidence/upload-result.txt
           cat evidence/upload-result.txt
           [ "$red" -eq 0 ] || { echo "::error::A redaction failed. The log of this step is withheld; the result above stands."; exit 1; }
           echo "---- altool (redacted), last 40 lines ----"
-          if [ "$vrc" -eq 0 ]; then tail -n 40 evidence/upload.log; else tail -n 40 evidence/upload-validate.log; fi
+          if [ "$proceed" -eq 1 ]; then tail -n 40 evidence/upload.log; else tail -n 40 evidence/upload-validate.log; fi
           if [ "$vrc" -ne 0 ]; then
             echo "::error::Apple's validation of the IPA failed (exit $vrc). Nothing was uploaded. The signed IPA is gone with the runner; read evidence/upload-validate.log."
+            exit 1
+          fi
+          if [ "$proceed" -ne 1 ]; then
+            echo "::error::Nothing was uploaded: $skip_reason. The signed IPA is gone with the runner."
             exit 1
           fi
           if [ "$urc" -ne 0 ]; then
@@ -1110,8 +1127,13 @@ jobs:
           set +e
           mkdir -p evidence
           left="$(find "$RUNNER_TEMP" "$HOME" -maxdepth 4 \( -name 'apple-api-key.p8' -o -name 'AuthKey_*.p8' \) 2>/dev/null | head -n 5)"
-          if [ -n "$left" ]; then echo "::error::A key file remains: $left"; rm -P -f $left; fi
-          rm -rf "$RUNNER_TEMP/asc-private-keys" 2>/dev/null
+          # The name of a key file contains the key ID: it is NEVER printed, not even in an error (the commands' own messages are discarded too).
+          if [ -n "$left" ]; then
+            nleft="$(printf '%s\n' "$left" | wc -l | tr -d ' ')"
+            echo "::error::A key file remained after the upload step ($nleft file(s)); removal was attempted. The name is deliberately not shown."
+            rm -P -f $left >/dev/null 2>&1 || rm -f $left >/dev/null 2>&1
+          fi
+          rm -rf "$RUNNER_TEMP/asc-private-keys" >/dev/null 2>&1
           [ -z "$left" ] && echo "key_file_removed_after_upload_step=yes" | tee evidence/key-removed-after-upload.txt
 
       # Phase 7C (Issue #71). READ-ONLY EVIDENCE for the open V8 question (what did the export change in the app's top-level Info.plist?) and for
