@@ -258,7 +258,13 @@ chmod +x "$stubdir/git"
 neutral_record() { # IN OUT
   awk '/^G2S-/ { next } /^\| D14 \| / { next } { print }' "$1" | awk '
     BEGIN { n = split("D3 D6 D7 D8 D9 D10 D11 D12", a, " "); for (i = 1; i <= n; i++) want[i] = "| " a[i] " | " }
-    { for (i = 1; i <= n; i++) if (index($0, want[i]) == 1) sub(/\| Decided \| [^|]*\| [0-9-]+ \|[ ]*$/, "| Proposed, not decided | TBD | TBD |"); print }' > "$2"
+    { for (i = 1; i <= n; i++) if (index($0, want[i]) == 1) sub(/\| Decided \| [^|]*\| [0-9-]+ \|[ ]*$/, "| Proposed, not decided | TBD | TBD |"); print }' \
+  | awk '
+    # Authorization E decided D1, D2, D4 and D5 and the risk of X2, and set the status to G2: the neutral record has none of that.
+    index($0, "| D1 | ") == 1 || index($0, "| D2 | ") == 1 || index($0, "| D4 | ") == 1 || index($0, "| D5 | ") == 1 { sub(/\| Decided \| [^|]*\| [0-9-]+ \|[ ]*$/, "| Proposed, not decided | TBD | TBD |") }
+    index($0, "| X2 | ") == 1 { sub(/\| Decided \| [^|]*\| [0-9-]+ \|[ ]*$/, "| Open | TBD | TBD |") }
+    /^\*\*Record Status: `G2 AUTHORIZED`\*\*$/ { print "**Record Status: `G1 AUTHORIZED`**"; next }
+    { print }' > "$2"
 }
 mkws() { # DIR : the files the gate reads, with the WORKFLOW UNDER TEST, and the record before any authorization
   rm -rf "$1"; mkdir -p "$1/.github/workflows" "$1/docs/release-records"
