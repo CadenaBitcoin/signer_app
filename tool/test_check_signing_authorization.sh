@@ -238,6 +238,43 @@ expect_rc "a version argument with a second line is a usage error (exit 2)" 2 "$
 expect_rc "a team argument with a second line is a usage error (exit 2)" 2 "$good" --team-id "$TEAM${nl}x"
 expect_rc "a tip argument with a second line is a usage error (exit 2)" 2 "$good" --development-tip "$WFSHA${nl}x"
 
+# --- the upload operation (sign-verify-and-upload): a SEPARATE authorization of ONE upload of the same verified IPA ---
+# It needs the operation value, the record status G2 AUTHORIZED, and D1, D2, D4 and D5 decided, in addition to everything G2S needs.
+UPDEC="D1 D2 D4 D5"
+mkup() { # OUT : the good record turned into a complete upload authorization
+  sed -E 's/`G1 AUTHORIZED`/`G2 AUTHORIZED`/; s/^G2S-OPERATION: .*/G2S-OPERATION: sign-verify-and-upload/' "$good" > "$1"; decide "$1" $UPDEC
+}
+up="$tmp/up.md"; mkup "$up"
+expect_rc "UPLOAD: a complete record (operation sign-verify-and-upload, status G2 AUTHORIZED, D1 D2 D4 D5 decided, everything G2S needs) is accepted (exit 0)" 0 "$up"
+out="$(run_gate "$up")"; printf '%s' "$out" | grep -q 'ONE upload of the SAME verified IPA' && printf '%s' "$out" | grep -q 'no tester assignment' && ok "UPLOAD: the verdict says exactly what is authorized (one upload of the same IPA) and what is not (testers, review, release)" || bad "UPLOAD: the verdict says what is authorized" "$out"
+[ "$(bash "$tgate" --print-field G2S-OPERATION --record "$up" --tools-root "$tools")" = "sign-verify-and-upload" ]; [ $? -eq 0 ] && ok "UPLOAD: --print-field G2S-OPERATION reads the operation (the workflow decides on it)" || bad "UPLOAD: --print-field G2S-OPERATION reads the operation"
+# an upload needs more than a signing run
+sed -E 's/`G2 AUTHORIZED`/`G1 AUTHORIZED`/' "$up" > "$tmp/m.md"; expect_rc "UPLOAD: the record status G1 AUTHORIZED is not enough (the upload needs G2 AUTHORIZED)" 1 "$tmp/m.md"
+out="$(run_gate "$tmp/m.md")"; printf '%s' "$out" | grep -q 'needs the record status G2 AUTHORIZED' && ok "UPLOAD: that refusal names the status" || bad "UPLOAD: that refusal names the status" "$out"
+for id in $UPDEC; do
+  cp "$up" "$tmp/m.md"; awk -v id="$id" 'index($0, "| " id " | ") == 1 { sub(/\| Decided \| CTO \| 2026-11-21 \|[ ]*$/, "| Proposed, not decided | TBD | TBD |") } { print }' "$tmp/m.md" > "$tmp/m2.md"
+  expect_rc "UPLOAD: decision $id still Proposed is refused" 1 "$tmp/m2.md"
+done
+cp "$good" "$tmp/m.md"; sed -E 's/`G1 AUTHORIZED`/`G2 AUTHORIZED`/' "$good" > "$tmp/m.md"
+expect_rc "SIGN ONLY: a record with the G2 status but the operation sign-and-verify-only still authorizes no more than signing (exit 0, no upload decisions needed)" 0 "$tmp/m.md"
+out="$(run_gate "$tmp/m.md")"; printf '%s' "$out" | grep -q 'no upload' && ok "SIGN ONLY: and its verdict still says no upload" || bad "SIGN ONLY: its verdict says no upload"
+for bad_op in "sign-verify-and-upload " "SIGN-VERIFY-AND-UPLOAD" "sign-and-verify-and-upload" "sign-verify-upload" "sign-and-upload" "upload" "sign-and-verify-only,sign-verify-and-upload"; do
+  sed -E "s/^G2S-OPERATION: .*/G2S-OPERATION: $bad_op/" "$up" > "$tmp/m.md"; expect_rc "UPLOAD: the operation '$bad_op' is refused" 1 "$tmp/m.md"
+done
+{ cat "$up"; echo "G2S-OPERATION: sign-and-verify-only"; } > "$tmp/m.md"; expect_rc "UPLOAD: a second, contradicting operation line is refused" 1 "$tmp/m.md"
+# the upload lines of a record can be given by nobody but the record: the WITHDRAWN lines of an earlier authorization authorize nothing, upload included
+sed -E 's/^G2S-OPERATION: .*/G2S-OPERATION: sign-verify-and-upload/' "$committed_record" > "$tmp/m.md"
+expect_rc "UPLOAD: the committed record (whatever its state) with only the operation line changed to upload is refused" 1 "$tmp/m.md"
+sed -E 's/^G2S-OPERATION: .*/G2S-OPERATION: sign-verify-and-upload/; s/`G1 AUTHORIZED`/`G2 AUTHORIZED`/; s/^G2S-STATUS: .*/G2S-STATUS: WITHDRAWN/' "$up" > "$tmp/m.md"
+expect_rc "UPLOAD: a withdrawn upload authorization is refused (fails closed)" 1 "$tmp/m.md"
+for f in .github/workflows/ios-hosted-signing.yml tool/check_signing_authorization.sh tool/verify_ipa.py; do
+  w="$tmp/tools_mod"; mktools "$w"; printf '\n# changed after the authorization\n' >> "$w/$f"
+  out="$(bash "$w/tool/check_signing_authorization.sh" --record "$up" --approved-sha "$SHA" --version "$VER" --bundle-id "$BID" --team-id "$TEAM" --tools-root "$w" --workflow-sha "$WFSHA" --development-tip "$WFSHA" 2>&1)"; rc=$?
+  [ "$rc" -eq 1 ] && ok "UPLOAD: $f changed after the authorization -> refused (the upload authorization is bound to the implementation too)" || bad "UPLOAD: $f changed after the authorization -> refused" "rc=$rc"
+done
+out="$(bash "$tgate" --record "$up" --approved-sha "$SHA" --version "$VER" --bundle-id "$BID" --team-id "$TEAM" --tools-root "$tools" --workflow-sha "$WFSHA" --development-tip "$OLD" 2>&1)"; rc=$?
+[ "$rc" -eq 1 ] && ok "UPLOAD: a historical revision (the tip moved on) is refused" || bad "UPLOAD: a historical revision is refused" "rc=$rc"
+
 # --- misuse is exit 2, never a silent pass ---
 expect_rc "an unreadable record is a usage error (exit 2)" 2 "$tmp/does-not-exist.md"
 expect_rc "a directory as the record is a usage error (exit 2)" 2 "$tmp"
