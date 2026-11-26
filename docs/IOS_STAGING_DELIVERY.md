@@ -9,7 +9,7 @@ makes this workflow fail visibly at its first job and sign nothing.
 
 **Credential model (CTO decision on Issue #71, 2026-11-26, revising the first design of this pull request).** The original temporary provisioning of the Admin-level App Store
 Connect API key is **preserved**: the key is **never stored permanently in GitHub**. The merge starts the workflow; the credential-free jobs run by themselves; the signing job
-**waits for the approval of the protected environment `ios-staging-signing`**; the CTO provisions the three secrets for that window, approves, and removes them afterwards
+**waits for the approval of the protected environment `ios-hosted-signing-stg`**; the CTO provisions the three secrets for that window, approves, and removes them afterwards
 (section 1.1). Permanent storage of the Admin key is **not authorized**.
 
 ## 1. What happens on a merge into `staging`
@@ -22,7 +22,7 @@ merge PR development -> staging
    '-- ios-staging-delivery.yml    (this document)
          authorize   staging gate: record, version, live tip of staging, merge commit, development's content   (no secret)
          build       one unsigned `flutter build ipa --flavor staging`, verified, handed over as a one-day tar  (no secret)
-         sign        environment ios-staging-signing, required reviewers: WAITS for the CTO's approval
+         sign        environment ios-hosted-signing-stg, required reviewers: WAITS for the CTO's approval
                      then export + sign (cloud-managed certificate), V1..V9, upload (the only secrets; provisioned for this window only)
 ```
 
@@ -31,17 +31,17 @@ are skipped, and no secret is read. If the gate passes, the `sign` job stops at 
 
 ### 1.1 The operational order of one delivery
 
-The record is already `AUTHORIZED` (merged before the promotion, section 4); the environment `ios-staging-signing` exists with **no secret** in it.
+The record is already `AUTHORIZED` (merged before the promotion, section 4); the environment `ios-hosted-signing-stg` exists with **no secret** in it.
 
 | # | Who | What | Why here |
 |---|---|---|---|
 | 1 | Maintainers | A reviewed `development -> staging` merge carries the version advance and the `AUTHORIZED` record. The merge starts `ios-staging-delivery.yml`. | The authorization is the record, given before the promotion; nobody dispatches. |
 | 2 | GitHub | `authorize` (the gate, no secret) and `build` (one unsigned archive of the merge commit, no secret) run and finish. The archive is handed over as a **one-day** artifact. | Everything that runs third-party code finishes before any credential exists anywhere. |
 | 3 | GitHub | `sign` shows *Waiting*: the environment's required reviewers must approve. No secret is released to it and nothing runs. | The approval is the human moment before the credential is used. |
-| 4 | CTO | **Before approving**, checks the run (list below) and **provisions the three environment secrets** `APPLE_API_KEY_P8`, `APPLE_API_KEY_ID`, `APPLE_API_ISSUER_ID` of `ios-staging-signing` from the key held offline. | The key is in GitHub only from here until step 7. |
+| 4 | CTO | **Before approving**, checks the run (list below) and **provisions the three environment secrets** `APPLE_API_KEY_P8`, `APPLE_API_KEY_ID`, `APPLE_API_ISSUER_ID` of `ios-hosted-signing-stg` from the key held offline. | The key is in GitHub only from here until step 7. |
 | 5 | CTO | **Approves** the `sign` job. | The deployment is confirmed (see below: it does not replace the record). |
 | 6 | GitHub | `sign` runs: the gate runs again, the hand-over is validated, the framework hash is enforced (all before any secret is read), then export and signing, V1 to V9, the pre-upload re-check, and the upload of **the same IPA** to the staging application. | Unchanged from the tested production steps. |
-| 7 | CTO | **Removes the three secrets at once**, whatever the result, and checks that the environment holds none (`gh api repos/CadenaBitcoin/signer_app/environments/ios-staging-signing/secrets --jq .total_count` must print `0`; it lists names only). | Removing the secrets is what stops a further run. It does not revoke the Apple key (a separate CTO decision). |
+| 7 | CTO | **Removes the three secrets at once**, whatever the result, and checks that the environment holds none (`gh api repos/CadenaBitcoin/signer_app/environments/ios-hosted-signing-stg/secrets --jq .total_count` must print `0`; it lists names only). | Removing the secrets is what stops a further run. It does not revoke the Apple key (a separate CTO decision). |
 
 **Before approving (step 4)**, the approver checks that: the run belongs to the promotion just merged and is the **current tip of `staging`**; `authorize` and `build` succeeded with the authorized version
 (`1.0.5+...` as recorded); no other run of this workflow is waiting (section 1.3); **the build finished less than a day ago (section 1.2)**; and nothing about the run is in doubt. A doubtful run is
@@ -76,7 +76,7 @@ version, environment and source commit). `tool/test_ios_staging_delivery.sh` pin
 | The production signing steps, **as text**: export and sign (the first step with the key), upload (the second), the upload-tool probe, the key-file checks, the hand-over validation, V1 to V9, the evidence seal | `ios-staging-delivery.yml` (trigger, authorization and source steps, the V6 call, the delivery record) |
 | `tool/verify_ipa.py` (already supports `staging`), `ipa_inspect.py`, `validate_handover_archive.py`, `verify_artifact.sh`, `build_manifest.py`, `verify_build_config.sh check-binary` | `tool/check_staging_authorization.sh` and its test |
 | The production gate's strict record parser (`check_signing_authorization.sh --print-field`) | `docs/release-records/ios-staging-authorization.md` (WITHDRAWN) |
-| The Apple team, the cloud-managed Distribution certificate, `altool` | the GitHub environment `ios-staging-signing` (a GitHub setting) |
+| The Apple team, the cloud-managed Distribution certificate, `altool` | the GitHub environment `ios-hosted-signing-stg` (a GitHub setting) |
 
 `ios-hosted-signing.yml`, `check_signing_authorization.sh`, the production record and every bound tool are **byte-identical**: `tool/test_ios_staging_delivery.sh` checks the
 workflow against the blob its production record names, and compares the secret-bearing and verification steps of the two workflows text for text (after undoing a short list of
@@ -122,15 +122,18 @@ It is a deployment confirmation, the same role as for the production operations 
 
 Apple-side evidence read in the repository (all coordinator- or CTO-reported, **not verified through Apple**): the Organization team `D65458CPDP`; a cloud-managed Apple Distribution certificate
 (SHA-256 `7ee3f6ce…ef418e`, valid until 2027-07-09, used by the production run 45221165334); the production application "Cadena Bitcoin" (Apple ID `6753348211`) with the internal group "Cadena Internal Testing".
-**Nothing in the repository shows that the staging App ID, the staging App Store Connect application, a staging profile or a staging tester group exist; the documents say they do not.**
+**Reported by the maintainer on 2026-11-26 (after PR #144; not independently verified through Apple by Claude):** the staging application now exists in App Store Connect: "Cadena Signer STAGING",
+bundle ID `com.app.cadenabitcoin.staging`, **Apple ID `6839776198`**, with the internal TestFlight group "Cadena Internal Testing - staging only" (testers: Kevin and Noah). The GitHub environment exists
+under the name **`ios-hosted-signing-stg`** (deliberately distinct from the production environment `ios-hosted-signing`, which is unchanged): required reviewers `sziller` and `CadenaWizard`, deployment branch `staging`, **no
+environment secret**. Its configuration is managed by the maintainer, not by this repository. The staging provisioning profile is still not shown anywhere; cloud signing creates it (unproven until the first run).
 
 | # | Where | Action | Needed because |
 |---|---|---|---|
 | A1 | developer.apple.com, Identifiers | Register the App ID `com.app.cadenabitcoin.staging` (explicit; no push capability needed: the app signs no `aps-environment`). | Cloud signing may register it itself, but that is **unproven**; registering removes the question. |
-| A2 | App Store Connect, Apps | Create the application "Cadena Signer STAGING", bundle ID `com.app.cadenabitcoin.staging`, a SKU, primary language. Note its **numeric Apple ID**. | The upload targets an existing record; the App Store Connect API cannot create one. |
-| A3 | App Store Connect, TestFlight | Create an internal group for the staging application and add the testers; answer export compliance for the first build. | Nobody can install a build otherwise (assignment is not automated, on purpose). |
+| A2 | App Store Connect, Apps | **Done** (Apple ID `6839776198`, section above). Create the application "Cadena Signer STAGING", bundle ID `com.app.cadenabitcoin.staging`, a SKU, primary language. Note its **numeric Apple ID**. | The upload targets an existing record; the App Store Connect API cannot create one. |
+| A3 | App Store Connect, TestFlight | **Done** (group "Cadena Internal Testing - staging only"; export compliance for the first build is still to be answered). Create an internal group for the staging application and add the testers; answer export compliance for the first build. | Nobody can install a build otherwise (assignment is not automated, on purpose). |
 | A4 | App Store Connect, Users and Access, Keys | Provide the Team API key for staging (**Admin** role, see S2): the existing key of the production authorizations (D16 to D18, a CTO decision to reuse it) or a new one. Keep the `.p8` **offline** (restricted permissions, encrypted backups); GitHub gets it only temporarily (G2). | Cloud-managed signing and `altool`. |
-| G1 | GitHub, Settings, Environments | Create `ios-staging-signing`. **Deployment branches: selected branches, only `staging`. Required reviewers: `sziller` and `CadenaWizard`** (the same two accounts as `ios-hosted-signing`; `prevent_self_review` off because they are one person; administrator bypass disabled; wait timer none). **Create it with no secret.** | The branch restriction keeps the secret from every other branch; the reviewers make `sign` wait for the approval, and secrets are only released to a job after it. |
+| G1 | GitHub, Settings, Environments | **Done by the maintainer** (name `ios-hosted-signing-stg`). Create `ios-hosted-signing-stg`. **Deployment branches: selected branches, only `staging`. Required reviewers: `sziller` and `CadenaWizard`** (the same two accounts as `ios-hosted-signing`; `prevent_self_review` off because they are one person; administrator bypass disabled; wait timer none). **Create it with no secret.** | The branch restriction keeps the secret from every other branch; the reviewers make `sign` wait for the approval, and secrets are only released to a job after it. |
 | G2 | the environment's secrets | **Nothing in advance.** For each delivery, the CTO adds `APPLE_API_KEY_P8`, `APPLE_API_KEY_ID`, `APPLE_API_ISSUER_ID` **while `sign` waits** (section 1.1, step 4) and removes them after the run (step 7). Never repository or organization secrets. | The three secrets of the two key-holding steps, present only for the run. An empty environment is the standing "off" state. |
 | G3 | GitHub, Issue #71 | The CTO's decisions S1 to S4 on Issue #71 and the authorization comment (its URL goes into the record). | `G2S-STAGING-AUTHORIZATION`. |
 

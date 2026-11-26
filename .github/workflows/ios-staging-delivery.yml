@@ -8,7 +8,7 @@
 # manual trigger: a manual path would be a way to deliver something that was not promoted. A failed delivery is repaired by a reviewed pull request (a new
 # build number), never by GitHub's Re-run (which the gate refuses as soon as staging has moved, and which could upload twice).
 #
-# THE APPROVAL AND THE CREDENTIAL (decision S2/S3, CTO, Issue #71). The `sign` job waits for the approval of the protected environment `ios-staging-signing`
+# THE APPROVAL AND THE CREDENTIAL (decision S2/S3, CTO, Issue #71). The `sign` job waits for the approval of the protected environment `ios-hosted-signing-stg`
 # (required reviewers). The Apple Admin API key is NOT stored: the CTO provisions the three environment secrets by hand while the job waits, approves, and
 # removes the secrets after the run, as for every production authorization. The approval confirms the deployment only; it does not replace the authorization
 # record below and adds no independence (the reviewers are one person). The unsigned archive of the `build` job is kept ONE day: the approval must come
@@ -27,7 +27,7 @@
 #   authorize  no secret, no environment. The gate above.
 #   build      no secret, no environment. Everything that downloads or runs third-party code: checks out the promotion commit, builds ONE unsigned archive
 #              (`flutter build ipa --release --no-codesign --flavor staging`), verifies the unsigned app, hands the archive over as a one-day tar with its SHA-256.
-#   sign       protected environment `ios-staging-signing` (restricted to the `staging` branch; WAITS for the CTO's approval), only when `authorize` said yes. Runs only scripts of THIS commit
+#   sign       protected environment `ios-hosted-signing-stg` (restricted to the `staging` branch; WAITS for the CTO's approval), only when `authorize` said yes. Runs only scripts of THIS commit
 #              and Apple's own tools; compiles nothing. It re-checks the gate, validates the hand-over, exports and signs with Apple's cloud-managed Distribution
 #              certificate (the first of the two steps that hold the key), verifies the IPA (V1 to V9, pinned on the RECORDED certificate), and only then validates
 #              and uploads that same IPA with Apple's altool (the second). Text evidence only; the IPA never leaves the runner except to Apple.
@@ -344,7 +344,7 @@ jobs:
     # The protected environment (docs/IOS_STAGING_DELIVERY.md section 5): restricted to the `staging` branch, with required reviewers, so this job WAITS for the
     # CTO's approval before it starts and before any secret is released to it. The three secrets exist only while it waits and after the approval until the
     # run ends (temporary provisioning, never permanent). The approval confirms the deployment; the authorization is the staging record.
-    environment: ios-staging-signing
+    environment: ios-hosted-signing-stg
     steps:
       - name: Validate the run
         env:
@@ -579,7 +579,7 @@ jobs:
           set +x
           umask 077
           unset BASH_ENV ENV DYLD_INSERT_LIBRARIES DYLD_LIBRARY_PATH DYLD_FRAMEWORK_PATH
-          [ -n "$APPLE_API_KEY_P8" ] && [ -n "$APPLE_API_KEY_ID" ] && [ -n "$APPLE_API_ISSUER_ID" ] || { echo "::error::A secret of the environment ios-staging-signing is missing (docs/IOS_STAGING_DELIVERY.md section 5)."; exit 1; }
+          [ -n "$APPLE_API_KEY_P8" ] && [ -n "$APPLE_API_KEY_ID" ] && [ -n "$APPLE_API_ISSUER_ID" ] || { echo "::error::A secret of the environment ios-hosted-signing-stg is missing (docs/IOS_STAGING_DELIVERY.md section 5)."; exit 1; }
           export KEYFILE="$RUNNER_TEMP/apple-api-key.p8"
           cleanup() { rm -P -f "$KEYFILE" 2>/dev/null || rm -f "$KEYFILE"; }
           trap cleanup EXIT
@@ -945,7 +945,7 @@ jobs:
           set +x
           umask 077
           unset BASH_ENV ENV DYLD_INSERT_LIBRARIES DYLD_LIBRARY_PATH DYLD_FRAMEWORK_PATH
-          [ -n "$APPLE_API_KEY_P8" ] && [ -n "$APPLE_API_KEY_ID" ] && [ -n "$APPLE_API_ISSUER_ID" ] || { echo "::error::A secret of the environment ios-staging-signing is missing (docs/IOS_STAGING_DELIVERY.md section 5)."; exit 1; }
+          [ -n "$APPLE_API_KEY_P8" ] && [ -n "$APPLE_API_KEY_ID" ] && [ -n "$APPLE_API_ISSUER_ID" ] || { echo "::error::A secret of the environment ios-hosted-signing-stg is missing (docs/IOS_STAGING_DELIVERY.md section 5)."; exit 1; }
           # The key ID names a file and the issuer ID is an argument: both must have the exact shape Apple gives them. (Shell builtins only: no process has started.)
           re_key='^[A-Z0-9]{10}$'
           re_issuer='^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$'

@@ -95,7 +95,7 @@ nsec="$(printf '%s\n' "$code" | grep -c 'secrets\.')"
 names="$(printf '%s\n' "$code" | grep -o 'secrets\.[A-Z0-9_]*' | sort | tr '\n' ' ')"
 [ "$names" = "secrets.APPLE_API_ISSUER_ID secrets.APPLE_API_ISSUER_ID secrets.APPLE_API_KEY_ID secrets.APPLE_API_KEY_ID secrets.APPLE_API_KEY_P8 secrets.APPLE_API_KEY_P8 " ]; chk "they are APPLE_API_KEY_P8, APPLE_API_KEY_ID and APPLE_API_ISSUER_ID, each twice" $?
 ! printf '%s\n' "$code" | grep -E 'secrets:[[:space:]]*inherit|\$\{\{[[:space:]]*secrets[[:space:]]*\}\}|toJSON\(secrets' >/dev/null; chk "secrets are never passed wholesale" $?
-printf '%s\n' "$sign" | grep -E '^    environment: ios-staging-signing$' >/dev/null && [ "$(printf '%s\n' "$code" | grep -c 'environment:')" -eq 1 ]; chk "the signing job is the only job with an environment, and it is ios-staging-signing" $?
+printf '%s\n' "$sign" | grep -E '^    environment: ios-hosted-signing-stg$' >/dev/null && [ "$(printf '%s\n' "$code" | grep -c 'environment:')" -eq 1 ]; chk "the signing job is the only job with an environment, and it is ios-hosted-signing-stg" $?
 step_name='Export and sign with the cloud-managed Distribution certificate (the only step with secrets)'
 secret_step="$(printf '%s\n' "$sign" | awk -v n="      - name: $step_name" '$0==n {f=1; print; next} /^      - name:/ {f=0} f')"
 [ -n "$secret_step" ] && [ "$(printf '%s\n' "$secret_step" | grep -c 'secrets\.')" -eq 3 ]; chk "the export step exists and holds all three secrets at step level" $?
@@ -141,7 +141,7 @@ norm_step() { # FILE JOB FRAGMENT -> comment-free step text with the listed re-p
   local file="$1" job="$2" frag="$3" t
   t="$(grep -vE '^[[:space:]]*#' "$file" | sed -n '/^jobs:/,$p' | awk -v j="$job" '$0 ~ "^  "j":$" {f=1; next} /^  [a-z][a-z-]*:$/ {f=0} f')"
   step_of "$t" "$frag" | sed \
-    -e 's/ios-staging-signing is missing (docs\/IOS_STAGING_DELIVERY\.md section 5)/ios-hosted-signing is missing (docs\/IOS_HOSTED_SIGNING.md section 4)/' \
+    -e 's/ios-hosted-signing-stg is missing (docs\/IOS_STAGING_DELIVERY\.md section 5)/ios-hosted-signing is missing (docs\/IOS_HOSTED_SIGNING.md section 4)/' \
     -e 's/\${{ needs\.authorize\.outputs\.version }}/${{ inputs.expected_version }}/' \
     -e 's/\${{ github\.sha }}/${{ inputs.approved_sha }}/' \
     -e 's/promotion commit/approved commit/g' \
@@ -196,9 +196,9 @@ printf '%s\n' "$acode" | grep -F 'short_sha' >/dev/null && printf '%s\n' "$acode
 echo "== the credential model: temporary Admin key, approval before signing (CTO decision on Issue #71, 2026-11-26)"
 doc="$root/docs/IOS_STAGING_DELIVERY.md"; rec="$root/docs/release-records/ios-staging-authorization.md"
 [ -f "$doc" ] && [ -f "$rec" ]; chk "the design document and the record exist" $?
-printf '%s\n' "$sign" | grep -E '^    environment: ios-staging-signing$' >/dev/null && printf '%s\n' "$sign" | grep -E '^    needs: \[authorize, build\]$' >/dev/null; chk "the signing job is the one that declares the approval environment, after authorize and build" $?
+printf '%s\n' "$sign" | grep -E '^    environment: ios-hosted-signing-stg$' >/dev/null && printf '%s\n' "$sign" | grep -E '^    needs: \[authorize, build\]$' >/dev/null; chk "the signing job is the one that declares the approval environment, after authorize and build" $?
 ! printf '%s\n' "$authorize" | grep -E '^    environment:' >/dev/null && ! printf '%s\n' "$build" | grep -E '^    environment:' >/dev/null; chk "so the credential-free jobs authorize and build have no environment and never wait" $?
-grep -E '^# WHAT STARTS IT\.' "$wf" >/dev/null && grep -F 'waits for the approval of the protected environment `ios-staging-signing`' "$wf" >/dev/null && grep -F 'removes the secrets after the run' "$wf" >/dev/null; chk "the workflow header states the approval and the temporary credential" $?
+grep -E '^# WHAT STARTS IT\.' "$wf" >/dev/null && grep -F 'waits for the approval of the protected environment `ios-hosted-signing-stg`' "$wf" >/dev/null && grep -F 'removes the secrets after the run' "$wf" >/dev/null; chk "the workflow header states the approval and the temporary credential" $?
 ! grep -F 'No person starts anything afterwards' "$wf" >/dev/null && ! grep -F 'No required reviewers' "$wf" >/dev/null; chk "and no longer claims that nobody acts after the merge or that no reviewers exist" $?
 arch_step="$(step_of "$build" 'Upload the unsigned archive')"
 printf '%s\n' "$arch_step" | grep -E '^          retention-days: 1$' >/dev/null && printf '%s\n' "$arch_step" | grep -E 'handover/Runner\.xcarchive\.tar' >/dev/null; chk "the unsigned archive handed to the signing job is kept exactly ONE day" $?
@@ -217,7 +217,9 @@ bad_perm="$(grep -i 'permanent' "$doc" "$rec" "$wf" | grep -viE 'not authorized|
 srow="$(grep -E '^\| S2 \|' "$rec")"
 printf '%s\n' "$srow" | grep -F 'temporary provisioning' >/dev/null && printf '%s\n' "$srow" | grep -F 'Permanent storage of the key in GitHub is not authorized' >/dev/null && printf '%s\n' "$srow" | grep -F 'removes the three secrets' >/dev/null; chk "decision S2 in the record is temporary provisioning, with removal after the run" $?
 grep -E '^\| S3 \|' "$rec" | grep -F 'confirms the deployment only' >/dev/null; chk "decision S3 keeps the record as the authorization and the approval as a confirmation only" $?
-grep -E '^G2S-STAGING-STATUS: WITHDRAWN$' "$rec" >/dev/null && [ "$(grep -cE '^G2S-STAGING-(APP-APPLE-ID|AUTHORIZATION|DECISION-S[1-4]): PENDING$' "$rec")" -eq 6 ]; chk "this change authorizes nothing: the record is WITHDRAWN and its Apple ID, authorization and four decisions are still PENDING" $?
+grep -E '^G2S-STAGING-STATUS: WITHDRAWN$' "$rec" >/dev/null && [ "$(grep -cE '^G2S-STAGING-(AUTHORIZATION|DECISION-S[1-4]): PENDING$' "$rec")" -eq 5 ]; chk "this change authorizes nothing: the record is WITHDRAWN and its authorization and four decisions are still PENDING" $?
+grep -E '^G2S-STAGING-APP-APPLE-ID: 6839776198$' "$rec" >/dev/null && grep -F '`6839776198`' "$doc" >/dev/null; chk "the verified staging application (Apple ID 6839776198, never the production one) is recorded and documented" $?
+grep -F 'Cadena Internal Testing - staging only' "$doc" >/dev/null; chk "the staging TestFlight group is documented" $?
 printf '%s\n' "$sign" | grep -E 'APPLE_API_KEY_P8' >/dev/null && ! printf '%s\n%s\n' "$authorize" "$build" | grep -E 'secrets\.' >/dev/null; chk "the secrets are still read only by the signing job" $?
 probe="$(awk '/^## Appendix A/{a=1} a && /^```yaml$/{f=1; next} a && /^```$/{f=0} f' "$doc")"
 [ -n "$probe" ]; chk "the document carries the harmless secret-timing probe (Appendix A)" $?
@@ -239,5 +241,11 @@ chk "and the probe is a dispatch-only job with one dummy secret that prints its 
 grep -F 'dummy-not-a-credential' "$doc" >/dev/null && [ "$(printf '%s' 'dummy-not-a-credential' | wc -c | tr -d ' ')" = "22" ] && grep -F 'RESULT: present, length 22' "$doc" >/dev/null; chk "the probe's expected result matches the dummy value (22 characters)" $?
 
 echo
+echo "== the staging environment is ios-hosted-signing-stg (the maintainer's GitHub environment), distinct from the production one"
+! grep -P 'ios-hosted-signing(?!-stg|\.yml)' "$wf" >/dev/null && grep -qF 'environment: ios-hosted-signing-stg' "$wf"; chk "the staging workflow names exactly the environment ios-hosted-signing-stg and never the production environment ios-hosted-signing (only its workflow file is mentioned)" $?
+! grep -rE 'ios-staging-signing' "$wf" "$doc" "$rec" "$root/docs/RELEASE_TRIGGERS.md" "$root/tool/check_staging_authorization.sh" >/dev/null; chk "the old name ios-staging-signing is gone from the workflow, document, record, triggers document and gate" $?
+grep -E '^    environment: ios-hosted-signing-stg$' "$wf" | wc -l | grep -qx 1; chk "exactly one job declares that environment" $?
+grep -F 'only `staging`' "$doc" >/dev/null && grep -F 'sziller' "$doc" >/dev/null && grep -F 'CadenaWizard' "$doc" >/dev/null; chk "the document keeps the staging-only branch restriction and the two required reviewers" $?
+
 echo "ios-staging-delivery: $pass passed, $failed failed"
 [ "$failed" -eq 0 ]
