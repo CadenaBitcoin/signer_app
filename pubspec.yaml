@@ -28,6 +28,9 @@ dependencies:
   bip32: ^2.0.0
   bs58check: ^1.0.2
   shared_preferences: ^2.5.3
+  # Installed product version and build number, read from the native package metadata
+  # (Android versionName/versionCode, iOS CFBundleShortVersionString/CFBundleVersion).
+  package_info_plus: ^8.3.0
   dio: ^5.8.0+1
   fluttertoast: ^8.2.12
   decimal: ^3.2.4
