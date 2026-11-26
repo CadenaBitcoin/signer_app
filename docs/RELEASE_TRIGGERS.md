@@ -21,7 +21,7 @@ Workflow: `.github/workflows/build-variants.yml`. The mapping lives in one place
 | **Push to `staging`** (a promotion merge) | `android-staging-apk`, `ios-staging` | **2** |
 | **Push to `production`** (a promotion merge) | `android-production-apk`, `android-production-aab`, `ios-production` | **3** |
 | The push that **creates** `staging` or `production` | none (every job is skipped) | 0 |
-| Manual run (Actions → *Build variants* → *Run workflow*) | `all`, or exactly one variant | 5, or 1 |
+| Manual run (Actions → *Build variants* → *Run workflow*), always **MANUALLY GENERATED** | `all`, or exactly one variant | 5, or 1 |
 
 **Every** push to `staging` or `production` runs its branch's builds, whatever it changes: the
 planner has no path filter, no change classification and no release-intent input, and the
@@ -84,7 +84,8 @@ that carries a variant selection.
 
 ## Manual execution
 
-Any ref, once the workflow file exists on the default branch (`development`):
+Once the workflow file exists on the default branch (`development`; GitHub offers *Run workflow*, and
+`gh workflow run`, only for such a workflow, with the inputs of that version):
 *Actions → Build variants → Run workflow*, choose a branch and **one** of `all`,
 `android-staging-apk`, `ios-staging`, `android-production-apk`, `android-production-aab`,
 `ios-production`. A single variant runs only its own build job plus the shared checks
@@ -94,7 +95,126 @@ branch, re-checking a variant, or the pre-merge test of workflow changes.
 
 The group names `staging` / `production` are not manual choices; they exist only for pushes.
 Two further inputs control retention and nothing else: **retain** (default off) and **recipient**
-(an age *public* key; never a secret key). See "Retained artifacts" below.
+(an age *public* key; never a secret key). See "Retained artifacts" below. Manual runs take no input that
+chooses a commit: the commit built is the commit of the workflow itself (next section).
+
+### Manually generated staging build
+
+A manual run is **the same pipeline as a promotion, started by hand**: the same `plan`, `static`,
+`reject`, `android`, `ios` and `verdict` jobs, the same configuration file per environment
+(`config/build/<env>.json`), the same flavors and application identities, the same verification
+(`tool/verify_artifact.sh`, `tool/build_manifest.py`), the same retention rules. There is no second
+build implementation: the build commands exist once, in the jobs both triggers run, and
+`tool/test_release_triggers.sh` pins that. Whatever those jobs gain later (a signed Android staging APK,
+issue #57; signed iOS staging delivery to TestFlight, issue #71) is gained by both ways of starting them.
+
+What differs is only the trigger, the source and the marking:
+
+| | Promotion (push to `staging`) | Manual run |
+|---|---|---|
+| Source built | the pushed merge commit | the commit of the workflow itself (`github.sha`) |
+| Workflow from | `staging` | for a staging variant: **`development` only** |
+| Commit allowed | the merge commit | for a staging variant: **the current tip of `development` only** |
+| `source.origin` in every manifest | `automatic` | **`MANUALLY GENERATED`** |
+| `source.on_development` | `null` | `true` / `false` (a staging build must be `true`) |
+| Run summary | plan table | begins with **MANUALLY GENERATED**, the source commit and "no branch was modified" |
+| Uploaded artifact names | `build-evidence_<variant>_a<n>`, `retained_<variant>_a<n>` | `MANUALLY_GENERATED_` in front of both |
+| File names (retained bundle, `build_manifest.py name`) | `NON-DISTRIBUTABLE_INTERNAL-EVALUATION_cadena-signer-...` | `MANUALLY_GENERATED_NON-DISTRIBUTABLE_INTERNAL-EVALUATION_cadena-signer-...` |
+
+The marker is a prefix and a manifest field. It is **not** part of the version, the build number, an
+application ID or bundle ID, the backend configuration, the Bitcoin network or any signing identity, and
+no job reads any of those from it. `source.commit` is the commit that was built, `source.ref` is the branch the workflow was
+started from, and `source.on_development` says whether the commit is on `development`; none is ever replaced
+to satisfy a validator. A manual run
+never writes to `staging`, `production` or any other branch.
+
+**Why only the current tip of `development`.** Every job checks out the workflow's own commit, and the
+scripts it then runs (`tool/plan_build_variants.sh`, `verify_artifact.sh`, `build_manifest.py`,
+`check_verdict.sh`, the tests) are the ones of that checkout. If a manual run could build an older commit,
+it would run that commit's older scripts under today's workflow file: the staging rules, the marking and the
+current verification would not be guaranteed (a check of `6f30f11`, from before this feature, showed its
+planner, manifest tool and verdict script know nothing of the origin, the schema or the staging rules). So
+the workflow and the scripts always come from one commit, and a staging selection is accepted only while that
+commit **is** the tip of `development` (GitHub's compare API must report `identical`). A run that is started
+from another branch or a tag, a re-run of an older run after `development` moved on, and a run that lost a
+race with a merge are all refused before anything is built; start a new run. Building an older revision is
+not supported; it can be added later only together with a way to run the current scripts against it.
+
+**How a manual staging build is launched**
+
+1. *Actions → Build variants → Run workflow* (the workflow must be on `development`, the default branch).
+2. *Use workflow from*: **`development`**. Any other ref is refused for a staging variant.
+3. *variant*: `android-staging-apk`, `ios-staging`, or `all` (`all` contains the staging variants and so
+   follows the same rule).
+4. *retain* and *recipient*: unchanged (Retained artifacts, below).
+5. Run it. The run summary starts with **MANUALLY GENERATED** and the commit built, and the *Source
+   commit relative to development* step shows `identical`.
+
+The same with the GitHub CLI (it does the same thing; it does not bypass any rule):
+
+```
+gh workflow run build-variants.yml --ref development -f variant=android-staging-apk
+```
+
+Production-only manual runs (a single production variant) keep their earlier freedom to run from any ref, are
+marked the same way, and deliver nothing; the workflow file and the scripts of that ref are what runs. This
+is also the way to try a change to this workflow before it is merged: dispatch a production variant from the
+branch (a staging variant is refused there by design).
+
+**Manifest schema.** The two source fields are a new version of the manifest, `cadena-build-manifest/2`.
+Every new manifest is written in schema 2, and the build jobs and the verdict (`verify --require-current`,
+`verify-dir`) accept nothing else for a run, with both fields required and checked (the origin follows from
+the event; a manual staging build must be `on_development`). Every manifest made before this change is
+schema 1 and **stays verifiable** under exactly its own rules: `tool/build_manifest.py verify` accepts it, says
+that it records no origin, and keeps checking everything else; the file name is the unprefixed canonical name
+it always had. A schema-1 manifest may not carry the new fields and a schema-2 manifest may not lack them,
+so neither can be turned into the other, and a new manual manifest downgraded to schema 1 no longer fits its
+file name. A plain `verify` of a schema-1 file cannot tell a forged downgrade from a historical manifest
+(manifests are recorded provenance, not authenticated); the CI paths therefore never accept schema 1. Real
+schema-1 files written by the previous tool are kept as test fixtures (`tool/fixtures/manifest-schema1/`).
+`tool/verify_ipa.py` accepts a schema-1 build manifest too, because the unsigned build job of a hosted signing
+run can use an older commit's tools.
+
+**Which manual run gives an installable APK.** Two workflows can be started by hand, and they do different jobs:
+
+| I want | Start | Result |
+|---|---|---|
+| **An installable Android staging APK of the current `development`** | *Actions → Android CI validation build → Run workflow*, workflow from `development` | a downloadable, debug-signed, labelled APK (14 days) plus a notice file with the commit SHA, marked **MANUALLY GENERATED** |
+| Compile validation of the variants, with manifests and evidence (no binary) | *Actions → Build variants → Run workflow* | verified evidence and manifests, marked **MANUALLY GENERATED** |
+
+The first is the existing workflow that already publishes the APK of a staging merge
+([ANDROID_CI.md](ANDROID_CI.md)); a manual run of it is the same build, verification and upload, with two
+differences: the MANUALLY GENERATED marking (artifact name, APK file name, notice, run summary) and the rule
+above (workflow from `development`, commit still the tip of `development`, decided by the same
+`tool/plan_build_variants.sh`; a refused run builds nothing). It runs independently of iOS: nothing in the
+iOS jobs can prevent the APK. The APK is the same kind of file a staging merge produces today and is what
+that policy already allows: a **debug-signed validation build** (ephemeral CI key, `staging` flavor, staging
+configuration, staging icon), installable next to the production app, **not** a release or a signed staging
+build. It cannot update an earlier run's APK (each run signs with a new key: uninstall first).
+
+**Why the APK is not published by `build-variants.yml`.** That workflow is the one that keeps artifacts only
+encrypted and uploads no plaintext binary (this is pinned by tests and by `CLAUDE.md`). Adding a readable APK
+upload to it would need an explicit policy exception. No exception is needed for the route above, because
+`android-ci-validation.yml` is the workflow `ANDROID_CI.md` and `RELEASE_POLICY.md` section 3 already allow to
+publish a labelled debug-signed validation APK. The policy limits are unchanged and still apply: a
+**release-signed** staging APK must not be an ordinary public Actions artifact (`RELEASE_POLICY.md` section
+8.2), so Android staging signing and its private delivery channel (#57, reconciling #72) are still open, as
+are iOS signing and TestFlight delivery (#71) and the build-number rules (`docs/RELEASE_VERSIONING.md`).
+Because the repository is public, any signed-in GitHub account can download this validation APK; it contains
+the staging configuration only and no secret.
+
+**Scope: this is not yet a reproduction of all three workflows of a staging merge.** The manual path does
+not start `ios-ci-validation.yml`, and `build-variants.yml` and `android-ci-validation.yml` are started
+separately, not by one click. No Android signing, no signed APK download, no iOS signing and no TestFlight
+upload exist for either path, and nothing in them allocates, increments or consumes a build number: both
+ways of starting them build the version in `pubspec.yaml` as it is, so a manual run cannot use up a store
+build identity and a later promotion remains possible.
+
+**What a successful `build-variants.yml` manual run is, and is not.** It is exactly what a successful
+promotion run of that workflow is today: the staging variants were compiled and verified (identity, version,
+staging configuration and icon, signing status), and their evidence and manifests were uploaded; no
+plaintext binary is uploaded by it. A successful run that contains only manifests, logs or evidence is **not**
+an installable APK and must not be reported as one: use the Android CI validation build for the APK.
 
 ## One implementation, three decision points
 

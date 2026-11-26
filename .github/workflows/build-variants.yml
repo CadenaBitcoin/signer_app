@@ -37,7 +37,20 @@
 #     written once, in the `android` and `ios` jobs below; there is no second copy.
 #   - Manual run (workflow_dispatch): choose `all` or exactly ONE variant. A single variant
 #     runs only its own build job plus the shared checks (`static`, and for an Android
-#     variant `reject`); the other four are not executed.
+#     variant `reject`); the other four are not executed. A manual run is the SAME pipeline as
+#     the promotion, started by hand, and is always marked MANUALLY GENERATED: in the run
+#     summary, in the name of every uploaded artifact (MANUALLY_GENERATED_ in front), and in
+#     every build manifest (source.origin). It builds the #     commit of the workflow itself (github.sha), so the scripts that run are always those of
+#     the workflow's own commit. A selection that contains a STAGING variant is accepted only
+#     from the workflow on `development` and only while that commit is still the CURRENT TIP of
+#     `development` (tool/plan_build_variants.sh): an older commit, or a re-run of an old run, is
+#     refused, because it would run old build-control scripts. The
+#     marker changes no version, identity, configuration or signing. Whatever delivery the
+#     staging builds gain later (signed Android APK, TestFlight: #57, #71) is added to these
+#     same jobs and is therefore shared by both ways of starting them.
+#     This workflow uploads no plaintext binary. The installable staging APK is made by a manual run of
+#     android-ci-validation.yml (same marking, same current-tip rule; docs/RELEASE_TRIGGERS.md). A staging
+#     merge also starts ios-ci-validation.yml, which is not reproduced.
 #   - Release branches (docs/RELEASE_TRIGGERS.md): a push to `staging` runs the two staging
 #     variants and a push to `production` the three production variants. Both branches are
 #     protected and accept only pull-request merge commits, so such a push IS an authorized
@@ -120,6 +133,9 @@ jobs:
       has_ios: ${{ steps.plan.outputs.has_ios }}
       android_matrix: ${{ steps.plan.outputs.android_matrix }}
       ios_matrix: ${{ steps.plan.outputs.ios_matrix }}
+      origin: ${{ steps.plan.outputs.origin }}
+      on_development: ${{ steps.plan.outputs.on_development }}
+      name_prefix: ${{ steps.plan.outputs.name_prefix }}
       retain: ${{ steps.retention.outputs.retain }}
       recipients: ${{ steps.retention.outputs.recipients }}
       recipient_count: ${{ steps.retention.outputs.recipient_count }}
@@ -177,6 +193,22 @@ jobs:
           CADENA_REQUIRE_AGE: "1"
         run: tool/test_retained_artifacts.sh
 
+      # A manual run builds the commit of this workflow (github.sha). Whether that commit is still the
+      # tip of `development` is asked of GitHub (the compare API needs nothing but read access); the
+      # plan decides what it allows (tool/plan_build_variants.sh).
+      - name: Source commit relative to development (manual run only)
+        id: source
+        if: ${{ github.event_name == 'workflow_dispatch' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+        run: |
+          # status of this commit relative to `development`: identical = it IS the tip; behind = an older commit of development.
+          # Only a successful answer is used (an error body would be printed to stdout); anything else is `unknown`, which the plan refuses for staging.
+          if relation="$(gh api "repos/$REPO/compare/development...$GITHUB_SHA" --jq .status 2>/dev/null)" && printf '%s' "$relation" | grep -Eqx '[a-z]+'; then :; else relation=unknown; fi
+          echo "relation=$relation" >> "$GITHUB_OUTPUT"
+          echo "Commit $GITHUB_SHA relative to development: $relation"
+
       - name: Plan
         id: plan
         env:
@@ -184,6 +216,7 @@ jobs:
           REF: ${{ github.ref }}
           INPUT_VARIANT: ${{ inputs.variant }}
           CREATED: ${{ github.event.created }}
+          RELATION: ${{ steps.source.outputs.relation }}
         run: |
           # A promotion is a merge commit. The checkout is shallow, so the parents are read
           # from the commit object (tool/commit_parents.sh), not from the history.
@@ -192,9 +225,15 @@ jobs:
             parents="$(tool/commit_parents.sh "$GITHUB_SHA")"
           fi
           # No pipe: a failing plan must fail this step (the default shell has no pipefail).
-          tool/plan_build_variants.sh "$EVENT_NAME" "$REF" "$INPUT_VARIANT" "$parents" "$CREATED" > "$RUNNER_TEMP/plan.txt"
+          tool/plan_build_variants.sh "$EVENT_NAME" "$REF" "$INPUT_VARIANT" "$parents" "$CREATED" "$RELATION" > "$RUNNER_TEMP/plan.txt"
           cat "$RUNNER_TEMP/plan.txt" >> "$GITHUB_OUTPUT"
           {
+            if [ "$EVENT_NAME" = workflow_dispatch ]; then
+              echo "## MANUALLY GENERATED"
+              echo
+              echo "Started by hand (\`workflow_dispatch\`), **not** by a promotion. Source commit \`$GITHUB_SHA\` (on development: $(sed -n 's/^on_development=//p' "$RUNNER_TEMP/plan.txt")); workflow from \`$REF\`. No branch was modified. Every artifact of this run is named \`MANUALLY_GENERATED_...\` and every manifest records \`source.origin = MANUALLY GENERATED\`."
+              echo
+            fi
             echo "### Plan: $(sed -n 's/^selection=//p' "$RUNNER_TEMP/plan.txt")"
             echo
             echo "Required variants ($(sed -n 's/^count=//p' "$RUNNER_TEMP/plan.txt")): \`$(sed -n 's/^variants=//p' "$RUNNER_TEMP/plan.txt")\`"
@@ -340,6 +379,8 @@ jobs:
       BUILD_KIND: ${{ matrix.kind }}
       FLUTTER_COMMAND: ${{ matrix.flutter_command }}
       BUILD_CONFIG_FILE: config/build/${{ matrix.env }}.json
+      # Provenance for the manifest (tool/build_manifest.py): the commit built and, for a manual run, whether it is on development.
+      CADENA_COMMIT_ON_DEVELOPMENT: ${{ needs.plan.outputs.on_development }}
       # Pinned: the SHA-256 is that of the release asset (GitHub records the same digest).
       BUNDLETOOL_URL: https://github.com/google/bundletool/releases/download/1.18.3/bundletool-all-1.18.3.jar
       BUNDLETOOL_SHA256: a099cfa1543f55593bc2ed16a70a7c67fe54b1747bb7301f37fdfd6d91028e29
@@ -448,11 +489,12 @@ jobs:
             if [ "$BUILD_KIND" = aab ]; then echo "bundletool=${BUNDLETOOL_URL##*/}"; fi
           } > "$RUNNER_TEMP/toolchain.txt"
           python3 -I tool/build_manifest.py create --evidence "evidence/$BUILD_VARIANT.txt" --toolchain "$RUNNER_TEMP/toolchain.txt" --out "evidence/$BUILD_VARIANT.manifest.json"
-          python3 -I tool/build_manifest.py verify "evidence/$BUILD_VARIANT.manifest.json" --repo . --evidence "evidence/$BUILD_VARIANT.txt"
+          python3 -I tool/build_manifest.py verify "evidence/$BUILD_VARIANT.manifest.json" --repo . --evidence "evidence/$BUILD_VARIANT.txt" --require-current
           cat "evidence/$BUILD_VARIANT.manifest.json"
           {
             echo "### $BUILD_VARIANT: compiled and verified"
             echo
+            [ "${{ needs.plan.outputs.origin }}" != "MANUALLY GENERATED" ] || { echo "**MANUALLY GENERATED** from \`$GITHUB_SHA\`"; echo; }
             echo "Temporary debug signing; **not distributable**. No binary uploaded."
             echo
             echo '```'
@@ -463,7 +505,7 @@ jobs:
       - name: Upload evidence (text only)
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: build-evidence_${{ matrix.variant }}_a${{ github.run_attempt }}
+          name: ${{ needs.plan.outputs.name_prefix }}build-evidence_${{ matrix.variant }}_a${{ github.run_attempt }}
           path: evidence/
           if-no-files-found: error
           retention-days: 14
@@ -489,7 +531,7 @@ jobs:
         if: ${{ needs.plan.outputs.retain == 'true' }}
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: retained_${{ matrix.variant }}_a${{ github.run_attempt }}
+          name: ${{ needs.plan.outputs.name_prefix }}retained_${{ matrix.variant }}_a${{ github.run_attempt }}
           path: retained/
           if-no-files-found: error
           retention-days: ${{ env.RETENTION_DAYS }}
@@ -512,6 +554,7 @@ jobs:
       BUILD_ENV: ${{ matrix.env }}
       OTHER_ENV: ${{ matrix.other }}
       BUILD_CONFIG_FILE: config/build/${{ matrix.env }}.json
+      CADENA_COMMIT_ON_DEVELOPMENT: ${{ needs.plan.outputs.on_development }}
       # Xcode 26.3 (iOS 26.2 SDK), selected explicitly: App Store Connect uploads need Xcode 26
       # and an iOS 26 SDK or later (Issue #70). The built app must record such an SDK itself.
       XCODE_APP: /Applications/Xcode_26.3.app
@@ -721,11 +764,12 @@ jobs:
           } > "evidence/$BUILD_VARIANT.txt"
           cat "evidence/$BUILD_VARIANT.txt"
           python3 -I tool/build_manifest.py create --evidence "evidence/$BUILD_VARIANT.txt" --toolchain "$RUNNER_TEMP/toolchain.txt" --out "evidence/$BUILD_VARIANT.manifest.json"
-          python3 -I tool/build_manifest.py verify "evidence/$BUILD_VARIANT.manifest.json" --repo . --evidence "evidence/$BUILD_VARIANT.txt"
+          python3 -I tool/build_manifest.py verify "evidence/$BUILD_VARIANT.manifest.json" --repo . --evidence "evidence/$BUILD_VARIANT.txt" --require-current
           cat "evidence/$BUILD_VARIANT.manifest.json"
           {
             echo "### $BUILD_VARIANT: compiled and verified"
             echo
+            [ "${{ needs.plan.outputs.origin }}" != "MANUALLY GENERATED" ] || { echo "**MANUALLY GENERATED** from \`$GITHUB_SHA\`"; echo; }
             echo "**Unsigned** (\`--no-codesign\`); not installable, not distributable. No binary uploaded."
             echo
             echo '```'
@@ -736,7 +780,7 @@ jobs:
       - name: Upload evidence (text only)
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: build-evidence_${{ matrix.variant }}_a${{ github.run_attempt }}
+          name: ${{ needs.plan.outputs.name_prefix }}build-evidence_${{ matrix.variant }}_a${{ github.run_attempt }}
           path: evidence/
           if-no-files-found: error
           retention-days: 14
@@ -760,7 +804,7 @@ jobs:
         if: ${{ needs.plan.outputs.retain == 'true' }}
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: retained_${{ matrix.variant }}_a${{ github.run_attempt }}
+          name: ${{ needs.plan.outputs.name_prefix }}retained_${{ matrix.variant }}_a${{ github.run_attempt }}
           path: retained/
           if-no-files-found: error
           retention-days: ${{ env.RETENTION_DAYS }}
@@ -815,6 +859,8 @@ jobs:
       SELECTION: ${{ needs.plan.outputs.selection }}
       RETAIN: ${{ needs.plan.outputs.retain }}
       RUN_ATTEMPT: ${{ github.run_attempt }}
+      ARTIFACT_PREFIX: ${{ needs.plan.outputs.name_prefix }}
+      ORIGIN: ${{ needs.plan.outputs.origin }}
     steps:
       - name: Checkout exact commit
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
@@ -830,7 +876,7 @@ jobs:
       - name: Download the evidence of the required variants
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
-          pattern: build-evidence_*_a${{ github.run_attempt }}
+          pattern: ${{ needs.plan.outputs.name_prefix }}build-evidence_*_a${{ github.run_attempt }}
           merge-multiple: true
           path: evidence
 
@@ -841,7 +887,7 @@ jobs:
         if: ${{ needs.plan.outputs.retain == 'true' }}
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
-          pattern: retained_*_a${{ github.run_attempt }}
+          pattern: ${{ needs.plan.outputs.name_prefix }}retained_*_a${{ github.run_attempt }}
           path: retained
 
       - name: Retained artifacts correspond to the verified builds
@@ -850,7 +896,7 @@ jobs:
           ls -l retained
           tool/check_verdict.sh retained retained
           for v in $REQUIRED_VARIANTS; do
-            python3 -I tool/retain_artifact.py verify "retained/retained_${v}_a${RUN_ATTEMPT}" --repo . --against evidence
+            python3 -I tool/retain_artifact.py verify "retained/${ARTIFACT_PREFIX}retained_${v}_a${RUN_ATTEMPT}" --repo . --against evidence
           done
 
       - name: Evidence check, cross-artifact checks and summary
@@ -879,6 +925,7 @@ jobs:
             fi
           done
           {
+            [ "$ORIGIN" != "MANUALLY GENERATED" ] || { echo "## MANUALLY GENERATED"; echo; echo "Source commit \`$GITHUB_SHA\`. Not a promotion; no branch was modified."; echo; }
             echo "## Build variants ($SELECTION): all required variants compiled and verified"
             echo
             echo "No signing credentials. Android: temporary debug signing; iOS: unsigned. **None of these is distributable**, and no plaintext binary was uploaded."
@@ -897,7 +944,7 @@ jobs:
               echo "| Variant | Plaintext SHA-256 | Ciphertext SHA-256 | Size | Retained as |"
               echo "|---|---|---|---|---|"
               for v in $REQUIRED_VARIANTS; do
-                r="retained/retained_${v}_a${RUN_ATTEMPT}/$v.retained.json"
+                r="retained/${ARTIFACT_PREFIX}retained_${v}_a${RUN_ATTEMPT}/$v.retained.json"
                 python3 -I - "$r" "$v" <<'PY' >> "$GITHUB_STEP_SUMMARY"
           import json, sys
           r = json.load(open(sys.argv[1]))

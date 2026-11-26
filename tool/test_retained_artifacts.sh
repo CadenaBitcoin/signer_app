@@ -129,6 +129,34 @@ assert r['artifact']['plaintext']['sha256']=='$plain_sha' and r['signing']['dist
 assert r['artifact']['content']['digest_kind']=='zip-entries-without-signature-files'
 "
 expect_rc "verify without a key: the bundle is consistent" 0 "RESULT: OK" RAx verify "$apk" --repo "$root" --against "$fx/android-production-apk" --age "$AGE_BIN"
+
+# A MANUALLY GENERATED build (Issue #57 stage 1): the same pack, the marker outermost in every name, and the
+# bundle still verifies against its own manifest and evidence.
+mst="$tmp/manual-staging"; mkdir -p "$mst"
+python3 -I - "$root/tool" "$fx/android-staging-apk/android-staging-apk.manifest.json" "$mst/android-staging-apk.manifest.json" <<'PY'
+import json, sys
+sys.path.insert(0, sys.argv[1])
+import build_manifest as bm
+m = json.load(open(sys.argv[2]))
+m["source"].update(event="workflow_dispatch", origin="MANUALLY GENERATED", on_development=True)
+m["artifact"]["canonical_name"] = bm.canonical_name(m)
+json.dump(m, open(sys.argv[3], "w"), indent=2)
+PY
+mbun="$tmp/out-manual-apk"
+expect_rc "pack: a manually generated staging APK is retained" 0 "RESULT: OK" RAx pack --variant android-staging-apk --kind apk --artifact "$fx/android-staging-apk/app-staging-release.apk" --evidence "$fx/android-staging-apk/android-staging-apk.txt" --manifest "$mst/android-staging-apk.manifest.json" --recipients "$REC" --out "$mbun" "${PACK_AGE[@]}"
+t "the manual bundle's ciphertext name is MANUALLY_GENERATED_ + the NON-DISTRIBUTABLE label + the canonical name" bash -c "ls '$mbun' | grep -qE '^MANUALLY_GENERATED_NON-DISTRIBUTABLE_INTERNAL-EVALUATION_cadena-signer-staging-.*-android-apk-.*\.apk\.age\$'"
+t "the automatic bundle's name has no manual marker" bash -c "! ls '$apk' | grep -q MANUALLY_GENERATED"
+expect_rc "verify: the manually generated bundle is consistent" 0 "RESULT: OK" RAx verify "$mbun" --repo "$root" --age "$AGE_BIN"
+# A build manifest of the historical schema 1 cannot be packed as a NEW retained artifact (a retained bundle is made from a
+# build that has just been verified in the current schema); a bundle that already exists stays verifiable.
+python3 -I - "$fx/android-staging-apk/android-staging-apk.manifest.json" "$tmp/legacy-staging.manifest.json" <<'PY'
+import json, sys
+m = json.load(open(sys.argv[1]))
+m["schema"] = "cadena-build-manifest/1"
+m["source"].pop("origin"); m["source"].pop("on_development")
+json.dump(m, open(sys.argv[2], "w"))
+PY
+expect_rc "pack: a schema-1 build manifest is refused for a new retained artifact" 2 "does not verify" RAx pack --variant android-staging-apk --kind apk --artifact "$fx/android-staging-apk/app-staging-release.apk" --evidence "$fx/android-staging-apk/android-staging-apk.txt" --manifest "$tmp/legacy-staging.manifest.json" --recipients "$REC" --out "$tmp/out-legacy" "${PACK_AGE[@]}"
 expect_rc "verify with the custodian's key: the plaintext is the verified artifact" 0 "plaintext verified" RAx verify "$apk" --identity "$CUSTODIAN_KEY" --age "$AGE_BIN"
 if $real_age; then
   expect_rc "verify with another key: the artifact cannot be read" 1 "FAIL" RAx verify "$apk" --identity "$OTHER_KEY" --age "$AGE_BIN"

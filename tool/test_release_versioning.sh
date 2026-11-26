@@ -310,12 +310,13 @@ EOF
       ;;
   esac
 }
-# mkman VARIANT DIR [COMMIT] [EVENT] [REF]: evidence + manifest in DIR
+# mkman VARIANT DIR [COMMIT] [EVENT] [REF] [ON_DEVELOPMENT]: evidence + manifest in DIR (a manual run states whether its commit is on development)
 mkman() {
-  local v="$1" d="$2" commit="${3:-$COMMIT}" event="${4:-workflow_dispatch}" ref="${5:-feature}"
+  local v="$1" d="$2" commit="${3:-$COMMIT}" event="${4:-workflow_dispatch}" ref="${5:-feature}" ondev="${6:-true}"
   mkev "$v" "$d" "$commit"
   GITHUB_RUN_ID=$RUN GITHUB_RUN_ATTEMPT=1 GITHUB_SERVER_URL=https://github.com GITHUB_REPOSITORY=CadenaBitcoin/signer_app \
-    GITHUB_SHA=$commit GITHUB_REF_NAME=$ref GITHUB_REF_TYPE=branch GITHUB_EVENT_NAME=$event GITHUB_WORKFLOW="Build variants (compile validation)" \
+    GITHUB_SHA=$commit CADENA_COMMIT_ON_DEVELOPMENT=$([ "$event" = push ] || echo "$ondev") \
+    GITHUB_REF_NAME=$ref GITHUB_REF_TYPE=branch GITHUB_EVENT_NAME=$event GITHUB_WORKFLOW="Build variants (compile validation)" \
     python3 -I "$TOOLPY" create --evidence "$d/$v.txt" --toolchain "$d/$v.toolchain" --out "$d/$v.manifest.json" ${RELEASE_ID:+--release-id "$RELEASE_ID"} >/dev/null
 }
 # mut IN OUT 'python using m'
@@ -352,7 +353,7 @@ mrej() { # NAME FRAGMENT 'python using m' [extra verify args...]
 macc() { local name="$1" code="$2"; shift 2; mut "$M" "$tmp/okm.json" "$code" && accepted "manifest: $name" BM verify "$tmp/okm.json" "$@"; }
 
 # structure
-mrej "wrong schema" "schema" 'm["schema"]="cadena-build-manifest/2"'
+mrej "wrong schema" "schema" 'm["schema"]="cadena-build-manifest/3"'
 mrej "a missing section" "missing key 'ci'" 'del m["ci"]'
 mrej "a missing field" "missing key 'source.commit'" 'del m["source"]["commit"]'
 mrej "an unknown top-level key" "unknown key 'extra'" 'm["extra"]=1'
@@ -368,7 +369,7 @@ mrej "a missing ref" "source.ref is missing" 'm["source"]["ref"]=""'
 mrej "an unknown ref type" "ref_type" 'm["source"]["ref_type"]="pull"'
 mrej "an unsupported event" "source.event" 'm["source"]["event"]="pull_request"'
 mrej "a push to staging that built production" "cannot build the production" 'm["source"]["ref"]="staging"'
-macc "a manual run may build any variant from any branch" 'm["source"]["event"]="workflow_dispatch"; m["source"]["ref"]="issue/69-x"'
+accepted "manifest: a manual run may build any variant from any branch (real manual manifest, from the issue branch)" BM verify "$allrun/android-production-apk.manifest.json" --repo "$fx" --evidence "$allrun/android-production-apk.txt"
 # release identity
 macc "no release identifier is allowed for a compile-validation build" 'm["source"]["release_id"]=None'
 mrej "a malformed release identifier" "release_id" 'm["source"]["release_id"]="1.0.3"'
@@ -441,12 +442,12 @@ rejected "manifest: text evidence from another attempt" "run line" BM verify "$M
 # create refuses what it cannot represent
 cp "$good/android-production-apk.txt" "$tmp/ev4.txt"
 edit "$tmp/ev4.txt" "signing=debug" "signing=signed-by-other-key"
-expect_rc "create: a signing kind of a release is refused" 2 "cannot be recorded" env GITHUB_RUN_ID=$RUN GITHUB_RUN_ATTEMPT=1 GITHUB_SERVER_URL=https://github.com GITHUB_REPOSITORY=CadenaBitcoin/signer_app GITHUB_SHA=$COMMIT python3 -I "$TOOLPY" create --evidence "$tmp/ev4.txt" --toolchain "$good/android-production-apk.toolchain" --out "$tmp/x.json"
+expect_rc "create: a signing kind of a release is refused" 2 "cannot be recorded" env GITHUB_EVENT_NAME=push GITHUB_RUN_ID=$RUN GITHUB_RUN_ATTEMPT=1 GITHUB_SERVER_URL=https://github.com GITHUB_REPOSITORY=CadenaBitcoin/signer_app GITHUB_SHA=$COMMIT python3 -I "$TOOLPY" create --evidence "$tmp/ev4.txt" --toolchain "$good/android-production-apk.toolchain" --out "$tmp/x.json"
 expect_rc "create: no run identity is refused" 2 "GITHUB_RUN_ID" env -u GITHUB_RUN_ID -u GITHUB_RUN_ATTEMPT python3 -I "$TOOLPY" create --evidence "$good/android-production-apk.txt" --toolchain "$good/android-production-apk.toolchain" --out "$tmp/x.json"
-expect_rc "create: a commit that differs from the evidence is refused" 2 "differs from the evidence" env GITHUB_RUN_ID=$RUN GITHUB_RUN_ATTEMPT=1 GITHUB_SERVER_URL=https://github.com GITHUB_REPOSITORY=CadenaBitcoin/signer_app GITHUB_SHA=0000000000000000000000000000000000000001 python3 -I "$TOOLPY" create --evidence "$good/android-production-apk.txt" --toolchain "$good/android-production-apk.toolchain" --out "$tmp/x.json"
+expect_rc "create: a commit that differs from the evidence is refused" 2 "differs from the evidence" env GITHUB_EVENT_NAME=push GITHUB_RUN_ID=$RUN GITHUB_RUN_ATTEMPT=1 GITHUB_SERVER_URL=https://github.com GITHUB_REPOSITORY=CadenaBitcoin/signer_app GITHUB_SHA=0000000000000000000000000000000000000001 python3 -I "$TOOLPY" create --evidence "$good/android-production-apk.txt" --toolchain "$good/android-production-apk.toolchain" --out "$tmp/x.json"
 cp "$good/android-production-apk.txt" "$tmp/ev5.txt"
 printf 'signing=unsigned\n' >>"$tmp/ev5.txt"
-expect_rc "create: ambiguous evidence (a repeated key) is refused" 2 "repeats the key" env GITHUB_RUN_ID=$RUN GITHUB_RUN_ATTEMPT=1 GITHUB_SERVER_URL=https://github.com GITHUB_REPOSITORY=CadenaBitcoin/signer_app GITHUB_SHA=$COMMIT python3 -I "$TOOLPY" create --evidence "$tmp/ev5.txt" --toolchain "$good/android-production-apk.toolchain" --out "$tmp/x.json"
+expect_rc "create: ambiguous evidence (a repeated key) is refused" 2 "repeats the key" env GITHUB_EVENT_NAME=push GITHUB_RUN_ID=$RUN GITHUB_RUN_ATTEMPT=1 GITHUB_SERVER_URL=https://github.com GITHUB_REPOSITORY=CadenaBitcoin/signer_app GITHUB_SHA=$COMMIT python3 -I "$TOOLPY" create --evidence "$tmp/ev5.txt" --toolchain "$good/android-production-apk.toolchain" --out "$tmp/x.json"
 
 # the manifests of one run
 dirx="$tmp/dx"
@@ -482,6 +483,91 @@ mkman android-staging-apk "$mixed" 1111111111111111111111111111111111111111 work
 rejected "run: variants built from two commits" "disagree on source.commit" BM verify-dir "$mixed" --variants "android-production-apk android-staging-apk" --repo "$fx"
 accepted "run: a manual run of one variant" BM verify-dir "$good" --variants "android-production-aab" --repo "$fx"
 accepted "run: a manual run of all five variants from one branch" BM verify-dir "$allrun" --variants "$VARS" --repo "$fx"
+
+# manual origin (MANUALLY GENERATED): decided by the event, recorded, and carried by every name
+MS="$tmp/manual_staging"; rm -rf "$MS"; mkdir -p "$MS"
+OTHER=2222222222222222222222222222222222222222
+mkman android-staging-apk "$MS" "$COMMIT" workflow_dispatch development
+mrejm() { # NAME FRAGMENT 'python using m' (mutates a real MANUAL staging manifest)
+  mut "$MS/android-staging-apk.manifest.json" "$tmp/badm.json" "$3" || { bad "manifest: $1 (mutation failed)"; return; }
+  rejected "manifest: $1" "$2" BM verify "$tmp/badm.json"
+}
+accepted "manifest: a manual staging build from a commit of development verifies" BM verify "$MS/android-staging-apk.manifest.json" --repo "$fx" --evidence "$MS/android-staging-apk.txt"
+t "manifest: a manual build records origin MANUALLY GENERATED and on_development true" bash -c 'python3 -I -c "import json,sys; s=json.load(open(sys.argv[1]))[\"source\"]; assert s[\"origin\"]==\"MANUALLY GENERATED\" and s[\"on_development\"] is True and s[\"event\"]==\"workflow_dispatch\"" "$1"' _ "$MS/android-staging-apk.manifest.json"
+t "manifest: a promotion records origin automatic and on_development null" bash -c 'python3 -I -c "import json,sys; s=json.load(open(sys.argv[1]))[\"source\"]; assert s[\"origin\"]==\"automatic\" and s[\"on_development\"] is None and s[\"event\"]==\"push\"" "$1"' _ "$good/android-staging-apk.manifest.json"
+mrejm "a manual build claiming to be automatic" "source.origin is 'automatic'" 'm["source"]["origin"]="automatic"'
+mrejm "a manual build with a different label" "source.origin" 'm["source"]["origin"]="manual"'
+mrejm "a manual build without the on_development fact" "must be true or false" 'm["source"]["on_development"]=None'
+mrejm "a manually generated STAGING build from a commit that is not on development" "must be built from a commit of development" 'm["source"]["on_development"]=False'
+mrej "a promotion claiming MANUALLY GENERATED" "source.origin" 'm["source"]["origin"]="MANUALLY GENERATED"'
+mrej "a promotion carrying an on_development value" "must be null for a promotion" 'm["source"]["on_development"]=True'
+mrej "a manifest without the origin field" "missing key 'source.origin'" 'del m["source"]["origin"]'
+mrej "a manifest without the on_development field" "missing key 'source.on_development'" 'del m["source"]["on_development"]'
+mrejm "a manual manifest whose file name lacks the MANUALLY_GENERATED_ prefix" "not the canonical name" 'm["artifact"]["canonical_name"]=m["artifact"]["canonical_name"].replace("MANUALLY_GENERATED_","",1)'
+mrej "a promotion manifest whose file name carries the manual prefix" "not the canonical name" 'm["artifact"]["canonical_name"]="MANUALLY_GENERATED_"+m["artifact"]["canonical_name"]'
+mn="$(BM name "$MS/android-staging-apk.manifest.json")"
+t "name: a manual build's name starts with MANUALLY_GENERATED_ and keeps the canonical name after it" eq "$mn" "MANUALLY_GENERATED_cadena-signer-staging-1.0.3+1000034-android-apk-${COMMIT:0:7}-run${RUN}.1.apk"
+t "name: the marker is outermost, before the NON-DISTRIBUTABLE label" eq "$(BM name "$MS/android-staging-apk.manifest.json" --classification internal-evaluation)" "MANUALLY_GENERATED_NON-DISTRIBUTABLE_INTERNAL-EVALUATION_${mn#MANUALLY_GENERATED_}"
+t "name: a promotion's name is unchanged by the marker (no prefix)" eq "$(BM name "$good/android-staging-apk.manifest.json")" "cadena-signer-staging-1.0.3+1000034-android-apk-${COMMIT:0:7}-run${RUN}.1.apk"
+# a manual run records the commit of the run (GITHUB_SHA), the same as a promotion; there is no other source of the commit
+MO="$tmp/manual_other"; rm -rf "$MO"; mkdir -p "$MO"
+OTHER=2222222222222222222222222222222222222222
+mkev android-staging-apk "$MO" "$OTHER"
+CREATE_ENV="GITHUB_RUN_ID=$RUN GITHUB_RUN_ATTEMPT=1 GITHUB_SERVER_URL=https://github.com GITHUB_REPOSITORY=CadenaBitcoin/signer_app GITHUB_REF_NAME=development GITHUB_REF_TYPE=branch"
+# shellcheck disable=SC2086
+accepted "create: a manual run records the commit of the run" env $CREATE_ENV GITHUB_EVENT_NAME=workflow_dispatch GITHUB_SHA=$OTHER CADENA_COMMIT_ON_DEVELOPMENT=true python3 -I "$TOOLPY" create --evidence "$MO/android-staging-apk.txt" --toolchain "$MO/android-staging-apk.toolchain" --out "$MO/m.json"
+t "create: the manual manifest holds that commit and the artifact name uses it" bash -c 'python3 -I -c "import json,sys; m=json.load(open(sys.argv[1])); assert m[\"source\"][\"commit\"]==sys.argv[2]; assert sys.argv[2][:7] in m[\"artifact\"][\"canonical_name\"] and m[\"artifact\"][\"canonical_name\"].startswith(\"MANUALLY_GENERATED_\")" "$1" "$2"' _ "$MO/m.json" "$OTHER"
+# shellcheck disable=SC2086
+expect_rc "create: a commit other than the evidence's is refused" 2 "differs from the evidence" env $CREATE_ENV GITHUB_EVENT_NAME=workflow_dispatch GITHUB_SHA=$COMMIT CADENA_COMMIT_ON_DEVELOPMENT=true python3 -I "$TOOLPY" create --evidence "$MO/android-staging-apk.txt" --toolchain "$MO/android-staging-apk.toolchain" --out "$MO/x.json"
+# shellcheck disable=SC2086
+expect_rc "create: a build commit cannot be redirected by an environment variable (CADENA_SOURCE_SHA is ignored)" 2 "differs from the evidence" env $CREATE_ENV GITHUB_EVENT_NAME=workflow_dispatch GITHUB_SHA=$COMMIT CADENA_SOURCE_SHA=$OTHER CADENA_COMMIT_ON_DEVELOPMENT=true python3 -I "$TOOLPY" create --evidence "$MO/android-staging-apk.txt" --toolchain "$MO/android-staging-apk.toolchain" --out "$MO/x.json"
+# shellcheck disable=SC2086
+expect_rc "create: a manual run without the on_development fact is refused" 2 "CADENA_COMMIT_ON_DEVELOPMENT must be true or false" env $CREATE_ENV GITHUB_EVENT_NAME=workflow_dispatch GITHUB_SHA=$OTHER python3 -I "$TOOLPY" create --evidence "$MO/android-staging-apk.txt" --toolchain "$MO/android-staging-apk.toolchain" --out "$MO/x.json"
+# shellcheck disable=SC2086
+expect_rc "create: an event that is neither push nor workflow_dispatch is refused" 2 "neither push nor workflow_dispatch" env $CREATE_ENV GITHUB_EVENT_NAME=pull_request GITHUB_SHA=$COMMIT python3 -I "$TOOLPY" create --evidence "$MO/android-staging-apk.txt" --toolchain "$MO/android-staging-apk.toolchain" --out "$MO/x.json"
+# a manual and an automatic manifest of one run cannot mix (the manifests of one run agree on the origin)
+mixo="$tmp/mixo"; rm -rf "$mixo"; mkdir -p "$mixo"
+cp "$MS/android-staging-apk."* "$mixo/"
+mut "$good/ios-staging.manifest.json" "$mixo/ios-staging.manifest.json" 'm["source"]["commit"]="'"$COMMIT"'"'
+cp "$good/ios-staging.txt" "$mixo/"
+rejected "run: manifests of one run that disagree on the origin are refused" "disagree on source.origin" BM verify-dir "$mixo" --variants "android-staging-apk ios-staging" --repo "$fx"
+
+# historical manifests (schema 1, before source.origin / source.on_development): REAL files, written by the build_manifest.py
+# of development at 7525c2b, the last commit before the origin fields (tool/fixtures/manifest-schema1/). They must stay verifiable.
+H="$root/tool/fixtures/manifest-schema1"
+HP="$H/promotion-android-staging-apk.manifest.json"     # a promotion (push to staging)
+HM="$H/manual-android-production-apk.manifest.json"     # a manual run from a feature branch
+t "legacy: the fixtures are schema 1 and carry no origin fields" bash -c 'python3 -I -c "
+import json,sys
+for p in sys.argv[1:]:
+    m=json.load(open(p)); assert m[\"schema\"]==\"cadena-build-manifest/1\" and \"origin\" not in m[\"source\"] and \"on_development\" not in m[\"source\"], p" "$1" "$2"' _ "$HP" "$HM"
+expect_rc "legacy: a historical promotion manifest verifies" 0 "RESULT: OK" BM verify "$HP"
+expect_rc "legacy: a historical manual manifest verifies" 0 "RESULT: OK" BM verify "$HM"
+expect_rc "legacy: ... against its own text evidence" 0 "RESULT: OK" BM verify "$HM" --evidence "$H/manual-android-production-apk.txt"
+expect_rc "legacy: ... and the promotion one" 0 "RESULT: OK" BM verify "$HP" --evidence "$H/promotion-android-staging-apk.txt"
+expect_rc "legacy: the verifier says the origin is not recorded in a schema-1 manifest" 0 "whether the build was started by hand is NOT recorded" BM verify "$HM"
+expect_rc "legacy: the historical file name is unchanged (no prefix)" 0 "cadena-signer-production-1.0.3+1000034-android-apk-7b63c97-run39237471969.1.apk" BM name "$HM"
+t "legacy: a historical manual manifest does not get the MANUALLY_GENERATED_ prefix" bash -c '! "$@" | grep -q MANUALLY_GENERATED' _ python3 -I "$tool" name "$HM"
+# ... but only under schema-1 rules. The strict current rules cannot be dodged by choosing the old schema:
+expect_rc "legacy: --require-current refuses a schema-1 manifest (the build jobs use it)" 1 "expected 'cadena-build-manifest/2'" BM verify "$HP" --require-current
+mut "$HP" "$tmp/lg1.json" 'm["source"]["origin"]="MANUALLY GENERATED"; m["source"]["on_development"]=True'
+rejected "legacy: a schema-1 manifest carrying the new fields is refused (strict key set)" "unknown key 'source.origin'" BM verify "$tmp/lg1.json"
+mut "$HP" "$tmp/lg2.json" 'm["source"]["commit"]="7b63c97"'
+rejected "legacy: a historical manifest is still checked (a short commit)" "40-character" BM verify "$tmp/lg2.json"
+mut "$HP" "$tmp/lg3.json" 'm["artifact"]["canonical_name"]="MANUALLY_GENERATED_"+m["artifact"]["canonical_name"]'
+rejected "legacy: a historical manifest whose name carries the manual prefix is refused" "not the canonical name" BM verify "$tmp/lg3.json"
+mut "$HP" "$tmp/lg4.json" 'm["schema"]="cadena-build-manifest/2"'
+rejected "legacy: a schema-1 manifest relabelled schema 2 is refused (the new fields are required)" "missing key 'source.origin'" BM verify "$tmp/lg4.json"
+# a manual manifest cannot be downgraded to escape the marking: schema 1 has no prefix, so its file name no longer fits
+mut "$MS/android-staging-apk.manifest.json" "$tmp/lg5.json" 'm["schema"]="cadena-build-manifest/1"; m["source"].pop("origin"); m["source"].pop("on_development")'
+rejected "legacy: a new manual manifest downgraded to schema 1 is refused (its prefixed file name)" "not the canonical name" BM verify "$tmp/lg5.json"
+rejected "legacy: ... and always by --require-current" "expected 'cadena-build-manifest/2'" BM verify "$tmp/lg5.json" --require-current
+# a run is verified as a whole in the current schema: a directory of historical manifests is not a current run
+lgd="$tmp/lgd"; rm -rf "$lgd"; mkdir -p "$lgd"
+cp "$HP" "$lgd/android-staging-apk.manifest.json"; cp "$H/promotion-android-staging-apk.txt" "$lgd/android-staging-apk.txt"
+rejected "legacy: verify-dir (the verdict of a run) refuses schema-1 manifests" "expected 'cadena-build-manifest/2'" BM verify-dir "$lgd" --variants android-staging-apk
+mut "$HP" "$tmp/lg6.json" 'm["schema"]="cadena-build-manifest/9"'
+rejected "legacy: an unknown schema is refused" "schema is 'cadena-build-manifest/9'" BM verify "$tmp/lg6.json"
 
 # canonical names
 n1="$(BM name "$M")"
@@ -619,7 +705,7 @@ rejected "file: a changed file inside the app is refused" "SHA-256 mismatch" BM 
 rejected "file: a plain file given for a directory artifact is refused" "is not one" BM check-file "$tmp/retained/im.json" "$bin"
 
 # the variant catalogue is stated once (the planner); the manifest tool must agree with it
-plan_all="$(cd "$root" && tool/plan_build_variants.sh workflow_dispatch refs/heads/x all | sed -n 's/^variants=//p')"
+plan_all="$(cd "$root" && tool/plan_build_variants.sh workflow_dispatch refs/heads/development all "" "" identical | sed -n 's/^variants=//p')"
 tool_all="$(python3 -I -c '
 import sys, runpy
 g = runpy.run_path(sys.argv[1], run_name="not_main")
@@ -653,6 +739,7 @@ count() { grep -cF -- "$2" <<<"$1" || true; }
 wft="$(cat "$wf")"
 t "workflow: the manifest is created in both build jobs (Android and iOS)" eq "$(count "$wft" 'tool/build_manifest.py create --evidence')" 2
 t "workflow: every manifest is verified against the repository and its text evidence" eq "$(count "$wft" 'tool/build_manifest.py verify "evidence/$BUILD_VARIANT.manifest.json" --repo . --evidence')" 2
+t "workflow: a manifest that was just made must be in the current schema (--require-current, both build jobs)" eq "$(count "$wft" '--evidence "evidence/$BUILD_VARIANT.txt" --require-current')" 2
 t "workflow: the plan job runs this test before any build" has "$wft" 'run: tool/test_release_versioning.sh'
 t "workflow: the verdict verifies the manifests of the run together" has "$wft" 'tool/build_manifest.py verify-dir evidence --variants "$REQUIRED_VARIANTS" --repo .'
 t "workflow: the verdict still checks the exact evidence set first" has "$wft" 'tool/check_verdict.sh evidence evidence'
@@ -662,7 +749,7 @@ t "workflow: the third upload is the iOS diagnostics directory (text: build log,
 t "workflow: two uploads are the retained directory (ciphertext, checksums, manifests)" eq "$(grep -cE '^          path: retained/$' <<<"$wft")" 2
 t "workflow: every retained upload is gated by the plan's retention decision" eq "$(count "$wft" "name: Upload the retained")" 2
 t "workflow: the diagnostics artifact has its own name prefix, outside the verdict's evidence download" has "$wft" 'name: ios-diagnostics_${{ matrix.variant }}_a${{ github.run_attempt }}'
-t "workflow: the retained artifacts have their own name prefix, outside the evidence download" has "$wft" 'name: retained_${{ matrix.variant }}_a${{ github.run_attempt }}'
+t "workflow: the retained artifacts have their own name prefix, outside the evidence download" has "$wft" 'name: ${{ needs.plan.outputs.name_prefix }}retained_${{ matrix.variant }}_a${{ github.run_attempt }}'
 t "workflow: no upload names a build output" lacksre "$wft" 'path:.*(build/|\.apk|\.aab|\.ipa|Runner\.app|xcarchive)'
 t "workflow: the retention of every text upload stays 14 days" eq "$(grep -cE '^          retention-days: 14$' <<<"$wft")" 3
 t "workflow: the retained uploads use the workflow's RETENTION_DAYS (14)" eq "$(grep -cE '^          retention-days: \$\{\{ env\.RETENTION_DAYS \}\}$' <<<"$wft")" 2

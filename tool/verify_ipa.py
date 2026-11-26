@@ -740,8 +740,9 @@ def provenance(rep, args, app_dir, env, bundle_id, info, ipa_sha, tmp):
     manifest = None
     if args.manifest:
         manifest = BM.read_json(args.manifest)
-        if manifest.get("schema") != BM.SCHEMA:
-            rep.fail("%s is not a %s manifest" % (args.manifest, BM.SCHEMA))
+        # The unsigned build job may have run an older commit's tools (schema 1); every field read below exists in both schemas.
+        if manifest.get("schema") not in BM.ACCEPTED_SCHEMAS:
+            rep.fail("%s is not a %s manifest" % (args.manifest, " or ".join(BM.ACCEPTED_SCHEMAS)))
             manifest = None
     if manifest is not None:
         rep.check(manifest.get("environment") == env, "build manifest environment is %s" % env,
