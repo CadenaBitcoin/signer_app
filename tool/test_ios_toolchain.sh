@@ -89,6 +89,8 @@ def app(dest, a):
               "DTSDKBuild", "MinimumOSVersion"):
         if a.get(k) is not None:
             info[k] = a[k]
+    if a.get("icon"):  # the launcher icon set the app declares (Issue #139); the staging set by default
+        info["CFBundleIcons"] = {"CFBundlePrimaryIcon": {"CFBundleIconFiles": [a["icon"] + "60x60"], "CFBundleIconName": a["icon"]}}
     with open(dest + "/Info.plist", "wb") as f:
         plistlib.dump(info, f)
     write(dest + "/Runner", thin("arm64", a["exe_platform"], a["exe_minos"], a["exe_sdk"]))
@@ -155,7 +157,7 @@ mkapp() {
 import sys, json, shutil, os
 sys.path.insert(0, sys.argv[1]); import mk
 dest, short, build, url = sys.argv[2:6]
-a = {"bundle_id": "com.app.cadenabitcoin.staging", "name": "Cadena Signer STAGING", "short": short,
+a = {"bundle_id": "com.app.cadenabitcoin.staging", "name": "Cadena Signer STAGING", "short": short, "icon": "AppIcon-Staging",
      "build": build, "url": url, "DTPlatformName": "iphoneos", "DTSDKName": "iphoneos26.2",
      "DTPlatformVersion": "26.2", "DTXcode": "2630", "DTXcodeBuild": "17C529", "DTSDKBuild": "23C53",
      "MinimumOSVersion": "14.0", "exe_platform": "ios", "exe_minos": "14.0", "exe_sdk": "26.2",
@@ -225,6 +227,12 @@ mkapp mismatch MinimumOSVersion=15.0
 rejects "MinimumOSVersion different from the executable's minimum OS is rejected" "$tmp/app_mismatch" "executable slice arm64 needs iOS 14.0 but Info.plist MinimumOSVersion is '15.0'" --min-sdk 26
 mkapp nomin MinimumOSVersion=__none__
 rejects "a missing MinimumOSVersion is rejected" "$tmp/app_nomin" "Info.plist has no MinimumOSVersion" --min-sdk 26
+mkapp prodicon icon=AppIcon
+rejects "the production icon set in a staging app is rejected" "$tmp/app_prodicon" "launcher icon set is 'AppIcon'" --min-sdk 26
+mkapp noicon icon=__none__
+rejects "an app declaring no launcher icon set is rejected" "$tmp/app_noicon" "launcher icon set is ''" --min-sdk 26
+mkapp lookalike icon=AppIcon-Staging-Old
+rejects "a different icon set that merely starts with the staging name is rejected" "$tmp/app_lookalike" "launcher icon set is 'AppIcon-Staging-Old'" --min-sdk 26
 mkapp below12 MinimumOSVersion=12.0 exe_minos=12.0
 rejects "a minimum OS below Apple's iOS 13 floor is rejected" "$tmp/app_below12" "App Store Connect needs 13.0 or later" --min-sdk 26
 mkapp is13 MinimumOSVersion=13.0 exe_minos=13.0
