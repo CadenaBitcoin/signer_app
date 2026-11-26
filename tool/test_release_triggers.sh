@@ -372,6 +372,57 @@ t "the relation of the run's commit to development is asked of GitHub with read 
 t "the relation step runs for manual runs only" has "$jplan" "        if: \${{ github.event_name == 'workflow_dispatch' }}"
 t "the verdict names the manual origin in its summary" has "$vj" '[ "$ORIGIN" != "MANUALLY GENERATED" ]'
 
+# --- 7. the installable staging APK: android-ci-validation.yml (docs/ANDROID_CI.md) --------------------
+# The downloadable, debug-signed, labelled staging APK of a staging merge is made by this workflow. A manual run of it is the
+# way to get that APK from the current tip of development, so it carries the same marking and the same source rule
+# (decided by tool/plan_build_variants.sh, not by a second copy of the rule). Nothing may change for a promotion.
+acv="$root/.github/workflows/android-ci-validation.yml"
+acw="$tmp/acv.yml"; grep -v '^[[:space:]]*#' "$acv" >"$acw"
+acon="$(block "$acw" '^on:' '^[a-z]')"
+t "android-ci-validation: triggers are still exactly push and workflow_dispatch" eq "$(printf '%s\n' "$acon" | sed -n 's/^  \([a-z_]*\):.*/\1/p' | tr '\n' ' ')" "push workflow_dispatch "
+t "android-ci-validation: a push still builds only staging" has "$acon" "    branches: [staging]"
+t "android-ci-validation: permissions are exactly contents: read, no secret" bash -c '[ "$(grep -A1 "^permissions:" "$1" | tr -d "\n")" = "permissions:  contents: read" ] && ! grep -q "secrets\." "$1"' _ "$acw"
+t "android-ci-validation: it still builds the staging flavor with the staging configuration" bash -c 'grep -q "BUILD_CONFIG_FILE: config/build/staging.json" "$1" && grep -q "BUILD_FLAVOR: staging" "$1" && grep -q "run: flutter build apk --debug --flavor \"\$BUILD_FLAVOR\" --dart-define-from-file=\"\$BUILD_CONFIG_FILE\"" "$1"' _ "$acw"
+t "android-ci-validation: the existing verification still runs on the built APK" has "$(cat "$acw")" 'tool/verify_artifact.sh apk "$BUILD_FLAVOR" "$apk" --signing debug --debug-build'
+t "android-ci-validation: the APK is uploaded as before (the prepared name, 14 days)" bash -c 'grep -q "name: \${{ steps.prep.outputs.name }}" "$1" && grep -q "retention-days: 14" "$1"' _ "$acw"
+t "android-ci-validation: no signing mode, no version or build number is read or set" lacksre "$(cat "$acw")" '(CADENA_SIGNING|--build-number|--build-name|BUILD_NUMBER|versionCode=)'
+t "android-ci-validation: the manual-run step is for manual runs only" has "$(cat "$acw")" "        if: \${{ github.event_name == 'workflow_dispatch' }}"
+t "android-ci-validation: the manual rule is the planner's (staging APK variant, the workflow ref, the compare relation)" has "$(cat "$acw")" 'tool/plan_build_variants.sh workflow_dispatch "$GITHUB_REF" android-staging-apk "" "" "$relation"'
+t "android-ci-validation: the relation of the commit to development is asked of GitHub with read access only" bash -c 'grep -q "gh api \"repos/\$REPO/compare/development...\$GITHUB_SHA\"" "$1" && grep -q "GH_TOKEN: \${{ github.token }}" "$1"' _ "$acw"
+t "android-ci-validation: the manual rule runs BEFORE anything is built (a refused run builds nothing)" bash -c 'a="${1%%Manual run - MANUALLY GENERATED*}"; b="${1%%run: flutter build apk --debug*}"; [ "${#a}" -lt "${#b}" ]' _ "$(cat "$acw")"
+t "android-ci-validation: the artifact name gets the planned prefix" has "$(cat "$acw")" 'name="${NAME_PREFIX}CI-VALIDATION-NOT-APPROVED-FOR-PUBLIC-DISTRIBUTION_cadena-signer_v'
+# Run the REAL "Prepare labelled artifact" script, for a promotion and for a manual run.
+prep_script() { awk '/^      - name: Prepare labelled artifact/ { f = 1; next } f && /^      - name:/ { exit } f' "$acv" | sed -n '/^        run: |$/,$p' | sed '1d; s/^          //'; }
+prep_run() { # DIR NAME_PREFIX ORIGIN
+  local d="$1"; rm -rf "$d"; mkdir -p "$d/rt" "$d/build/app/outputs/flutter-apk"
+  printf 'name: x\nversion: 1.0.4+1000035\n' >"$d/pubspec.yaml"
+  printf 'APP_ENV=staging\nNETWORK_ENVIRONMENT=signet\nUSE_TESTNET=true\nAPI_BASE_URL=https://staging.purabitcoin.com/app\n' >"$d/rt/resolved-build-config.txt"
+  printf 'application_id=com.cadenabitcoin.mobile.signer.staging\ndisplay_name=Cadena Signer STAGING\n' >"$d/rt/apk-evidence.txt"
+  printf 'apk-bytes' >"$d/build/app/outputs/flutter-apk/app-staging-debug.apk"
+  prep_script >"$d/prep.sh"
+  (cd "$d" && env RUNNER_TEMP="$d/rt" BUILD_FLAVOR=staging BUILD_CONFIG_FILE=config/build/staging.json \
+     GITHUB_SHA=0123456789abcdef0123456789abcdef01234567 GITHUB_REF_NAME=development GITHUB_SERVER_URL=https://github.com GITHUB_REPOSITORY=CadenaBitcoin/signer_app \
+     GITHUB_RUN_ID=999 GITHUB_RUN_NUMBER=7 GITHUB_RUN_ATTEMPT=1 GITHUB_STEP_SUMMARY="$d/summary.md" GITHUB_OUTPUT="$d/out.txt" NAME_PREFIX="$2" ORIGIN="$3" bash -e prep.sh >"$d/log.txt" 2>&1)
+}
+PUSH_NAME="CI-VALIDATION-NOT-APPROVED-FOR-PUBLIC-DISTRIBUTION_cadena-signer_v1.0.4+1000035_staging_0123456_run7-1"
+if prep_run "$tmp/acv_push" "" ""; then
+  t "android-ci-validation: a promotion's artifact name is unchanged (no prefix)" eq "$(sed -n 's/^name=//p' "$tmp/acv_push/out.txt")" "$PUSH_NAME"
+  t "android-ci-validation: a promotion's APK file is named as before" test -f "$tmp/acv_push/ci-artifact/${PUSH_NAME}_debug.apk"
+  t "android-ci-validation: a promotion's notice and summary carry no manual marker" bash -c '! grep -rqi "MANUALLY" "$1/ci-artifact" "$1/summary.md" "$1/log.txt"' _ "$tmp/acv_push"
+  t "android-ci-validation: the notice records the full source commit SHA" bash -c 'grep -q "^Commit SHA  : 0123456789abcdef0123456789abcdef01234567" "$1/ci-artifact/CI-VALIDATION-NOTICE.txt"' _ "$tmp/acv_push"
+else bad "android-ci-validation: the prepare step failed for a promotion" "$(tail -n 5 "$tmp/acv_push/log.txt")"; fi
+if prep_run "$tmp/acv_man" "MANUALLY_GENERATED_" "MANUALLY GENERATED"; then
+  t "android-ci-validation: a manual run's artifact name starts with MANUALLY_GENERATED_ and keeps the rest" eq "$(sed -n 's/^name=//p' "$tmp/acv_man/out.txt")" "MANUALLY_GENERATED_$PUSH_NAME"
+  t "android-ci-validation: a manual run's APK file carries the marker" test -f "$tmp/acv_man/ci-artifact/MANUALLY_GENERATED_${PUSH_NAME}_debug.apk"
+  t "android-ci-validation: a manual run's notice says MANUALLY GENERATED first and records the full commit SHA" bash -c 'head -n1 "$1/ci-artifact/CI-VALIDATION-NOTICE.txt" | grep -q "^MANUALLY GENERATED" && grep -q "^Commit SHA  : 0123456789abcdef0123456789abcdef01234567" "$1/ci-artifact/CI-VALIDATION-NOTICE.txt"' _ "$tmp/acv_man"
+  t "android-ci-validation: a manual run's summary starts with MANUALLY GENERATED and the source commit" bash -c 'head -n1 "$1/summary.md" | grep -q "^## MANUALLY GENERATED" && grep -q "0123456789abcdef0123456789abcdef01234567" "$1/summary.md"' _ "$tmp/acv_man"
+  t "android-ci-validation: the manual run keeps the staging identity, configuration and the not-for-distribution label" bash -c 'grep -q "com.cadenabitcoin.mobile.signer.staging" "$1/ci-artifact/CI-VALIDATION-NOTICE.txt" && grep -q "STAGING backend configuration (Signet)" "$1/ci-artifact/CI-VALIDATION-NOTICE.txt" && grep -q "NOT APPROVED FOR PUBLIC DISTRIBUTION" "$1/ci-artifact/CI-VALIDATION-NOTICE.txt"' _ "$tmp/acv_man"
+else bad "android-ci-validation: the prepare step failed for a manual run" "$(tail -n 5 "$tmp/acv_man/log.txt")"; fi
+# the planner call of that workflow, for the APK variant alone
+plan_ok "manual android-staging-apk from development at the tip -> only that variant" "android-staging-apk" workflow_dispatch refs/heads/development android-staging-apk "" "" identical
+plan_rejected "manual android-staging-apk of an older development commit is refused" workflow_dispatch refs/heads/development android-staging-apk "" "" behind
+plan_rejected "manual android-staging-apk from a feature branch is refused" workflow_dispatch refs/heads/issue/57-x android-staging-apk "" "" identical
+
 echo
 echo "$pass passed, $failed failed"
 [ "$failed" -eq 0 ]

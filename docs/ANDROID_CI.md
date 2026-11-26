@@ -23,9 +23,16 @@ Workflow: `.github/workflows/android-ci-validation.yml`
 - **Automatic:** every push to `staging`. Because `staging` is protected, a push
   only happens when an authorized maintainer merges a pull request into it
   (see `GOVERNANCE.md`). The workflow adds no authorization logic of its own.
-- **Manual:** `workflow_dispatch` (Actions tab → *Android CI validation build* →
-  *Run workflow*) builds any chosen ref without promoting anything. It is only
-  offered once the workflow file exists on the default branch (`development`).
+- **Manual, MANUALLY GENERATED:** `workflow_dispatch` (Actions tab → *Android CI validation build* →
+  *Run workflow*, workflow from **`development`**) builds the **current tip of `development`** without
+  promoting anything: the way to get an installable staging APK whenever it is wanted. It is only offered once
+  the workflow file exists on the default branch (`development`). A manual run is refused, before anything is
+  built, from any other branch or tag and whenever its commit is no longer the tip of `development` (a re-run
+  of an old run included); `tool/plan_build_variants.sh` decides, the same rule as for `build-variants.yml`
+  (`docs/RELEASE_TRIGGERS.md`). It is the same build, verification and upload as a promotion; the artifact
+  name, the APK file name, the notice and the run summary say **MANUALLY GENERATED** and record the full
+  commit SHA. iOS is a different workflow and cannot prevent it. (Earlier, a manual run built any ref; that
+  is no longer possible.)
 
 The workflow only runs where its file exists, so it first appears on `staging`
 through the normal `development` → `staging` promotion pull request.
@@ -68,12 +75,14 @@ Every build needs the configuration flag and the matching `--flavor`; see
 1. Open the workflow run (Actions tab, or the run link in the notice file).
 2. Download the artifact from the **Artifacts** section (a GitHub login is
    required, even for a public repository). Artifacts are kept for **14 days**.
-3. Unzip it. It contains the APK and `CI-VALIDATION-NOTICE.txt`.
+3. Unzip it. It contains the APK and `CI-VALIDATION-NOTICE.txt`. A manual run's artifact, APK and notice
+   start with `MANUALLY_GENERATED_` / `MANUALLY GENERATED`.
 
 The artifact and APK are named
 
 ```text
 CI-VALIDATION-NOT-APPROVED-FOR-PUBLIC-DISTRIBUTION_cadena-signer_v<version>_<environment>_<sha7>_run<run>-<attempt>[_debug.apk]
+MANUALLY_GENERATED_CI-VALIDATION-NOT-APPROVED-FOR-PUBLIC-DISTRIBUTION_cadena-signer_v...   (a manual run)
 ```
 
 where `<version>` is the unchanged `version:` from `pubspec.yaml`, `<environment>` is
@@ -95,6 +104,9 @@ file that selected them. The run summary and a workflow annotation repeat them.
 - **Debug-signed with an ephemeral key.** Each run's key differs, so these APKs
   cannot update one another or any locally built APK. There is no signing
   policy yet.
+- **A debug build.** It is the debuggable, unoptimized Flutter debug build (about 200 MB, slower than a release
+  build) with the staging configuration; `build-variants` verifies the release/AOT build of the same variant.
+  Install it for testing only: uninstall an earlier run's APK first, then allow "install unknown apps".
 - **Separate application ID** `com.cadenabitcoin.mobile.signer.staging` (the `staging` flavor:
   the production ID, the package published on Google Play, plus `.staging`), so it installs
   next to the production app. The staging ID is a proposal of

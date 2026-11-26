@@ -48,8 +48,9 @@
 #     marker changes no version, identity, configuration or signing. Whatever delivery the
 #     staging builds gain later (signed Android APK, TestFlight: #57, #71) is added to these
 #     same jobs and is therefore shared by both ways of starting them.
-#     This covers THIS workflow only: a staging merge also starts android-ci-validation.yml and
-#     ios-ci-validation.yml, which a manual run here does not reproduce (docs/RELEASE_TRIGGERS.md).
+#     This workflow uploads no plaintext binary. The installable staging APK is made by a manual run of
+#     android-ci-validation.yml (same marking, same current-tip rule; docs/RELEASE_TRIGGERS.md). A staging
+#     merge also starts ios-ci-validation.yml, which is not reproduced.
 #   - Release branches (docs/RELEASE_TRIGGERS.md): a push to `staging` runs the two staging
 #     variants and a push to `production` the three production variants. Both branches are
 #     protected and accept only pull-request merge commits, so such a push IS an authorized
