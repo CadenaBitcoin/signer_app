@@ -4,9 +4,15 @@
 # Design, Apple and GitHub prerequisites, authorization and open questions: docs/IOS_STAGING_DELIVERY.md.
 #
 # WHAT STARTS IT. A push to `staging`, which is what a merged pull request produces (the branch rules allow a pull request with a Maintainers review and a
-# merge commit only). No person starts anything afterwards: RELEASE_POLICY.md 2.3 makes the authorized merge the authorization. There is NO manual trigger:
-# a manual path would be a way to deliver something that was not promoted. A failed delivery is repaired by a reviewed pull request (a new build number),
-# never by GitHub's Re-run (which the gate refuses as soon as staging has moved, and which could upload twice).
+# merge commit only). Nobody dispatches anything: the merge starts the run, and the credential-free jobs (authorize, build) run by themselves. There is NO
+# manual trigger: a manual path would be a way to deliver something that was not promoted. A failed delivery is repaired by a reviewed pull request (a new
+# build number), never by GitHub's Re-run (which the gate refuses as soon as staging has moved, and which could upload twice).
+#
+# THE APPROVAL AND THE CREDENTIAL (decision S2/S3, CTO, Issue #71). The `sign` job waits for the approval of the protected environment `ios-staging-signing`
+# (required reviewers). The Apple Admin API key is NOT stored: the CTO provisions the three environment secrets by hand while the job waits, approves, and
+# removes the secrets after the run, as for every production authorization. The approval confirms the deployment only; it does not replace the authorization
+# record below and adds no independence (the reviewers are one person). The unsigned archive of the `build` job is kept ONE day: the approval must come
+# within that day, or `sign` cannot download it and fails before any secret is used (docs/IOS_STAGING_DELIVERY.md section 1.2).
 #
 # THE AUTHORIZATION is given BEFORE the promotion, by the reviewed pull request that carries the version advance and the staging record
 # (docs/release-records/ios-staging-authorization.md), and is bound to what can be known then: the version, the staging bundle ID and Apple application,
@@ -21,7 +27,7 @@
 #   authorize  no secret, no environment. The gate above.
 #   build      no secret, no environment. Everything that downloads or runs third-party code: checks out the promotion commit, builds ONE unsigned archive
 #              (`flutter build ipa --release --no-codesign --flavor staging`), verifies the unsigned app, hands the archive over as a one-day tar with its SHA-256.
-#   sign       protected environment `ios-staging-signing` (restricted to the `staging` branch), only when `authorize` said yes. Runs only scripts of THIS commit
+#   sign       protected environment `ios-staging-signing` (restricted to the `staging` branch; WAITS for the CTO's approval), only when `authorize` said yes. Runs only scripts of THIS commit
 #              and Apple's own tools; compiles nothing. It re-checks the gate, validates the hand-over, exports and signs with Apple's cloud-managed Distribution
 #              certificate (the first of the two steps that hold the key), verifies the IPA (V1 to V9, pinned on the RECORDED certificate), and only then validates
 #              and uploads that same IPA with Apple's altool (the second). Text evidence only; the IPA never leaves the runner except to Apple.
@@ -335,8 +341,9 @@ jobs:
     if: needs.authorize.outputs.authorized == 'true'
     runs-on: macos-15
     timeout-minutes: 45
-    # The protected environment holds the three secrets (docs/IOS_STAGING_DELIVERY.md section 5). It is restricted to the `staging` branch.
-    # No required reviewers: the authorization is the reviewed merge and the staging record (RELEASE_POLICY.md 2.3).
+    # The protected environment (docs/IOS_STAGING_DELIVERY.md section 5): restricted to the `staging` branch, with required reviewers, so this job WAITS for the
+    # CTO's approval before it starts and before any secret is released to it. The three secrets exist only while it waits and after the approval until the
+    # run ends (temporary provisioning, never permanent). The approval confirms the deployment; the authorization is the staging record.
     environment: ios-staging-signing
     steps:
       - name: Validate the run

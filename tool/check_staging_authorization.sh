@@ -15,7 +15,8 @@
 #
 # WHY A SECOND GATE. The production gate (tool/check_signing_authorization.sh) authorizes ONE manual, consumed operation for a commit that
 # already exists on `production`, and is read from `development`. A merge into `staging` has no such moment: the merge commit does not exist
-# when the decision is taken, and no person starts anything afterwards (RELEASE_POLICY.md 2.3: the authorized merge is the authorization).
+# when the decision is taken, and nobody dispatches anything afterwards (RELEASE_POLICY.md 2.3: the authorized merge is the authorization; the
+# environment approval of the signing job confirms the deployment only and is not the authorization).
 # So the authorization is given BEFORE the promotion, as part of the reviewed pull request that carries the version advance, and is bound to
 # everything that can be known then. What it cannot name (the merge commit) is checked structurally instead (the source checks below).
 # This gate is separate on purpose: the production gate, its record and its blobs are unchanged, and this gate can never authorize the

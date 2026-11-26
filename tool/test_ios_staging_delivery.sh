@@ -193,6 +193,51 @@ printf '%s\n' "$acode" | grep -E 'actions/upload-artifact@' >/dev/null && printf
 printf '%s\n' "$acode" | grep -F 'short_sha' >/dev/null && printf '%s\n' "$acode" | grep -F '_staging_' >/dev/null || printf '%s\n' "$acode" | grep -F 'app_env' >/dev/null; chk "its artifact name still carries the version, the environment and the source commit" $?
 ! printf '%s\n' "$acode" | grep -E 'secrets\.|CADENA_SIGNING' >/dev/null; chk "it holds no credential (debug-signed with an ephemeral key; no Android signing infrastructure is needed for staging)" $?
 
+echo "== the credential model: temporary Admin key, approval before signing (CTO decision on Issue #71, 2026-11-26)"
+doc="$root/docs/IOS_STAGING_DELIVERY.md"; rec="$root/docs/release-records/ios-staging-authorization.md"
+[ -f "$doc" ] && [ -f "$rec" ]; chk "the design document and the record exist" $?
+printf '%s\n' "$sign" | grep -E '^    environment: ios-staging-signing$' >/dev/null && printf '%s\n' "$sign" | grep -E '^    needs: \[authorize, build\]$' >/dev/null; chk "the signing job is the one that declares the approval environment, after authorize and build" $?
+! printf '%s\n' "$authorize" | grep -E '^    environment:' >/dev/null && ! printf '%s\n' "$build" | grep -E '^    environment:' >/dev/null; chk "so the credential-free jobs authorize and build have no environment and never wait" $?
+grep -E '^# WHAT STARTS IT\.' "$wf" >/dev/null && grep -F 'waits for the approval of the protected environment `ios-staging-signing`' "$wf" >/dev/null && grep -F 'removes the secrets after the run' "$wf" >/dev/null; chk "the workflow header states the approval and the temporary credential" $?
+! grep -F 'No person starts anything afterwards' "$wf" >/dev/null && ! grep -F 'No required reviewers' "$wf" >/dev/null; chk "and no longer claims that nobody acts after the merge or that no reviewers exist" $?
+arch_step="$(step_of "$build" 'Upload the unsigned archive')"
+printf '%s\n' "$arch_step" | grep -E '^          retention-days: 1$' >/dev/null && printf '%s\n' "$arch_step" | grep -E 'handover/Runner\.xcarchive\.tar' >/dev/null; chk "the unsigned archive handed to the signing job is kept exactly ONE day" $?
+grep -F '### 1.2 The one-day retention constraint' "$doc" >/dev/null && grep -F 'retention-days: 1' "$doc" >/dev/null && grep -F 'before any secret is read' "$doc" >/dev/null; chk "the document states the one-day retention constraint and its consequence" $?
+order_ok=0; prev=0
+for k in '| 1 | Maintainers |' '| 2 | GitHub |' '| 3 | GitHub |' '| 4 | CTO |' '| 5 | CTO |' '| 6 | GitHub |' '| 7 | CTO |'; do
+  n="$(grep -nF -- "$k" "$doc" | head -n1 | cut -d: -f1)"
+  if [ -n "$n" ] && [ "$n" -gt "$prev" ]; then prev="$n"; else order_ok=1; fi
+done
+[ "$order_ok" -eq 0 ]; chk "the document lists the seven steps of one delivery in order (merge, checks, wait, provision, approve, sign and upload, remove)" $?
+step3="$(grep -F '| 3 | GitHub |' "$doc")"; step4="$(grep -F '| 4 | CTO |' "$doc")"; step7="$(grep -F '| 7 | CTO |' "$doc")"
+printf '%s\n' "$step3" | grep -F 'Waiting' >/dev/null && printf '%s\n' "$step4" | grep -F 'APPLE_API_KEY_P8' >/dev/null && printf '%s\n' "$step7" | grep -F 'Removes the three secrets' >/dev/null; chk "waiting precedes provisioning, and removal is the last step" $?
+bad_perm="$(grep -i 'permanent' "$doc" "$rec" "$wf" | grep -viE 'not authorized|never|NOT|no indefinite' || true)"
+[ -z "$bad_perm" ]; chk "no sentence asks for or allows permanent storage of the key (every mention is a prohibition)" $? "$bad_perm"
+! grep -E 'No required reviewers|unattended signing|signs without a person' "$doc" "$rec" >/dev/null; chk "neither the document nor the record still says no reviewers or unattended signing" $?
+srow="$(grep -E '^\| S2 \|' "$rec")"
+printf '%s\n' "$srow" | grep -F 'temporary provisioning' >/dev/null && printf '%s\n' "$srow" | grep -F 'Permanent storage of the key in GitHub is not authorized' >/dev/null && printf '%s\n' "$srow" | grep -F 'removes the three secrets' >/dev/null; chk "decision S2 in the record is temporary provisioning, with removal after the run" $?
+grep -E '^\| S3 \|' "$rec" | grep -F 'confirms the deployment only' >/dev/null; chk "decision S3 keeps the record as the authorization and the approval as a confirmation only" $?
+grep -E '^G2S-STAGING-STATUS: WITHDRAWN$' "$rec" >/dev/null && [ "$(grep -cE '^G2S-STAGING-(APP-APPLE-ID|AUTHORIZATION|DECISION-S[1-4]): PENDING$' "$rec")" -eq 6 ]; chk "this change authorizes nothing: the record is WITHDRAWN and its Apple ID, authorization and four decisions are still PENDING" $?
+printf '%s\n' "$sign" | grep -E 'APPLE_API_KEY_P8' >/dev/null && ! printf '%s\n%s\n' "$authorize" "$build" | grep -E 'secrets\.' >/dev/null; chk "the secrets are still read only by the signing job" $?
+probe="$(awk '/^## Appendix A/{a=1} a && /^```yaml$/{f=1; next} a && /^```$/{f=0} f' "$doc")"
+[ -n "$probe" ]; chk "the document carries the harmless secret-timing probe (Appendix A)" $?
+PROBE_YAML="$probe" python3 -I -c '
+import os, yaml
+text = os.environ["PROBE_YAML"]
+w = yaml.safe_load(text)
+on = w.get(True, w.get("on"))
+jobs = w["jobs"]
+assert list(on) == ["workflow_dispatch"], on
+assert list(jobs) == ["probe"] and jobs["probe"]["environment"] == "secret-timing-probe"
+assert w["permissions"] == {"contents": "read"}
+assert text.count("secrets.") == 1 and "secrets.PROBE_DUMMY" in text
+assert "APPLE" not in text.upper()
+assert "echo \"$PROBE_VALUE\"" not in text and "printenv" not in text and "set -x" not in text
+assert "${#PROBE_VALUE}" in text
+'
+chk "and the probe is a dispatch-only job with one dummy secret that prints its length, never its value, with no Apple name in it" $?
+grep -F 'dummy-not-a-credential' "$doc" >/dev/null && [ "$(printf '%s' 'dummy-not-a-credential' | wc -c | tr -d ' ')" = "22" ] && grep -F 'RESULT: present, length 22' "$doc" >/dev/null; chk "the probe's expected result matches the dummy value (22 characters)" $?
+
 echo
 echo "ios-staging-delivery: $pass passed, $failed failed"
 [ "$failed" -eq 0 ]
