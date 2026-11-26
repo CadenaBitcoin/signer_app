@@ -64,15 +64,16 @@ eq() { [ "$1" = "$2" ]; }
 has() { grep -qF -- "$2" <<<"$1"; }
 
 # ---------------------------------------------------------------------------------------------
-# 1. verify_version.sh on a throw-away copy of the repository (text files only)
+# 1. verify_version.sh on a throw-away copy of the repository (text files and the launcher icons)
 # ---------------------------------------------------------------------------------------------
 # Only what the version tools read: pubspec.yaml, the native projects, the workflows, the
 # configuration and the tools (build outputs and caches are never copied).
 copy_repo() { # DEST
   local f
   mkdir -p "$1"
-  (cd "$root" && git ls-files -z --cached --others --exclude-standard -- pubspec.yaml android ios .github config tool) | while IFS= read -r -d '' f; do
+  (cd "$root" && git ls-files -z --cached --others --exclude-standard -- pubspec.yaml android ios .github config tool assets/branding) | while IFS= read -r -d '' f; do
     case "$f" in
+      android/app/src/*/res/mipmap-*/ic_launcher.* | ios/Runner/Assets.xcassets/AppIcon*.appiconset/* | assets/branding/app-icon-*.png) ;; # the launcher icons are read by verify_version.sh (Issue #139)
       *.so | *.a | *.png | *.jpg | *.jpeg | *.ttf | *.otf | *.jar | *.apk | *.aab | *.ipa | *.zip | *.gz | *.webp | *.ico | *.tflite | *.icns | *.pdf | *.DS_Store) continue ;;
       build/* | android/build/* | android/app/build/* | ios/build/* | */.dart_tool/* | */.gradle/*) continue ;;
     esac
@@ -155,6 +156,53 @@ rejected "version: channel production with a candidate identifier is rejected" "
 rejected "version: channel staging without an identifier is rejected (missing identity)" "requires --release-id" VV --channel staging
 rejected "version: channel production without an identifier is rejected (missing identity)" "requires --release-id" VV --channel production
 expect_rc "version: an unknown channel is a usage error" 2 "" VV --channel qa --release-id "$current_release_id"
+
+# Launcher icons (Issue #139): the flavor alone selects the icon, so every way of losing, sharing or
+# overriding a flavor's icon is rejected by verify_version.sh. (A built APK/app is checked against the same
+# files by tool/verify_artifact.sh.)
+A="android/app/src"; I="ios/Runner/Assets.xcassets"
+fresh
+rm "$tmp/w/$A/staging/res/mipmap-hdpi/ic_launcher.jpg"
+rejected "icons: a missing Android staging icon is rejected" "launcher icon is missing" VV
+fresh
+rm "$tmp/w/$A/production/res/mipmap-xxhdpi/ic_launcher.jpg"
+rejected "icons: a missing Android production icon is rejected" "launcher icon is missing" VV
+fresh
+cp "$tmp/w/$A/production/res/mipmap-hdpi/ic_launcher.jpg" "$tmp/w/$A/staging/res/mipmap-hdpi/ic_launcher.jpg"
+rejected "icons: the staging Android icon equal to the production one is rejected" "identical" VV
+fresh
+cp "$tmp/w/$A/staging/res/mipmap-mdpi/ic_launcher.jpg" "$tmp/w/$A/staging/res/mipmap-xhdpi/ic_launcher.jpg"
+rejected "icons: an Android icon of the wrong size is rejected" "must be a 96x96 JPEG" VV
+fresh
+mkdir -p "$tmp/w/$A/main/res/mipmap-mdpi" && cp "$tmp/w/$A/production/res/mipmap-mdpi/ic_launcher.jpg" "$tmp/w/$A/main/res/mipmap-mdpi/ic_launcher.jpg"
+rejected "icons: a shared icon in src/main (a fallback for a flavor without its own) is rejected" "fallback" VV
+fresh
+edit "$tmp/w/ios/Flutter/Flavor-staging.xcconfig" 'ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon-Staging' 'ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon'
+rejected "icons: the iOS staging flavor selecting the production icon set is rejected" "must be set once, to AppIcon-Staging" VV
+fresh
+edit "$tmp/w/ios/Flutter/Flavor-production.xcconfig" 'ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon' 'ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon-Staging'
+rejected "icons: the iOS production flavor selecting the staging icon set is rejected" "must be set once, to AppIcon" VV
+fresh
+sed -i '/^ASSETCATALOG_COMPILER_APPICON_NAME/d' "$tmp/w/ios/Flutter/Flavor-staging.xcconfig"
+rejected "icons: an iOS flavor without an icon set selection is rejected" "must be set once" VV
+fresh
+edit "$tmp/w/ios/Runner.xcodeproj/project.pbxproj" 'PRODUCT_NAME = "$(TARGET_NAME)";' 'PRODUCT_NAME = "$(TARGET_NAME)"; ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;'
+rejected "icons: a project-level icon setting (it would override the flavor) is rejected" "would override" VV
+fresh
+cp "$tmp/w/$I/AppIcon.appiconset/120.png" "$tmp/w/$I/AppIcon-Staging.appiconset/120.png"
+rejected "icons: an iOS staging icon file equal to the production one is rejected" "identical" VV
+fresh
+rm "$tmp/w/assets/branding/app-icon-staging.png"
+rejected "icons: a missing staging icon master is rejected" "icon master is missing" VV
+fresh
+cp "$tmp/w/$I/AppIcon.appiconset/120.png" "$tmp/w/assets/branding/app-icon-production.png"
+rejected "icons: a production icon master that is not 1024x1024 is rejected" "must be a 1024x1024 PNG" VV
+fresh
+rm "$tmp/w/$I/AppIcon-Staging.appiconset/87.png"
+rejected "icons: an iOS icon listed in Contents.json but missing is rejected" "missing" VV
+fresh
+cp "$tmp/w/$I/AppIcon-Staging.appiconset/29.png" "$tmp/w/$I/AppIcon-Staging.appiconset/58.png"
+rejected "icons: an iOS icon of the wrong size is rejected" "expects 58x58" VV
 
 # ---------------------------------------------------------------------------------------------
 # 2. build manifests

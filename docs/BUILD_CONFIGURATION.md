@@ -20,6 +20,10 @@ config/build/production.json   non-secret production values
 lib/config/build_config.dart   BuildConfig: the one place the values are read and validated
 android/app/build.gradle.kts   the two Android flavors (identity only)
 ios/Flutter/Flavor-<flavor>.xcconfig        iOS identity per flavor
+android/app/src/<flavor>/res/mipmap-*/ic_launcher.jpg    Android launcher icon per flavor (see Launcher icons)
+ios/Runner/Assets.xcassets/AppIcon[-Staging].appiconset     iOS icon set per flavor (selected in Flavor-<flavor>.xcconfig)
+assets/branding/app-icon-<env>.png   the two 1024 px icon masters (production, staging)
+tool/generate_app_icons.py       generates every icon size of both platforms and environments from them (developer tool)
 ios/Flutter/{Debug,Profile,Release}-<flavor>.xcconfig   the six iOS configurations' xcconfig
 ios/Runner.xcodeproj/xcshareddata/xcschemes/{staging,production}.xcscheme
 tool/verify_build_config.sh    test matrix, AOT checks, analyzer guard, resolve helper
@@ -370,11 +374,62 @@ What a run does:
 uploaded evidence files (text and the JSON manifest) contain only metadata and hashes. The workflow shows that the
 repository compiles and what each artifact claims; it is not a build you can install.
 
+## Launcher icons
+
+The installed application shows its environment: **staging** has a black-and-white icon, **production**
+keeps its full-colour icon. The flavor is the only selector, on both platforms, so the icon always
+follows the environment; there is no icon setting in Dart, in `config/build/*.json` or on the command line.
+A launcher icon is a native build resource, so it is chosen while compiling, never at run time.
+
+| | Production | Staging |
+|---|---|---|
+| Android | `android/app/src/production/res/mipmap-*/ic_launcher.jpg` | `android/app/src/staging/res/mipmap-*/ic_launcher.jpg` |
+| iOS | `ios/Runner/Assets.xcassets/AppIcon.appiconset` | `ios/Runner/Assets.xcassets/AppIcon-Staging.appiconset` |
+
+- **Android.** Gradle adds the source set of the selected flavor to `src/main`, and
+  `AndroidManifest.xml` refers to `@mipmap/ic_launcher`, so the flavor's file is the one packaged. There is
+  deliberately **no** icon in `src/main`: a flavor without its own icon fails verification instead of silently
+  using the other's. The icons are the legacy square launcher icons in five densities (48 to 192 px), JPEG
+  as before; no adaptive or themed icon exists yet.
+- **iOS.** `ios/Flutter/Flavor-<flavor>.xcconfig` sets `ASSETCATALOG_COMPILER_APPICON_NAME` (`AppIcon` or
+  `AppIcon-Staging`), next to the bundle identifier and display name that are selected the same way. The Xcode
+  project must **not** set that build setting itself: a target-level value overrides the xcconfig.
+
+**Replacing an icon.** The artwork lives in two masters and nowhere else:
+
+| | Master |
+|---|---|
+| Production | `assets/branding/app-icon-production.png` |
+| Staging | `assets/branding/app-icon-staging.png` |
+
+Each must be a **1024x1024 PNG**. Transparency is allowed: the generator composites it onto an opaque white
+square (iOS rejects an icon with an alpha channel and the Android icon is a square JPEG); it does not scale,
+pad or recolour anything, so keep the margin you want inside the master. Replace a master and run
+`python3 tool/generate_app_icons.py` (needs Pillow): it rewrites every iOS size and Android density of both
+environments. All files under the two `appiconset` folders and `android/app/src/<flavor>/res/mipmap-*` are
+generated and must not be edited by hand (only the iOS `Contents.json` is maintained by hand). Commit the
+generated files together with the master: the build only selects them, it never generates them.
+
+**How it is verified.**
+
+- `tool/verify_version.sh` (source, run by the `static` job): each flavor has its own icon files with the right
+  sizes, both masters exist as 1024x1024 PNGs, staging differs from production, there is no `src/main` fallback, the project does not override the
+  setting, and each flavor xcconfig names its own icon set. `tool/test_release_versioning.sh` proves every one of
+  those rejections.
+- `tool/verify_artifact.sh` (built artifacts, run by every variant job): an **APK**'s launcher icon, read back
+  for every density through `aapt2 dump badging`, must be byte-identical to the file of the claimed environment's
+  source set (so a staging APK checked as production fails, which the `selftest` demonstrates); an **iOS app**'s
+  `CFBundleIconName` and `CFBundleIconFiles` must name the icon set that the claimed environment's xcconfig
+  selects.
+- Not checked on Linux: that Xcode compiled the asset catalog into `Assets.car` with the staging pictures.
+  The macOS runner confirms the Info.plist entries; reading the compiled catalog (`assetutil`) is not automated.
+  The Android App Bundle (production only) is not read for its icon.
+
 ## What this does not do
 
 Not part of this mechanism, by design: release identifiers (`vX.Y.Z-rc.N`) and any change
 to the version, official signing, Apple provisioning and registration of the staging
-identifiers, TestFlight or store delivery, and per-environment icons (see
+identifiers, and TestFlight or store delivery (see
 [RELEASE_IMPLEMENTATION_PLAN.md](RELEASE_IMPLEMENTATION_PLAN.md)). It selects the
 environment and the application identity and changes no application behavior, wallet
 derivation or cryptographic code.
