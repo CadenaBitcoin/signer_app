@@ -125,6 +125,14 @@ jobs:
       - name: Test the hosted signing workflow behaviour, the archive validator and the dangerous-edit mutations
         run: tool/test_ios_hosted_signing_behavior.sh
 
+      # The automatic iOS STAGING delivery (Issues #54, #71): its authorization gate against real throwaway git remotes, and the workflow's static rules, including
+      # that every step holding a secret or judging the IPA is the same text as the production workflow's and that the production workflow is untouched.
+      - name: Test the staging authorization gate (record lines, bound blobs, live development record, merge-commit source, staging identity)
+        run: tool/test_check_staging_authorization.sh
+
+      - name: Test the staging delivery workflow, static rules, parity with the production workflow, and the Android staging APK delivery
+        run: tool/test_ios_staging_delivery.sh
+
       # The IPA verifier (tool/verify_ipa.py, tool/ipa_inspect.py) is the tool that judges a signed IPA; its tests run here, on every pull
       # request, with synthetic IPAs and the real Apple cloud-signing CMS and embedded Info.plist fixtures of tool/fixtures/. Credential-free,
       # no network. The script SKIPS (exit 0) when openssl lacks the `cms` command, which must never pass silently in CI.

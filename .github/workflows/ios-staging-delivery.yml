@@ -1,0 +1,1145 @@
+# iOS STAGING DELIVERY: the automatic signing and TestFlight delivery of the staging application, started by a merge into `staging` (Issues #54, #71).
+# Not production: it can only build, sign and upload the STAGING application (bundle ID com.app.cadenabitcoin.staging, Signet, config/build/staging.json)
+# to the STAGING App Store Connect application. It cannot be pointed at production: the identity is a constant of this workflow and of its gate.
+# Design, Apple and GitHub prerequisites, authorization and open questions: docs/IOS_STAGING_DELIVERY.md.
+#
+# WHAT STARTS IT. A push to `staging`, which is what a merged pull request produces (the branch rules allow a pull request with a Maintainers review and a
+# merge commit only). No person starts anything afterwards: RELEASE_POLICY.md 2.3 makes the authorized merge the authorization. There is NO manual trigger:
+# a manual path would be a way to deliver something that was not promoted. A failed delivery is repaired by a reviewed pull request (a new build number),
+# never by GitHub's Re-run (which the gate refuses as soon as staging has moved, and which could upload twice).
+#
+# THE AUTHORIZATION is given BEFORE the promotion, by the reviewed pull request that carries the version advance and the staging record
+# (docs/release-records/ios-staging-authorization.md), and is bound to what can be known then: the version, the staging bundle ID and Apple application,
+# the Apple team, the recorded signing certificate, the native library, and the blobs of this workflow, of the gate and of the tools. What cannot be known
+# (the merge commit) is checked structurally by tool/check_staging_authorization.sh: the commit is the CURRENT tip of `staging`, a two-parent merge, its merged
+# side is part of the CURRENT `development`, and its application content equals that side. The same record on the CURRENT `development` must still say
+# AUTHORIZED, so a withdrawal there stops every later delivery. Anything else, or a gate that cannot run, refuses: the run goes red and nothing is signed.
+# The production gate, record and workflow are untouched; this gate reads its records with the production gate's strict parser.
+#
+# WHAT IT DOES (three jobs; the same structure and, for the steps that hold secrets or judge the IPA, the same text as ios-hosted-signing.yml, which signed and
+# uploaded the production build 1.0.4 (1000035) in run 45221165334; tool/test_ios_staging_delivery.sh compares them):
+#   authorize  no secret, no environment. The gate above.
+#   build      no secret, no environment. Everything that downloads or runs third-party code: checks out the promotion commit, builds ONE unsigned archive
+#              (`flutter build ipa --release --no-codesign --flavor staging`), verifies the unsigned app, hands the archive over as a one-day tar with its SHA-256.
+#   sign       protected environment `ios-staging-signing` (restricted to the `staging` branch), only when `authorize` said yes. Runs only scripts of THIS commit
+#              and Apple's own tools; compiles nothing. It re-checks the gate, validates the hand-over, exports and signs with Apple's cloud-managed Distribution
+#              certificate (the first of the two steps that hold the key), verifies the IPA (V1 to V9, pinned on the RECORDED certificate), and only then validates
+#              and uploads that same IPA with Apple's altool (the second). Text evidence only; the IPA never leaves the runner except to Apple.
+#
+# WHAT IT MUST NEVER DO (tool/test_ios_staging_delivery.sh checks this statically):
+#   - run on anything but a push to `staging`; run a manual, scheduled, pull-request or workflow_run trigger;
+#   - handle the production identity; upload to any application but the one the record names; be given a version, a bundle ID or an application by an input;
+#   - expose a secret to the build job, to a dependency, to a step that is not named below, or to a log; pass a version override; build or rebuild after the gate.
+
+name: iOS staging delivery (automatic on merge into staging; signs and uploads the STAGING app)
+
+on:
+  push:
+    branches: [staging]
+
+# Least privilege for every job. No job writes to the repository or reads the OIDC token.
+permissions:
+  contents: read
+
+concurrency:
+  group: ios-staging-delivery
+  cancel-in-progress: false
+
+env:
+  BUILD_ENV: staging
+  BUILD_CONFIG_FILE: config/build/staging.json
+  BUNDLE_ID: com.app.cadenabitcoin.staging
+  DISPLAY_NAME: Cadena Signer STAGING
+  # Committed in ios/Runner.xcodeproj and in the staging record (an identifier, not a secret).
+  TEAM_ID: D65458CPDP
+  # The pins of ios-ci-validation.yml and build-variants.yml (tool/verify_ios_toolchain.sh compares those two only).
+  XCODE_APP: /Applications/Xcode_26.3.app
+  EXPECTED_XCODE: "26.3"
+  EXPECTED_MIN_SDK_MAJOR: "26"
+  EXPECTED_COCOAPODS: "1.17.0"
+  EXPECTED_FLUTTER: "3.35.3"
+  EXPECTED_FLUTTER_REVISION: a402d9a437
+  EXPECTED_DART: "3.9.2"
+  RUST_LIB: flutter_plugin/flutter_plugin/ios/Classes/libdlcplazacryptlib.a
+  EXPECTED_RUST_LIB_SHA256: 203dcd7abe4187de0b756638a55f691b2d5c680b17d4fbfa7dda550ed703949b
+  CONTENT_PATHS: "lib ios flutter_plugin pubspec.yaml pubspec.lock config/build android"
+  # The App Store Connect application is NOT a constant here: it is the numeric Apple ID in the staging record (G2S-STAGING-APP-APPLE-ID), which the gate
+  # refuses to be the production application. The upload step reads it from there.
+
+jobs:
+  # ------------------------------------------------------------------------------------------------------------------
+  authorize:
+    name: Authorization gate (reads the staging record and the source of this push; no secret)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    outputs:
+      authorized: ${{ steps.gate.outputs.authorized }}
+      upload_authorized: ${{ steps.gate.outputs.upload_authorized }}
+      version: ${{ steps.gate.outputs.version }}
+    steps:
+      # The commit of THIS push: its record, its tools. Full history, because the gate shows that the merged side is part of development.
+      - name: Checkout the promotion commit (full history)
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Check the staging authorization and the source of this push (staging record)
+        id: gate
+        run: |
+          set -uo pipefail
+          set +e
+          authorized=false
+          upload_authorized=false
+          version=""
+          {
+            echo "## iOS staging delivery: authorization gate"
+            echo
+          } >> "$GITHUB_STEP_SUMMARY"
+          record="docs/release-records/ios-staging-authorization.md"
+          if [ "$GITHUB_REF" != "refs/heads/staging" ] || [ "$GITHUB_EVENT_NAME" != "push" ]; then
+            echo "NOT AUTHORIZED: this run is on '$GITHUB_REF' (event $GITHUB_EVENT_NAME). Staging delivery runs only for a push to refs/heads/staging." > "$RUNNER_TEMP/gate.txt"; rc=1
+          elif [ ! -f "$record" ]; then
+            echo "NOT AUTHORIZED: $record does not exist on this commit." > "$RUNNER_TEMP/gate.txt"; rc=1
+          else
+            version="$(sed -n 's/^version:[[:space:]]*//p' pubspec.yaml | head -n1 | tr -d '[:space:]')"
+            bash tool/check_staging_authorization.sh --record "$record" --head "$GITHUB_SHA" --remote "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY.git" \
+              --bundle-id "$BUNDLE_ID" --team-id "$TEAM_ID" --tools-root . --repo . > "$RUNNER_TEMP/gate.txt" 2>&1
+            rc=$?
+          fi
+          if [ "$rc" -eq 0 ]; then
+            authorized=true
+            # The upload is part of the one authorized operation; the gate has checked that the record names it.
+            op="$(bash tool/check_staging_authorization.sh --print-field G2S-STAGING-OPERATION --record "$record" --tools-root . 2>/dev/null || true)"
+            [ "$op" = "sign-verify-and-upload" ] && upload_authorized=true
+          elif [ "$rc" -ne 1 ]; then
+            cat "$RUNNER_TEMP/gate.txt"; echo "::error::The authorization check could not run (exit $rc)."; exit 1
+          fi
+          # The version reaches later jobs only as a validated value (X.Y.Z+N), never as free text.
+          case "$version" in *[!0-9.+]*|'') version="" ;; esac
+          [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+\+[0-9]+$ ]] || { version=""; authorized=false; upload_authorized=false; echo "NOT AUTHORIZED: pubspec.yaml has no valid version." >> "$RUNNER_TEMP/gate.txt"; }
+          cat "$RUNNER_TEMP/gate.txt"
+          {
+            echo "authorized=$authorized"
+            echo "upload_authorized=$upload_authorized"
+            echo "version=$version"
+          } >> "$GITHUB_OUTPUT"
+          {
+            echo "Authorized: **$authorized**; upload of the verified IPA authorized: **$upload_authorized**; version: \`$version\`; commit: \`$GITHUB_SHA\`"
+            echo '```'
+            cat "$RUNNER_TEMP/gate.txt"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+          if [ "$authorized" != true ]; then
+            echo "::error::The iOS staging application was NOT delivered: the staging authorization gate refused this promotion (see the summary). The Android staging APK and the unsigned iOS compile validation are separate workflows and are not affected."
+            exit 1
+          fi
+
+  # ------------------------------------------------------------------------------------------------------------------
+  build:
+    name: Unsigned archive of the promotion commit (no secret, no environment)
+    needs: [authorize]
+    runs-on: macos-15
+    timeout-minutes: 90
+    outputs:
+      archive_sha256: ${{ steps.pack.outputs.archive_sha256 }}
+      rust_lib_sha256: ${{ steps.rust.outputs.rust_lib_sha256 }}
+    steps:
+      - name: Checkout the promotion commit
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      - name: Verify the source (the promotion commit, clean tree, the authorized version)
+        env:
+          EXPECTED_VERSION: ${{ needs.authorize.outputs.version }}
+        run: |
+          set -uo pipefail
+          set +e
+          fail=0
+          head="$(git rev-parse HEAD)"
+          echo "HEAD=$head"
+          [ "$head" = "$GITHUB_SHA" ] || { echo "::error::HEAD is $head, expected the promotion commit $GITHUB_SHA."; fail=1; }
+          [ -z "$(git status --porcelain)" ] || { echo "::error::The working tree is not clean."; git status --short | head -n 20; fail=1; }
+          version="$(sed -n 's/^version:[[:space:]]*//p' pubspec.yaml | head -n1 | tr -d '[:space:]')"
+          echo "pubspec_version=$version"
+          [ "$version" = "$EXPECTED_VERSION" ] || { echo "::error::pubspec.yaml has version '$version', the authorization gate read '$EXPECTED_VERSION'."; fail=1; }
+          [ "$fail" -eq 0 ] || exit 1
+          mkdir -p evidence
+          {
+            echo "promotion_commit=$head"
+            echo "tree=$(git rev-parse HEAD^{tree})"
+            echo "pubspec_version=$version"
+            echo "workflow_ref=$GITHUB_REF"
+            echo "run=$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID (attempt $GITHUB_RUN_ATTEMPT)"
+          } > evidence/source.txt
+
+      - name: Select Xcode 26.3
+        run: |
+          sudo xcode-select -s "$XCODE_APP/Contents/Developer"
+          xcodebuild -version
+          actual="$(xcodebuild -version | sed -n '1s/^Xcode //p')"
+          if [ "$actual" != "$EXPECTED_XCODE" ]; then
+            echo "::error::Expected Xcode $EXPECTED_XCODE at $XCODE_APP but xcodebuild reports '$actual'."
+            exit 1
+          fi
+
+      - name: Set up Flutter 3.35.3
+        uses: subosito/flutter-action@1a449444c387b1966244ae4d4f8c696479add0b2 # v2
+        with:
+          flutter-version: "3.35.3"
+          channel: stable
+          cache: true
+
+      - name: Record and verify toolchain
+        run: |
+          arch="$(uname -m)"
+          iphoneos_sdk="$(xcrun --sdk iphoneos --show-sdk-version)"
+          pod_version="$(pod --version)"
+          flutter_json="$(flutter --version --machine)"
+          field() { printf '%s' "$flutter_json" | python3 -I -c "import sys,json; print(json.load(sys.stdin).get('$1',''))"; }
+          flutter_version="$(field frameworkVersion)"
+          flutter_revision="$(field frameworkRevision)"
+          dart_version="$(field dartSdkVersion | awk '{print $1}')"
+          {
+            echo "runner_image=${ImageOS:-unknown} ${ImageVersion:-unknown}"
+            echo "runner_arch=${arch}"
+            echo "macos=$(sw_vers -productVersion) ($(sw_vers -buildVersion))"
+            echo "xcode=$(xcodebuild -version | sed -n '1s/^Xcode //p') ($(xcodebuild -version | sed -n '2s/^Build version //p'))"
+            echo "iphoneos_sdk=${iphoneos_sdk}"
+            echo "flutter=${flutter_version} (revision ${flutter_revision:0:10})"
+            echo "dart=${dart_version}"
+            echo "cocoapods=${pod_version}"
+          } > evidence/toolchain.txt
+          cat evidence/toolchain.txt
+          fail=0
+          if [ "$arch" != "arm64" ]; then echo "::error::Runner architecture is '$arch', expected arm64."; fail=1; fi
+          if [ "$flutter_version" != "$EXPECTED_FLUTTER" ]; then echo "::error::Flutter is '$flutter_version', expected $EXPECTED_FLUTTER."; fail=1; fi
+          case "$flutter_revision" in
+            "$EXPECTED_FLUTTER_REVISION"*) ;;
+            *) echo "::error::Flutter revision is '$flutter_revision', expected $EXPECTED_FLUTTER_REVISION*."; fail=1 ;;
+          esac
+          if [ "$dart_version" != "$EXPECTED_DART" ]; then echo "::error::Dart is '$dart_version', expected $EXPECTED_DART."; fail=1; fi
+          case "${iphoneos_sdk%%.*}" in
+            ''|*[!0-9]*) echo "::error::Cannot read the iPhoneOS SDK version (got '$iphoneos_sdk')."; fail=1 ;;
+            *) if [ "${iphoneos_sdk%%.*}" -lt "$EXPECTED_MIN_SDK_MAJOR" ]; then echo "::error::Expected an iPhoneOS SDK $EXPECTED_MIN_SDK_MAJOR or later but Xcode $EXPECTED_XCODE provides $iphoneos_sdk."; fail=1; fi ;;
+          esac
+          if [ "$pod_version" != "$EXPECTED_COCOAPODS" ]; then echo "::error::CocoaPods is '$pod_version', expected $EXPECTED_COCOAPODS."; fail=1; fi
+          [ "$fail" -eq 0 ] || exit 1
+
+      - name: Resolve dependencies exactly as the lockfiles say
+        run: |
+          flutter pub get --enforce-lockfile
+          (cd flutter_plugin/flutter_plugin && flutter pub get)
+
+      # Deliberately the system /bin/bash (3.2 on macOS): the tools must stay portable to it.
+      - name: Repository checks (configuration, version wiring)
+        run: |
+          set -o pipefail
+          resolved="$(/bin/bash tool/verify_build_config.sh resolve "$BUILD_CONFIG_FILE" "$BUILD_ENV")"
+          echo "$resolved"
+          grep -qx "APP_ENV=$BUILD_ENV" <<<"$resolved" || { echo "::error::$BUILD_CONFIG_FILE does not resolve to APP_ENV=$BUILD_ENV"; exit 1; }
+          /bin/bash tool/verify_build_config.sh verify
+          /bin/bash tool/verify_version.sh 2>&1 | tee evidence/verify_version.txt
+
+      - name: Check that the prebuilt Rust static library is the audited one (not rebuilt)
+        id: rust
+        run: |
+          set -o pipefail
+          sha="$(shasum -a 256 "$RUST_LIB" | awk '{print $1}')"
+          {
+            echo "rust_lib=$RUST_LIB"
+            echo "rust_lib_sha256=$sha"
+            echo "rust_lib_expected_sha256=$EXPECTED_RUST_LIB_SHA256"
+          } | tee evidence/rust_lib.txt
+          if [ "$sha" != "$EXPECTED_RUST_LIB_SHA256" ]; then
+            echo "::error::$RUST_LIB has sha256 $sha, not the audited $EXPECTED_RUST_LIB_SHA256. Nothing was built."
+            exit 1
+          fi
+          echo "rust_lib_sha256=$sha" >> "$GITHUB_OUTPUT"
+
+      # The ONE compile of this run. Unsigned: CODE_SIGNING_ALLOWED=NO. No version override of any kind.
+      - name: Build the unsigned archive (flutter build ipa --no-codesign)
+        run: |
+          set -o pipefail
+          flutter build ipa --release --no-codesign --flavor "$BUILD_ENV" --dart-define-from-file="$BUILD_CONFIG_FILE" 2>&1 | tee "$RUNNER_TEMP/build-ipa.log"
+          archive=build/ios/archive/Runner.xcarchive
+          if [ ! -d "$archive/Products/Applications/Runner.app" ]; then
+            echo "::error::flutter build ipa --no-codesign produced no $archive/Products/Applications/Runner.app"
+            find build/ios/archive -maxdepth 4 2>/dev/null | head -n 40 || true
+            exit 1
+          fi
+          echo "ARCHIVE_PATH=$archive" >> "$GITHUB_ENV"
+          echo "ARCHIVE_APP=$archive/Products/Applications/Runner.app" >> "$GITHUB_ENV"
+          echo "build_command=flutter build ipa --release --no-codesign --flavor $BUILD_ENV --dart-define-from-file=$BUILD_CONFIG_FILE" > evidence/build.txt
+
+      - name: Verify the unsigned app (bundle ID, name, version, unsigned, environment) and the drift rule
+        run: |
+          /bin/bash tool/verify_artifact.sh selftest ios "$BUILD_ENV" "$ARCHIVE_APP" --min-sdk "$EXPECTED_MIN_SDK_MAJOR"
+          /bin/bash tool/verify_artifact.sh ios "$BUILD_ENV" "$ARCHIVE_APP" --min-sdk "$EXPECTED_MIN_SDK_MAJOR" --evidence evidence/verify_artifact_unsigned.txt
+          /bin/bash tool/check_build_drift.sh
+          # The archive must carry no signature, no profile and no entitlements: the signing job adds them.
+          { codesign -dv "$ARCHIVE_APP" 2>&1 | head -n 3; } > evidence/codesign-state.txt || true
+          grep -q 'not signed at all' evidence/codesign-state.txt || { echo "::error::The archived app is not 'not signed at all'."; cat evidence/codesign-state.txt; exit 1; }
+          [ ! -e "$ARCHIVE_APP/embedded.mobileprovision" ] && [ ! -e "$ARCHIVE_APP/_CodeSignature" ] || { echo "::error::The archived app carries a profile or a signature folder."; exit 1; }
+
+      # One tar, so that permissions and links survive the hand-over (the artifact action zips files and loses them).
+      # Its SHA-256 goes to the signing job as a job output and is checked there.
+      - name: Pack the unsigned archive and fix its digest
+        id: pack
+        run: |
+          set -euo pipefail
+          COPYFILE_DISABLE=1 tar -C "$(dirname "$ARCHIVE_PATH")" -cf "$RUNNER_TEMP/Runner.xcarchive.tar" "$(basename "$ARCHIVE_PATH")"
+          mkdir -p handover
+          mv "$RUNNER_TEMP/Runner.xcarchive.tar" handover/Runner.xcarchive.tar
+          sha="$(shasum -a 256 handover/Runner.xcarchive.tar | awk '{print $1}')"
+          echo "archive_sha256=$sha" >> "$GITHUB_OUTPUT"
+          { echo "archive_tar_sha256=$sha"; echo "archive_tar_size=$(stat -f%z handover/Runner.xcarchive.tar)"; } >> evidence/build.txt
+          cat evidence/build.txt
+
+      - name: Seal the build evidence (text only)
+        if: always()
+        run: |
+          set -uo pipefail
+          set +e
+          [ -d evidence ] || exit 0
+          cp "$RUNNER_TEMP/build-ipa.log" evidence/build-ipa.log 2>/dev/null || true
+          bad="$(find evidence -type f | while IFS= read -r f; do [ -s "$f" ] || continue; enc="$(file -b --mime-encoding "$f")"; [ "$enc" = "binary" ] && echo "$f"; done)"
+          if [ -n "$bad" ]; then echo "::error::Binary file(s) in the evidence; refusing to keep them:"; echo "$bad"; rm -f $bad; fi
+          ( cd evidence && find . -type f ! -name SHA256SUMS.txt -print0 | xargs -0 shasum -a 256 | sort -k2 > SHA256SUMS.txt )
+
+      - name: Upload the unsigned archive (one day; open-source app, unsigned)
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: ios-staging-unsigned-archive_${{ github.run_id }}-${{ github.run_attempt }}
+          path: handover/Runner.xcarchive.tar
+          if-no-files-found: error
+          retention-days: 1
+
+      - name: Upload the build evidence (text)
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: ios-staging-build-evidence_${{ github.run_id }}-${{ github.run_attempt }}
+          path: evidence/
+          if-no-files-found: warn
+          retention-days: 30
+
+  # ------------------------------------------------------------------------------------------------------------------
+
+  # ------------------------------------------------------------------------------------------------------------------
+  sign:
+    name: Sign (cloud-managed Distribution certificate), verify and upload to the staging application
+    needs: [authorize, build]
+    if: needs.authorize.outputs.authorized == 'true'
+    runs-on: macos-15
+    timeout-minutes: 45
+    # The protected environment holds the three secrets (docs/IOS_STAGING_DELIVERY.md section 5). It is restricted to the `staging` branch.
+    # No required reviewers: the authorization is the reviewed merge and the staging record (RELEASE_POLICY.md 2.3).
+    environment: ios-staging-signing
+    steps:
+      - name: Validate the run
+        env:
+          EXPECTED_VERSION: ${{ needs.authorize.outputs.version }}
+        run: |
+          fail=0
+          isexact() { case "$1" in *$'\n'*|*$'\r'*) return 1 ;; esac; [[ "$1" =~ $2 ]]; }
+          re_version='^[0-9]+\.[0-9]+\.[0-9]+\+[0-9]+$'
+          isexact "$EXPECTED_VERSION" "$re_version" || { echo "::error::The authorized version must look like 1.0.5+1000036."; fail=1; }
+          [ "$GITHUB_REF" = "refs/heads/staging" ] || { echo "::error::Staging delivery runs only from refs/heads/staging."; fail=1; }
+          [ "$GITHUB_EVENT_NAME" = "push" ] || { echo "::error::Staging delivery runs only for a push."; fail=1; }
+          [ "$fail" -eq 0 ] || exit 1
+
+      # The tools: this workflow's own commit (the promotion commit on `staging`). Nothing of it is built. Full history: the gate shows the merged side's origin.
+      - name: Checkout the verification tools (this workflow's commit)
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          path: tools
+          fetch-depth: 0
+          persist-credentials: false
+
+      # Defence in depth: the same gate as the authorize job, before anything else happens in this job. It reads the live tip of staging and the live
+      # record on development again, so a newer promotion or a withdrawal since the authorize job stops this run here, before any secret.
+      - name: Re-check the authorization (staging record) before any secret is touched
+        run: |
+          set -uo pipefail
+          record="tools/docs/release-records/ios-staging-authorization.md"
+          bash tools/tool/check_staging_authorization.sh --record "$record" --head "$GITHUB_SHA" --remote "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY.git" \
+            --bundle-id "$BUNDLE_ID" --team-id "$TEAM_ID" --tools-root tools --repo tools \
+            || { echo "::error::Staging delivery is not authorized by the staging record. Stopping before any secret is used."; exit 1; }
+          # The RECORDED signing certificate: the signed IPA must carry exactly this one (V3, V7). Never discovered at run time.
+          pin="$(bash tools/tool/check_staging_authorization.sh --print-field G2S-STAGING-CERT-SHA256 --record "$record" --tools-root tools)" || { echo "::error::The record carries no single certificate fingerprint."; exit 1; }
+          [[ "$pin" =~ ^[0-9a-f]{64}$ ]] || { echo "::error::The recorded certificate fingerprint is not a SHA-256."; exit 1; }
+          echo "EXPECTED_CERT_SHA256=$pin" >> "$GITHUB_ENV"
+
+      # DATA ONLY: the promotion commit supplies pubspec.yaml to the verifier. No script of it is executed anywhere in this job
+      # (the verifier's identity matrix comes from tools/tool/verify_artifact.sh, see "Assemble the verifier's view" below),
+      # and the one step that has the key runs only Apple's xcodebuild and a redaction filter.
+      - name: Checkout the promotion commit (what the verifier judges against)
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ github.sha }}
+          path: approved
+          persist-credentials: false
+
+      - name: Check that the approved checkout is the promotion commit
+        env:
+          EXPECTED_VERSION: ${{ needs.authorize.outputs.version }}
+        run: |
+          head="$(git -C approved rev-parse HEAD)"
+          [ "$head" = "$GITHUB_SHA" ] || { echo "::error::approved checkout is $head, expected $GITHUB_SHA."; exit 1; }
+          version="$(sed -n 's/^version:[[:space:]]*//p' approved/pubspec.yaml | head -n1 | tr -d '[:space:]')"
+          [ "$version" = "$EXPECTED_VERSION" ] || { echo "::error::approved pubspec.yaml has '$version', expected '$EXPECTED_VERSION'."; exit 1; }
+          mkdir -p evidence
+          {
+            echo "promotion_commit=$head"; echo "tools_commit=$GITHUB_SHA"
+            echo "promotion_subject=$(git -C approved log -1 --format=%s | tr -d '\r' | cut -c1-200)"
+            echo "workflow_blob=$(git hash-object tools/.github/workflows/ios-staging-delivery.yml)"
+            bash tools/tool/check_staging_authorization.sh --print-expected --tools-root tools
+            echo "run=$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID (attempt $GITHUB_RUN_ATTEMPT)"
+          } > evidence/source.txt
+
+      # The verifier asks a "repository" for two things: the identity matrix (tool/verify_artifact.sh matrix, which RUNS that
+      # script) and pubspec.yaml (read). Build that view here: the script from this workflow's commit (bound by the staging
+      # authorization), the pubspec as plain data from the promotion commit. Nothing of the promotion commit is executed.
+      - name: Assemble the verifier's view (script of this commit, pubspec of the promotion commit as data)
+        run: |
+          set -uo pipefail
+          [ -f approved/pubspec.yaml ] && [ ! -L approved/pubspec.yaml ] || { echo "::error::approved/pubspec.yaml is missing or a link."; exit 1; }
+          mkdir -p "$RUNNER_TEMP/verifier-repo/tool"
+          cp tools/tool/verify_artifact.sh "$RUNNER_TEMP/verifier-repo/tool/verify_artifact.sh"
+          cp approved/pubspec.yaml "$RUNNER_TEMP/verifier-repo/pubspec.yaml"
+          echo "VERIFIER_REPO=$RUNNER_TEMP/verifier-repo" >> "$GITHUB_ENV"
+
+      - name: Download the unsigned archive of the build job
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: ios-staging-unsigned-archive_${{ github.run_id }}-${{ github.run_attempt }}
+          path: handover
+
+      # The archive comes from a job that ran third-party code, so it is data to be checked, never trusted: its digest must be
+      # the build job's, its member list is checked BEFORE it is extracted and its tree AFTER (tool/validate_handover_archive.py,
+      # from this workflow's commit: absolute or `..` names, unsafe links, special files, set-id bits are refused), and only
+      # trusted Apple tools read it. No script of the archive, of the promotion commit or of the build job is executed here.
+      - name: Check the archive digest, validate it before and after extraction, and read the unsigned app (no secret yet)
+        env:
+          ARCHIVE_SHA256: ${{ needs.build.outputs.archive_sha256 }}
+          RUST_LIB_SHA256: ${{ needs.build.outputs.rust_lib_sha256 }}
+          EXPECTED_VERSION: ${{ needs.authorize.outputs.version }}
+        run: |
+          set -uo pipefail
+          isexact() { case "$1" in *$'\n'*|*$'\r'*) return 1 ;; esac; [[ "$1" =~ $2 ]]; }
+          re_hex64='^[0-9a-f]{64}$'
+          [ "$(ls handover | wc -l | tr -d ' ')" = "1" ] && [ -f handover/Runner.xcarchive.tar ] && [ ! -L handover/Runner.xcarchive.tar ] || { echo "::error::The hand-over holds something other than the regular file Runner.xcarchive.tar."; ls -la handover; exit 1; }
+          actual="$(shasum -a 256 handover/Runner.xcarchive.tar | awk '{print $1}')"
+          echo "archive_tar_sha256=$actual (build job reported $ARCHIVE_SHA256)"
+          isexact "$ARCHIVE_SHA256" "$re_hex64" && [ "$actual" = "$ARCHIVE_SHA256" ] || { echo "::error::The archive does not match the digest of the build job."; exit 1; }
+          [ "$RUST_LIB_SHA256" = "$EXPECTED_RUST_LIB_SHA256" ] || { echo "::error::The build job reported Rust library $RUST_LIB_SHA256, not the audited $EXPECTED_RUST_LIB_SHA256."; exit 1; }
+          # BEFORE extraction: the member list (names, types, links, modes, limits).
+          python3 -I tools/tool/validate_handover_archive.py list handover/Runner.xcarchive.tar --top Runner.xcarchive | tee evidence/archive-validate-list.txt
+          [ "${PIPESTATUS[0]}" -eq 0 ] || { echo "::error::The archive's member list is refused. Nothing was extracted."; exit 1; }
+          mkdir -p "$RUNNER_TEMP/archive"
+          tar -xf handover/Runner.xcarchive.tar -C "$RUNNER_TEMP/archive" || { echo "::error::The archive could not be extracted."; exit 1; }
+          # AFTER extraction: the tree that really exists (no escaping link, no special file, no set-id bit).
+          python3 -I tools/tool/validate_handover_archive.py tree "$RUNNER_TEMP/archive" | tee evidence/archive-validate-tree.txt
+          [ "${PIPESTATUS[0]}" -eq 0 ] || { echo "::error::The extracted archive is refused."; exit 1; }
+          [ "$(ls -A "$RUNNER_TEMP/archive")" = "Runner.xcarchive" ] || { echo "::error::The extraction holds more than Runner.xcarchive."; exit 1; }
+          ARCHIVE="$RUNNER_TEMP/archive/Runner.xcarchive"
+          APP="$ARCHIVE/Products/Applications/Runner.app"
+          [ -d "$APP" ] && [ ! -L "$APP" ] || { echo "::error::No Runner.app in the archive."; exit 1; }
+          [ "$(find "$ARCHIVE/Products/Applications" -maxdepth 1 -name '*.app' | wc -l | tr -d ' ')" = "1" ] || { echo "::error::The archive holds more than one app."; exit 1; }
+          # `codesign -dv` exits NON-ZERO for an unsigned bundle, which is the answer wanted here; under `pipefail` that status would fail the whole
+          # pipeline even though the text matched (the first real run stopped here). So its exit status is ignored ON PURPOSE and its TEXT is judged: the
+          # first line must END with ": code object is not signed at all" and no line may show a signature. An ad-hoc or distribution-signed app, an
+          # error message and an empty answer are all refused. The answer is kept as evidence.
+          codesign_state="$(codesign -dv "$APP" 2>&1 | head -n 12 || true)"
+          printf '%s\n' "$codesign_state" > evidence/archive-codesign-state.txt
+          codesign_first_line="${codesign_state%%$'\n'*}"
+          case "$codesign_first_line" in
+            *': code object is not signed at all') ;;
+            *) echo "::error::The archived app is not unsigned (codesign says: $codesign_first_line)."; exit 1 ;;
+          esac
+          if grep -qE '^(Signature|Authority|TeamIdentifier)=' <<<"$codesign_state"; then echo "::error::codesign shows a signature on the archived app."; exit 1; fi
+          [ ! -e "$APP/embedded.mobileprovision" ] && [ ! -e "$APP/_CodeSignature" ] || { echo "::error::The archived app carries a profile or a signature folder."; exit 1; }
+          # Identity and version, read by Apple's PlistBuddy (the build job's repository checks already judged this very app).
+          pbid="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$APP/Info.plist")"
+          pbver="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$APP/Info.plist")"
+          pbbld="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' "$APP/Info.plist")"
+          [ "$pbid" = "$BUNDLE_ID" ] && [ "$pbver+$pbbld" = "$EXPECTED_VERSION" ] || { echo "::error::The archived app says $pbid $pbver+$pbbld, expected $BUNDLE_ID $EXPECTED_VERSION."; exit 1; }
+          # The comparison baseline of V8 is THIS archive's app (docs/IOS_RELEASE.md section 8, step 6); keep a copy and its hashes.
+          mkdir -p "$RUNNER_TEMP/archive-app"
+          ditto "$APP" "$RUNNER_TEMP/archive-app/Runner.app"
+          (cd "$RUNNER_TEMP/archive-app/Runner.app" && find . -type f -print0 | xargs -0 shasum -a 256 | sort -k2) > evidence/archive-app.sha256
+          { echo "archive_tar_sha256=$actual"; echo "rust_lib_sha256=$RUST_LIB_SHA256"; echo "archive_app_files=$(wc -l < evidence/archive-app.sha256 | tr -d ' ')"; plutil -p "$ARCHIVE/Info.plist" | grep -E 'CFBundleIdentifier|CFBundleShortVersionString|CFBundleVersion|SigningIdentity|"Team"'; } > evidence/archive.txt
+          cat evidence/archive.txt
+          echo "ARCHIVE=$ARCHIVE" >> "$GITHUB_ENV"
+          echo "BASELINE_APP=$RUNNER_TEMP/archive-app/Runner.app" >> "$GITHUB_ENV"
+          echo "RUST_LIB_SHA256=$RUST_LIB_SHA256" >> "$GITHUB_ENV"
+
+      # The native crypto library's framework must be byte-for-byte the one the staging record authorizes (G2S-STAGING-DLC-WALLET-SHA256, read by the gate
+      # script so that the record is parsed in one place). Strict equality, no fallback, no input, no tolerance: a difference stops the run HERE, before Xcode
+      # is selected and before any secret exists, and the real hash is in the log so that a reviewed record pull request can authorize it.
+      - name: Enforce the authorized dlc_wallet framework hash (no secret yet)
+        env:
+          EXPECTED_VERSION: ${{ needs.authorize.outputs.version }}
+        run: |
+          set -uo pipefail
+          set +e
+          isexact() { case "$1" in *$'\n'*|*$'\r'*) return 1 ;; esac; [[ "$1" =~ $2 ]]; }
+          re_hex64='^[0-9a-f]{64}$'
+          mkdir -p evidence
+          record="tools/docs/release-records/ios-staging-authorization.md"
+          fw="$ARCHIVE/Products/Applications/Runner.app/Frameworks/dlc_wallet.framework/dlc_wallet"
+          authorized="$(bash tools/tool/check_staging_authorization.sh --print-field G2S-STAGING-DLC-WALLET-SHA256 --record "$record" --tools-root tools)"; rc=$?
+          if [ "$rc" -ne 0 ] || ! isexact "$authorized" "$re_hex64"; then echo "::error::The staging record carries no single, valid G2S-STAGING-DLC-WALLET-SHA256 line. Stopping before any secret exists."; exit 1; fi
+          if [ ! -f "$fw" ] || [ -L "$fw" ]; then echo "::error::The archive has no regular file Frameworks/dlc_wallet.framework/dlc_wallet. Stopping before any secret exists."; exit 1; fi
+          actual="$(shasum -a 256 "$fw" | awk '{print $1}')"
+          { echo "dlc_wallet_archive_binary_sha256=$actual"; echo "dlc_wallet_authorized_sha256=$authorized"; echo "pinned_rust_library_sha256=$RUST_LIB_SHA256"; } > evidence/dlc-wallet-hash.txt
+          cat evidence/dlc-wallet-hash.txt
+          if [ "$actual" != "$authorized" ]; then
+            echo "::error::The dlc_wallet framework of this archive ($actual) is not the one the staging record authorizes ($authorized). Nothing was signed and no secret was used. Find out why it differs; only a reviewed staging-record pull request can authorize another binary."
+            exit 1
+          fi
+          echo "dlc_wallet framework hash equals the authorized value."
+
+      - name: Select Xcode 26.3
+        run: |
+          sudo xcode-select -s "$XCODE_APP/Contents/Developer"
+          actual="$(xcodebuild -version | sed -n '1s/^Xcode //p')"
+          echo "xcode=$actual ($(xcodebuild -version | sed -n '2s/^Build version //p'))" | tee evidence/xcode.txt
+          [ "$actual" = "$EXPECTED_XCODE" ] || { echo "::error::Expected Xcode $EXPECTED_XCODE but xcodebuild reports '$actual'."; exit 1; }
+
+      - name: "Record the signing material on this runner before signing (expected: none)"
+        run: |
+          {
+            echo "codesigning identities: $(security find-identity -p codesigning 2>&1 | tail -n 1)"
+            echo "provisioning profiles installed: $(ls "$HOME/Library/MobileDevice/Provisioning Profiles" 2>/dev/null | wc -l | tr -d ' ')"
+          } | tee evidence/signing-material-before.txt
+
+      # Apple's upload tool, looked at BEFORE any credential exists. The runner's Xcode decides which interface it offers (the current `--upload-package` with
+      # --api-key and --api-issuer, or the legacy `--upload-app` with --apiKey and --apiIssuer); this step reads `altool --help` and refuses to go on when neither
+      # is complete, so a missing or changed tool stops the run here, with the export (and so the authorization's single use) still ahead.
+      - name: Probe Apple's upload tool (no secret; stops here, before any credential, if it cannot be used)
+        if: needs.authorize.outputs.upload_authorized == 'true'
+        run: |
+          set -uo pipefail
+          set +e
+          mkdir -p evidence
+          altool_path="$(xcrun --find altool 2>/dev/null)"
+          help_text="$(xcrun altool --help 2>&1)"; help_rc=$?
+          printf '%s\n' "$help_text" | head -n 150 > evidence/upload-tool-help.txt
+          has() { printf '%s\n' "$help_text" | grep -F -- "$1" >/dev/null; }
+          syntax=none
+          if has '--upload-package' && has '--validate-app' && has '--api-key' && has '--api-issuer' && has '--platform' && has '--apple-id' && has '--bundle-version' && has '--bundle-short-version-string'; then
+            syntax=package
+          elif has '--upload-app' && has '--validate-app' && has '--apiKey' && has '--apiIssuer'; then
+            syntax=legacy
+          fi
+          {
+            echo "altool_path=${altool_path:-none}"
+            echo "altool_help_exit=$help_rc"
+            echo "xcode=$(xcodebuild -version | sed -n 1p)"
+            echo "syntax=$syntax"
+          } > evidence/upload-tool-probe.txt
+          cat evidence/upload-tool-probe.txt
+          if [ -z "$altool_path" ] || [ "$syntax" = none ]; then
+            echo "::error::Apple's upload tool, altool, does not offer a supported interface on this runner (evidence: upload-tool-probe.txt, upload-tool-help.txt). Stopping before any credential is used; nothing was signed or uploaded."
+            exit 1
+          fi
+          printf '%s\n' "$syntax" > "$RUNNER_TEMP/upload-syntax"
+
+      # ---------------------------------------------------------------------------------------------------------------
+      # THE FIRST OF TWO STEPS THAT HOLD A SECRET (the other uploads: see below). It runs Apple's xcodebuild and a text redaction filter, nothing from the
+      # repository and no dependency. The key file exists for this one command (mode 600, in RUNNER_TEMP, outside the
+      # workspace and outside every artifact path) and a trap removes it on every exit. Nothing is printed with set -x.
+      # Cloud-managed signing: signingStyle automatic + -allowProvisioningUpdates + the App Store Connect team API key. Apple
+      # documents that Xcode then "will create provisioning profiles and managed cloud signing certificates as necessary"
+      # (xcodebuild -help, export option signingStyle). Whether the Developer role suffices is exactly what this run tests.
+      # destination=export: nothing is uploaded. manageAppVersionAndBuildNumber=false: Xcode may not touch the build number.
+      # testFlightInternalTestingOnly=false: docs/IOS_RELEASE.md D9 (never "TestFlight Internal Only").
+      # ---------------------------------------------------------------------------------------------------------------
+      - name: Export and sign with the cloud-managed Distribution certificate (the only step with secrets)
+        env:
+          APPLE_API_KEY_P8: ${{ secrets.APPLE_API_KEY_P8 }}
+          APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
+          APPLE_API_ISSUER_ID: ${{ secrets.APPLE_API_ISSUER_ID }}
+        run: |
+          set -uo pipefail
+          # No errexit: the runner starts steps with `bash -e`, which would stop at a failing xcodebuild BEFORE the redacted
+          # evidence is written. Every failure below is handled explicitly, and the trap removes the key file on every exit.
+          set +e
+          set +x
+          umask 077
+          unset BASH_ENV ENV DYLD_INSERT_LIBRARIES DYLD_LIBRARY_PATH DYLD_FRAMEWORK_PATH
+          [ -n "$APPLE_API_KEY_P8" ] && [ -n "$APPLE_API_KEY_ID" ] && [ -n "$APPLE_API_ISSUER_ID" ] || { echo "::error::A secret of the environment ios-staging-signing is missing (docs/IOS_STAGING_DELIVERY.md section 5)."; exit 1; }
+          export KEYFILE="$RUNNER_TEMP/apple-api-key.p8"
+          cleanup() { rm -P -f "$KEYFILE" 2>/dev/null || rm -f "$KEYFILE"; }
+          trap cleanup EXIT
+          printf '%s\n' "$APPLE_API_KEY_P8" > "$KEYFILE"
+          # The key text now lives ONLY in the file (created mode 600 by the umask above). It leaves the environment BEFORE any
+          # other process starts, chmod included, and long before Xcode: xcodebuild reads the file by path, so the environment
+          # variable is not needed and no child ever inherits it.
+          unset APPLE_API_KEY_P8
+          chmod 600 "$KEYFILE"
+          [ "$(head -n 1 "$KEYFILE")" = "-----BEGIN PRIVATE KEY-----" ] || { echo "::error::The stored key is not a PEM PKCS#8 file (.p8)."; exit 1; }
+
+          OPTS="$RUNNER_TEMP/ExportOptions.plist"
+          EXPORT_DIR="$RUNNER_TEMP/export"
+          mkdir -p "$EXPORT_DIR"
+          cat > "$OPTS" <<EOF
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0">
+          <dict>
+            <key>method</key><string>app-store-connect</string>
+            <key>destination</key><string>export</string>
+            <key>signingStyle</key><string>automatic</string>
+            <key>teamID</key><string>${TEAM_ID}</string>
+            <key>manageAppVersionAndBuildNumber</key><false/>
+            <key>testFlightInternalTestingOnly</key><false/>
+            <key>uploadSymbols</key><false/>
+          </dict>
+          </plist>
+          EOF
+          plutil -lint "$OPTS" || { echo "::error::The export options are not a valid plist."; exit 1; }
+
+          # Phase 7C: the moment THIS export run starts, so that a distribution log of an earlier run is never mistaken for it (see below).
+          : > "$RUNNER_TEMP/.export-start"
+          # The key ID and issuer ID are command-line arguments (xcodebuild has no other way to take them); `env -u` makes sure
+          # that no secret is also in the environment of xcodebuild and its children. Output goes to a raw log, never the job log.
+          env -u APPLE_API_KEY_P8 -u APPLE_API_KEY_ID -u APPLE_API_ISSUER_ID \
+            xcodebuild -exportArchive \
+            -archivePath "$ARCHIVE" \
+            -exportPath "$EXPORT_DIR" \
+            -exportOptionsPlist "$OPTS" \
+            -allowProvisioningUpdates \
+            -authenticationKeyPath "$KEYFILE" \
+            -authenticationKeyID "$APPLE_API_KEY_ID" \
+            -authenticationKeyIssuerID "$APPLE_API_ISSUER_ID" > "$RUNNER_TEMP/export.raw.log" 2>&1
+          rc=$?
+
+          # A text filter that removes the secret values from everything kept as evidence. It runs while the key file still
+          # exists (the key lines are read from it, not from the environment) and then the file is removed. It removes the exact
+          # key ID, issuer ID, key lines and key path, PEM markers, JWT-shaped tokens and bearer tokens, and it FAILS (nothing
+          # is kept) if any of the exact values is still present afterwards.
+          cat > "$RUNNER_TEMP/redact.py" <<'PY'
+          import os, re, sys
+          vals = [os.environ.get("APPLE_API_KEY_ID", ""), os.environ.get("APPLE_API_ISSUER_ID", ""), os.environ.get("KEYFILE", "")]
+          vals += [l.strip() for l in open(os.environ["KEYFILE"], encoding="utf-8", errors="replace").read().splitlines()]
+          vals = sorted({v for v in vals if len(v) >= 6}, key=len, reverse=True)
+          data = open(sys.argv[1], "rb").read(4000000).decode("utf-8", "replace")
+          for v in vals:
+              data = data.replace(v, "[REDACTED]")
+          data = re.sub(r"eyJ[A-Za-z0-9_-]{4,}\.[A-Za-z0-9_-]{4,}(\.[A-Za-z0-9_-]*)?", "[REDACTED]", data)
+          data = re.sub(r"(?i)(bearer|authorization:?)\s+[A-Za-z0-9._~+/=-]{8,}", r"\1 [REDACTED]", data)
+          data = re.sub(r"-----(BEGIN|END)[A-Z ]*PRIVATE KEY-----", "[REDACTED]", data)
+          if "PRIVATE KEY" in data:
+              data = data.replace("PRIVATE KEY", "[REDACTED]")
+          if any(v in data for v in vals):
+              sys.exit(3)
+          open(sys.argv[2], "w").write(data)
+          PY
+          redact() { python3 -I "$RUNNER_TEMP/redact.py" "$1" "$2" || { echo "::error::The redaction of $1 failed; nothing of it is kept."; rm -f "$2"; return 1; }; }
+          red=0
+          redact "$RUNNER_TEMP/export.raw.log" evidence/export.log || red=1
+          echo "xcodebuild_exportArchive_exit=$rc" > evidence/export-result.txt
+          [ -f "$EXPORT_DIR/DistributionSummary.plist" ] && plutil -p "$EXPORT_DIR/DistributionSummary.plist" > "$RUNNER_TEMP/distsum.txt" 2>&1 && { redact "$RUNNER_TEMP/distsum.txt" evidence/DistributionSummary.txt || red=1; }
+          [ -f "$EXPORT_DIR/ExportOptions.plist" ] && plutil -p "$EXPORT_DIR/ExportOptions.plist" > "$RUNNER_TEMP/expopts.txt" 2>&1 && { redact "$RUNNER_TEMP/expopts.txt" evidence/ExportOptions-used.txt || red=1; }
+          [ -f "$EXPORT_DIR/Packaging.log" ] && { redact "$EXPORT_DIR/Packaging.log" evidence/Packaging.log || red=1; }
+          # Phase 7C. When the export FAILED, Xcode does not copy Packaging.log to the export directory: it stays in a .xcdistributionlogs
+          # bundle that Xcode names on the first line of its own output ("Created bundle at path ..."), and no earlier run kept it. Keep the
+          # log of THIS run, through the SAME redaction (the key file still exists here), and nothing else: the bundle must be a directory
+          # directly inside this step's TMPDIR with a plain name, not a link, newer than the marker above, and its Packaging.log a plain
+          # file within the size the redaction reads. If any of that is not so, a one-line reason is kept instead (no path, no content).
+          if [ "$rc" -ne 0 ] && [ ! -f evidence/Packaging.log ]; then
+            cat > "$RUNNER_TEMP/findlog.py" <<'PY'
+          import os, re, sys
+          raw, marker = sys.argv[1], sys.argv[2]
+          def no(why):
+              print("NO " + why)
+              sys.exit(0)
+          try:
+              text = open(raw, "rb").read(4000000).decode("utf-8", "replace")
+          except OSError:
+              no("the export output cannot be read")
+          m = re.search(r'Created bundle at path "([^"\n]+\.xcdistributionlogs)"', text)
+          if not m:
+              no("the export output names no distribution log bundle")
+          path = m.group(1)
+          tmpdir = os.path.realpath(os.environ.get("TMPDIR") or "/tmp")
+          name = os.path.basename(path)
+          if not re.fullmatch(r"[A-Za-z0-9_.-]{1,120}\.xcdistributionlogs", name) or os.path.realpath(os.path.dirname(path)) != tmpdir:
+              no("the named bundle is not a plain bundle directly inside this step's temporary directory")
+          if os.path.islink(path) or not os.path.isdir(path):
+              no("the named bundle is a link or not a directory")
+          log = os.path.join(path, "Packaging.log")
+          if os.path.islink(log) or not os.path.isfile(log):
+              no("the bundle holds no plain Packaging.log")
+          try:
+              if os.stat(log).st_mtime < os.stat(marker).st_mtime:
+                  no("the bundle is older than this export run")
+              if os.stat(log).st_size > 4000000:
+                  no("Packaging.log is larger than the redaction reads")
+          except OSError:
+              no("Packaging.log cannot be inspected")
+          print("OK " + path)
+          PY
+            found="$(python3 -I "$RUNNER_TEMP/findlog.py" "$RUNNER_TEMP/export.raw.log" "$RUNNER_TEMP/.export-start" 2>/dev/null)"
+            case "$found" in
+              "OK "*)
+                logdir="${found#OK }"
+                if redact "$logdir/Packaging.log" evidence/Packaging.log; then
+                  { echo "packaging_log=collected, redacted, from the distribution log bundle of this failed export run"; echo "bundle_name=$(basename "$logdir")"; echo "export_exit=$rc"; } > evidence/packaging-log-source.txt
+                else
+                  red=1; { echo "packaging_log=withheld: the redaction failed"; echo "export_exit=$rc"; } > evidence/packaging-log-source.txt
+                fi ;;
+              "NO "*) { echo "packaging_log=not collected"; echo "reason=${found#NO }"; echo "export_exit=$rc"; } > evidence/packaging-log-source.txt ;;
+              *) { echo "packaging_log=not collected"; echo "reason=the search helper gave no answer"; echo "export_exit=$rc"; } > evidence/packaging-log-source.txt ;;
+            esac
+          fi
+          cleanup
+          [ "$red" -eq 0 ] || { echo "::error::A redaction failed. Evidence of this step is withheld; nothing was uploaded."; exit 1; }
+          echo "---- xcodebuild -exportArchive (redacted), last 60 lines ----"
+          tail -n 60 evidence/export.log
+          if [ "$rc" -ne 0 ]; then
+            # Pattern hints only: they are an inference from the text, never a diagnosis.
+            {
+              echo "export_failed=yes (exit $rc)"
+              for p in 'Cloud signing permission error' 'forbidden' '(^|[^0-9])40[13]([^0-9]|$)' 'does not have permission' 'No signing certificate' 'No profiles for' 'No Accounts' 'not signed' 'Failed to Use Accounts' 'ITMS-'; do
+                echo "pattern '$p': $(grep -cE -- "$p" evidence/export.log | tr -d ' ') line(s)"
+              done
+              echo "The Developer role of the key is a candidate cause if a permission or 401/403 pattern matches; the text alone does not prove it."
+            } > evidence/export-diagnosis.txt
+            cat evidence/export-diagnosis.txt
+            echo "::error::xcodebuild -exportArchive failed (exit $rc). Evidence: export.log, export-diagnosis.txt. Nothing was uploaded."
+            exit 1
+          fi
+          n="$(find "$EXPORT_DIR" -maxdepth 1 -name '*.ipa' | wc -l | tr -d ' ')"
+          [ "$n" = "1" ] || { echo "::error::The export produced $n IPA files, expected exactly one."; ls -la "$EXPORT_DIR"; exit 1; }
+          IPA="$(find "$EXPORT_DIR" -maxdepth 1 -name '*.ipa')"
+          echo "IPA=$IPA" >> "$GITHUB_ENV"
+          echo "ipa_sha256_after_export=$(shasum -a 256 "$IPA" | awk '{print $1}')" >> evidence/export-result.txt
+          echo "ipa_size=$(stat -f%z "$IPA")" >> evidence/export-result.txt
+          cat evidence/export-result.txt
+
+      # From here on no secret is available to any step, and the key file is gone (checked next).
+      - name: Check that the key file is gone and no key material remains on the runner
+        if: always()
+        run: |
+          set +e
+          mkdir -p evidence
+          left="$(find "$RUNNER_TEMP" "$HOME" -maxdepth 4 \( -name 'apple-api-key.p8' -o -name 'AuthKey_*.p8' \) 2>/dev/null | head -n 5)"
+          if [ -n "$left" ]; then echo "::error::A key file remains: $left"; rm -P -f $left; fi
+          [ -z "$left" ] && echo "key_file_removed=yes" | tee evidence/key-removed.txt
+
+      - name: Unpack the exported IPA and check identity and version (V1)
+        env:
+          EXPECTED_VERSION: ${{ needs.authorize.outputs.version }}
+        run: |
+          set -uo pipefail
+          X="$RUNNER_TEMP/x"; mkdir -p "$X"
+          if unzip -Z1 "$IPA" | grep -E '(^/|(^|/)\.\.(/|$))' >/dev/null; then echo "::error::The IPA has an unsafe member name."; exit 1; fi
+          unzip -q "$IPA" -d "$X"
+          APP="$X/Payload/Runner.app"
+          [ -d "$APP" ] && [ "$(find "$X/Payload" -maxdepth 1 -name '*.app' | wc -l | tr -d ' ')" = "1" ] || { echo "::error::The IPA does not hold exactly one Payload/Runner.app."; exit 1; }
+          echo "APP=$APP" >> "$GITHUB_ENV"
+          get() { /usr/libexec/PlistBuddy -c "Print :$1" "$APP/Info.plist"; }
+          bid="$(get CFBundleIdentifier)"; ver="$(get CFBundleShortVersionString)"; bld="$(get CFBundleVersion)"; name="$(get CFBundleDisplayName)"
+          {
+            echo "CFBundleIdentifier=$bid"; echo "CFBundleShortVersionString=$ver"; echo "CFBundleVersion=$bld"; echo "CFBundleDisplayName=$name"
+          } | tee evidence/v1-identity.txt
+          fail=0
+          [ "$bid" = "$BUNDLE_ID" ] || { echo "::error::Bundle ID is '$bid', expected $BUNDLE_ID."; fail=1; }
+          [ "$name" = "$DISPLAY_NAME" ] || { echo "::error::Display name is '$name', expected '$DISPLAY_NAME'."; fail=1; }
+          [ "$ver+$bld" = "$EXPECTED_VERSION" ] || { echo "::error::The IPA says $ver+$bld, expected $EXPECTED_VERSION."; fail=1; }
+          [ "$fail" -eq 0 ] || exit 1
+
+      - name: Signature seals, certificate identity, fingerprint and cross-check (V2, V3)
+        run: |
+          set -uo pipefail
+          codesign --verify --deep --strict --verbose=2 "$APP" 2>&1 | tee evidence/v2-codesign-verify.txt
+          [ "${PIPESTATUS[0]}" -eq 0 ] || { echo "::error::codesign --verify failed."; exit 1; }
+          codesign -dvv "$APP" 2>&1 | grep -e Authority -e TeamIdentifier -e Identifier | tee evidence/v3-codesign-identity.txt
+          grep -q "^TeamIdentifier=$TEAM_ID\$" evidence/v3-codesign-identity.txt || { echo "::error::TeamIdentifier is not $TEAM_ID."; exit 1; }
+          grep -E '^Authority=Apple Distribution: ' evidence/v3-codesign-identity.txt >/dev/null || { echo "::error::The first authority is not 'Apple Distribution: ...'."; exit 1; }
+          python3 -I tools/tool/verify_ipa.py certificate "$IPA" --team-id "$TEAM_ID" --pem evidence/signer.pem --evidence evidence/v3-certificate.txt | tee evidence/v3-certificate-output.txt
+          [ "${PIPESTATUS[0]}" -eq 0 ] || { echo "::error::verify_ipa.py certificate failed."; exit 1; }
+          fp="$(sed -n 's/^RECORD .*: //p' evidence/v3-certificate-output.txt | head -n1)"
+          printf '%s' "$fp" | grep -Eq '^[0-9a-f]{64}$' || { echo "::error::No certificate fingerprint was reported."; exit 1; }
+          mkdir -p "$RUNNER_TEMP/certs"
+          codesign -d --extract-certificates="$RUNNER_TEMP/certs/codesign" "$APP" 2>/dev/null
+          fp2="$(openssl x509 -inform DER -in "$RUNNER_TEMP/certs/codesign0" -noout -fingerprint -sha256 | sed 's/.*=//; s/://g' | tr 'A-F' 'a-f')"
+          echo "fingerprint_verify_ipa=$fp"
+          echo "fingerprint_openssl=$fp2"
+          [ "$fp" = "$fp2" ] || { echo "::error::The two fingerprints differ."; exit 1; }
+          openssl x509 -inform DER -in "$RUNNER_TEMP/certs/codesign0" -noout -subject -issuer -dates -serial | tee evidence/v3-openssl-cert.txt
+          if [ -n "$EXPECTED_CERT_SHA256" ]; then
+            [ "$fp" = "$EXPECTED_CERT_SHA256" ] || { echo "::error::The signing certificate $fp is not the RECORDED $EXPECTED_CERT_SHA256. Stop."; exit 1; }
+            echo "pin_source=RECORDED in the staging release record (G2S-STAGING-CERT-SHA256)" | tee evidence/pin.txt
+          else
+            echo "pin_source=NONE (cannot happen: the gate requires the recorded fingerprint)" | tee evidence/pin.txt
+          fi
+          echo "$fp" > evidence/certificate-sha256.txt
+          echo "FINGERPRINT=$fp" >> "$GITHUB_ENV"
+
+      - name: Embedded profile and entitlements (V4, V5; the profile is read, never kept)
+        run: |
+          set -uo pipefail
+          P="$RUNNER_TEMP/profile.plist"
+          security cms -D -i "$APP/embedded.mobileprovision" > "$P" || { echo "::error::The embedded profile could not be decoded."; exit 1; }
+          pb() { /usr/libexec/PlistBuddy -c "Print :$1" "$P" 2>/dev/null; }
+          {
+            echo "Name=$(pb Name)"
+            echo "TeamIdentifier=$(pb TeamIdentifier:0)"
+            echo "ExpirationDate=$(pb ExpirationDate)"
+            echo "Platform=$(pb Platform:0)"
+            echo "application-identifier=$(pb Entitlements:application-identifier)"
+            echo "get-task-allow=$(pb Entitlements:get-task-allow || echo absent)"
+            echo "ProvisionedDevices=$(pb ProvisionedDevices >/dev/null && echo PRESENT || echo absent)"
+            echo "ProvisionsAllDevices=$(pb ProvisionsAllDevices >/dev/null && echo PRESENT || echo absent)"
+          } | tee evidence/v4-profile-summary.txt
+          fail=0
+          grep -q "^TeamIdentifier=$TEAM_ID\$" evidence/v4-profile-summary.txt || { echo "::error::The profile's team is not $TEAM_ID."; fail=1; }
+          grep -q "^application-identifier=$TEAM_ID.$BUNDLE_ID\$" evidence/v4-profile-summary.txt || { echo "::error::The profile's application-identifier is not $TEAM_ID.$BUNDLE_ID."; fail=1; }
+          grep -q '^ProvisionedDevices=absent$' evidence/v4-profile-summary.txt || { echo "::error::The profile lists devices (not an App Store profile)."; fail=1; }
+          grep -q '^get-task-allow=\(absent\|false\)$' evidence/v4-profile-summary.txt || { echo "::error::The profile grants get-task-allow."; fail=1; }
+          codesign -d --entitlements :- "$APP" > evidence/v5-entitlements.txt 2>&1
+          cat evidence/v5-entitlements.txt
+          if grep -q 'aps-environment' evidence/v5-entitlements.txt; then echo "::error::aps-environment is signed into the app (decision D6: no push entitlement)."; fail=1; fi
+          if grep -q 'get-task-allow' evidence/v5-entitlements.txt && ! grep -A1 'get-task-allow' evidence/v5-entitlements.txt | grep -q 'false'; then echo "::error::get-task-allow is not false in the signed entitlements."; fail=1; fi
+          [ "$fail" -eq 0 ] || exit 1
+
+      # The shared environment check of tool/verify_build_config.sh (also used on the unsigned app by tool/verify_artifact.sh): the staging backend URL
+      # must be in the compiled Dart snapshot at least once and the production URL never.
+      - name: Environment inside the app (V6)
+        run: |
+          set -uo pipefail
+          bash tools/tool/verify_build_config.sh check-binary "$BUILD_ENV" "$APP/Frameworks/App.framework/App" | tee evidence/v6-environment.txt
+          [ "${PIPESTATUS[0]}" -eq 0 ] || { echo "::error::The environment strings are wrong (the staging backend URL at least once and the production URL never are required)."; exit 1; }
+
+      - name: Repository IPA verifier, pinned on the certificate, and "signatures only" comparison (V7, V8)
+        run: |
+          set -uo pipefail
+          pin="${EXPECTED_CERT_SHA256:-$FINGERPRINT}"
+          python3 -I tools/tool/verify_ipa.py verify staging "$IPA" --team-id "$TEAM_ID" --repo "$VERIFIER_REPO" \
+            --expect-cert-sha256 "$pin" --unsigned-app "$BASELINE_APP" --forbid-entitlement aps-environment \
+            --evidence evidence/v7-ipa-verify.txt | tee evidence/v7-ipa-verify-output.txt
+          rc=${PIPESTATUS[0]}
+          [ "$rc" -eq 0 ] || { echo "::error::verify_ipa.py verify failed (exit $rc). The first real Apple-signed IPA may meet a legitimate detail the verifier does not know; the output is evidence, and nothing is uploaded (docs/IOS_RELEASE.md section 9)."; exit 1; }
+          python3 -I tools/tool/verify_ipa.py compare "$BASELINE_APP" "$APP" | tee evidence/v8-compare.txt
+          [ "${PIPESTATUS[0]}" -eq 0 ] || { echo "::error::The signed bundle is not the archived bundle plus signatures only."; exit 1; }
+
+      - name: Native library identity and symbol inspection of the signed framework (V9)
+        run: |
+          set -uo pipefail
+          fw="$APP/Frameworks/dlc_wallet.framework/dlc_wallet"
+          [ -f "$fw" ] || { echo "::error::$fw is missing."; exit 1; }
+          nm -gU "$fw" > "$RUNNER_TEMP/dlc.exports.txt" 2>/dev/null
+          printf '%s\n' _create_cet_adaptor_sigs_c _create_deterministic_nonce_c _free_cstring _get_address_c _get_public_key_c _get_xpub_c _init_from_file_c _init_with_entropy_c _sign_hash_ecdsa_c > "$RUNNER_TEMP/expected-exports.txt"
+          grep -E ' T _(create|free|get|init|sign)[a-z_]*$' "$RUNNER_TEMP/dlc.exports.txt" | awk '{print $3}' | sort -u > "$RUNNER_TEMP/actual-exports.txt"
+          forbidden="$(grep -cE 'sign_schnorr_with_nonce|schnorrsig_sign_with_nonce|constant_nonce_fn' "$RUNNER_TEMP/dlc.exports.txt" || true)"
+          strings_forbidden="$(strings -a "$fw" | grep -cE 'sign_schnorr_with_nonce|schnorrsig_sign_with_nonce|constant_nonce_fn' || true)"
+          {
+            echo "rust_lib_sha256_of_the_pinned_input=$RUST_LIB_SHA256"
+            echo "signed_dlc_wallet_binary_sha256=$(shasum -a 256 "$fw" | awk '{print $1}') (includes the signature; identity with the archive is shown by V8)"
+            if diff -q "$RUNNER_TEMP/expected-exports.txt" "$RUNNER_TEMP/actual-exports.txt" >/dev/null; then echo "exports=exactly the nine expected"; else echo "exports=DIFFER"; cat "$RUNNER_TEMP/actual-exports.txt"; fi
+            echo "forbidden_names_in_exports=$forbidden"
+            echo "forbidden_names_in_strings=$strings_forbidden"
+            echo "create_deterministic_nonce_in_exports=$(grep -c 'create_deterministic_nonce' "$RUNNER_TEMP/dlc.exports.txt" || true) (known: D1 / Issue #22; the library is not rebuilt)"
+          } | tee evidence/v9-native.txt
+          grep -q '^exports=exactly the nine expected$' evidence/v9-native.txt && [ "$forbidden" -eq 0 ] && [ "$strings_forbidden" -eq 0 ] || { echo "::error::The native library inspection failed."; exit 1; }
+          # Informational only (X2 is open): the manifest state is reported either way and never decides the step's exit status. The checks above are the gate.
+          if [ "$(ls "$APP/Frameworks/dlc_wallet.framework" | grep -c PrivacyInfo || true)" = "0" ]; then
+            echo "dlc_wallet_privacy_manifest=none (decision X2 is open; not decided here)" | tee -a evidence/v9-native.txt
+          else
+            echo "dlc_wallet_privacy_manifest=present (decision X2 is open; not decided here)" | tee -a evidence/v9-native.txt
+          fi
+
+      - name: Fix the IPA digest again (integrity of the file that was verified)
+        run: |
+          set -uo pipefail
+          before="$(sed -n 's/^ipa_sha256_after_export=//p' evidence/export-result.txt)"
+          after="$(shasum -a 256 "$IPA" | awk '{print $1}')"
+          { echo "ipa_sha256_after_export=$before"; echo "ipa_sha256_after_verification=$after"; echo "ipa_size=$(stat -f%z "$IPA")"; } | tee evidence/ipa-digest.txt
+          [ "$before" = "$after" ] || { echo "::error::The IPA changed between the export and the end of verification."; exit 1; }
+
+      # ----------------------------------------------------------------------------------------------------------------------------------
+      # THE UPLOAD of the SAME verified IPA. Two steps, both only when the authorize job said upload_authorized (the record's operation is
+      # sign-verify-and-upload). Neither has `always()` or `failure()` in its condition, so GitHub runs them only if EVERY earlier step of this job
+      # succeeded: V1 to V9 and the digest check are earlier steps, so a failed verification means no upload. Neither is continue-on-error.
+      # The first holds no secret. The second is the only other step with secrets; it validates, then uploads, nothing else.
+      # ----------------------------------------------------------------------------------------------------------------------------------
+      - name: Re-check the upload authorization and the exact IPA to upload (no secret yet)
+        if: needs.authorize.outputs.upload_authorized == 'true'
+        env:
+          APPROVED_SHA: ${{ github.sha }}
+          EXPECTED_VERSION: ${{ needs.authorize.outputs.version }}
+        run: |
+          set -uo pipefail
+          set +e
+          mkdir -p evidence
+          fail() { echo "::error::$1 Nothing was uploaded and this step used no secret."; exit 1; }
+          [ -n "${IPA:-}" ] && [ -f "$IPA" ] && [ ! -L "$IPA" ] || fail "The verified IPA is missing."
+          # The authorization, read again NOW (the live tip of staging and the live record on development are read inside the gate): a newer promotion
+          # to staging or a withdrawal on development since the signing started stops the upload here.
+          record="tools/docs/release-records/ios-staging-authorization.md"
+          bash tools/tool/check_staging_authorization.sh --record "$record" --head "$GITHUB_SHA" --remote "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY.git" \
+            --bundle-id "$BUNDLE_ID" --team-id "$TEAM_ID" --tools-root tools --repo tools > "$RUNNER_TEMP/upload-gate.txt" 2>&1 \
+            || { cat "$RUNNER_TEMP/upload-gate.txt"; fail "The staging record no longer authorizes this run."; }
+          op="$(bash tools/tool/check_staging_authorization.sh --print-field G2S-STAGING-OPERATION --record "$record" --tools-root tools)"
+          [ "$op" = "sign-verify-and-upload" ] || fail "The staging record's operation is '$op', not sign-verify-and-upload."
+          # The staging App Store Connect application the IPA goes to: from the record, and never the production one (the gate refuses that).
+          app_apple_id="$(bash tools/tool/check_staging_authorization.sh --print-field G2S-STAGING-APP-APPLE-ID --record "$record" --tools-root tools)"
+          [[ "$app_apple_id" =~ ^[0-9]{6,15}$ ]] || fail "The staging record carries no valid Apple ID of the staging application."
+          echo "APP_APPLE_ID=$app_apple_id" >> "$GITHUB_ENV"
+          # The exact IPA: the file that was exported, verified and digested is the file that will be uploaded (the digest is checked three times).
+          re_hex64='^[0-9a-f]{64}$'
+          now="$(shasum -a 256 "$IPA" | awk '{print $1}')"
+          exported="$(sed -n 's/^ipa_sha256_after_export=//p' evidence/export-result.txt)"
+          verified="$(sed -n 's/^ipa_sha256_after_verification=//p' evidence/ipa-digest.txt)"
+          [[ "$now" =~ $re_hex64 ]] && [ "$now" = "$exported" ] && [ "$now" = "$verified" ] || fail "The IPA is not the file that was exported and verified (digests: now $now, export $exported, verification $verified)."
+          bid="$(sed -n 's/^CFBundleIdentifier=//p' evidence/v1-identity.txt)"
+          ver="$(sed -n 's/^CFBundleShortVersionString=//p' evidence/v1-identity.txt)"
+          bld="$(sed -n 's/^CFBundleVersion=//p' evidence/v1-identity.txt)"
+          [ "$bid" = "$BUNDLE_ID" ] && [ "$ver+$bld" = "$EXPECTED_VERSION" ] || fail "The IPA says $bid $ver+$bld, expected $BUNDLE_ID $EXPECTED_VERSION."
+          syntax="$(cat "$RUNNER_TEMP/upload-syntax" 2>/dev/null)"
+          case "$syntax" in package|legacy) ;; *) fail "No upload-tool syntax was probed." ;; esac
+          # The private-key directory the upload step will use: empty, mode 700, created here so that the secret step starts no process before the key is written.
+          rm -rf "$RUNNER_TEMP/asc-private-keys"
+          mkdir -m 700 "$RUNNER_TEMP/asc-private-keys" || fail "The key directory could not be created."
+          {
+            echo "UPLOAD_SYNTAX=$syntax"
+            echo "UPLOAD_BUNDLE_ID=$bid"
+            echo "UPLOAD_SHORT_VERSION=$ver"
+            echo "UPLOAD_BUILD=$bld"
+            echo "UPLOAD_IPA_SHA256=$now"
+          } >> "$GITHUB_ENV"
+          {
+            echo "operation=sign-verify-and-upload"
+            echo "ipa_sha256=$now"
+            echo "digest_equal_after_export_after_verification_and_now=yes"
+            echo "bundle_id=$bid"; echo "version=$ver"; echo "build=$bld"
+            echo "tool_syntax=$syntax"
+            echo "app_apple_id=$app_apple_id"
+            echo "gate_rechecked_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          } | tee evidence/upload-precheck.txt
+
+      - name: Validate and upload the verified IPA (the second and last step with secrets)
+        if: needs.authorize.outputs.upload_authorized == 'true'
+        env:
+          APPLE_API_KEY_P8: ${{ secrets.APPLE_API_KEY_P8 }}
+          APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
+          APPLE_API_ISSUER_ID: ${{ secrets.APPLE_API_ISSUER_ID }}
+        run: |
+          set -uo pipefail
+          # No errexit: a failing altool must still leave redacted evidence, and the trap removes the key file on every exit.
+          set +e
+          set +x
+          umask 077
+          unset BASH_ENV ENV DYLD_INSERT_LIBRARIES DYLD_LIBRARY_PATH DYLD_FRAMEWORK_PATH
+          [ -n "$APPLE_API_KEY_P8" ] && [ -n "$APPLE_API_KEY_ID" ] && [ -n "$APPLE_API_ISSUER_ID" ] || { echo "::error::A secret of the environment ios-staging-signing is missing (docs/IOS_STAGING_DELIVERY.md section 5)."; exit 1; }
+          # The key ID names a file and the issuer ID is an argument: both must have the exact shape Apple gives them. (Shell builtins only: no process has started.)
+          re_key='^[A-Z0-9]{10}$'
+          re_issuer='^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$'
+          [[ "$APPLE_API_KEY_ID" =~ $re_key ]] && [[ "$APPLE_API_ISSUER_ID" =~ $re_issuer ]] || { echo "::error::The key ID or the issuer ID does not have the shape Apple issues."; exit 1; }
+          export KEYDIR="$RUNNER_TEMP/asc-private-keys"
+          export KEYFILE="$KEYDIR/AuthKey_${APPLE_API_KEY_ID}.p8"
+          cleanup() { rm -P -f "$KEYFILE" 2>/dev/null || rm -f "$KEYFILE"; }
+          trap cleanup EXIT
+          # (Errors of these three commands are not shown: the shell's message would name the file, and so the key ID.)
+          { printf '%s\n' "$APPLE_API_KEY_P8" > "$KEYFILE"; } 2>/dev/null
+          unset APPLE_API_KEY_P8
+          chmod 600 "$KEYFILE" 2>/dev/null
+          [ "$(head -n 1 "$KEYFILE" 2>/dev/null)" = "-----BEGIN PRIVATE KEY-----" ] || { echo "::error::The stored key is not a PEM PKCS#8 file (.p8), or it could not be stored."; exit 1; }
+          export API_PRIVATE_KEYS_DIR="$KEYDIR"
+          mkdir -p evidence
+
+          # The same redaction filter as the export step: it removes the exact key ID, issuer ID, key lines and key path, PEM markers, JWT-shaped and bearer tokens,
+          # and FAILS (nothing is kept) if an exact value is still present afterwards.
+          cat > "$RUNNER_TEMP/redact.py" <<'PY'
+          import os, re, sys
+          vals = [os.environ.get("APPLE_API_KEY_ID", ""), os.environ.get("APPLE_API_ISSUER_ID", ""), os.environ.get("KEYFILE", "")]
+          vals += [l.strip() for l in open(os.environ["KEYFILE"], encoding="utf-8", errors="replace").read().splitlines()]
+          vals = sorted({v for v in vals if len(v) >= 6}, key=len, reverse=True)
+          data = open(sys.argv[1], "rb").read(4000000).decode("utf-8", "replace")
+          for v in vals:
+              data = data.replace(v, "[REDACTED]")
+          data = re.sub(r"eyJ[A-Za-z0-9_-]{4,}\.[A-Za-z0-9_-]{4,}(\.[A-Za-z0-9_-]*)?", "[REDACTED]", data)
+          data = re.sub(r"(?i)(bearer|authorization:?)\s+[A-Za-z0-9._~+/=-]{8,}", r"\1 [REDACTED]", data)
+          data = re.sub(r"-----(BEGIN|END)[A-Z ]*PRIVATE KEY-----", "[REDACTED]", data)
+          if "PRIVATE KEY" in data:
+              data = data.replace("PRIVATE KEY", "[REDACTED]")
+          if any(v in data for v in vals):
+              sys.exit(3)
+          open(sys.argv[2], "w").write(data)
+          PY
+          red=0
+          redact() { python3 -I "$RUNNER_TEMP/redact.py" "$1" "$2" || { echo "::error::The redaction of $1 failed; nothing of it is kept."; rm -f "$2"; return 1; }; }
+
+          # The command lines, by the interface the probe found. The IPA is the file the previous step re-checked; nothing is rebuilt or exported again.
+          case "$UPLOAD_SYNTAX" in
+            package)
+              COMMON=(--platform ios --apple-id "$APP_APPLE_ID" --bundle-id "$UPLOAD_BUNDLE_ID" --bundle-version "$UPLOAD_BUILD" --bundle-short-version-string "$UPLOAD_SHORT_VERSION" --api-key "$APPLE_API_KEY_ID" --api-issuer "$APPLE_API_ISSUER_ID")
+              VALIDATE=(--validate-app "$IPA" "${COMMON[@]}")
+              UPLOAD=(--upload-package "$IPA" "${COMMON[@]}") ;;
+            legacy)
+              COMMON=(-t ios --apiKey "$APPLE_API_KEY_ID" --apiIssuer "$APPLE_API_ISSUER_ID")
+              VALIDATE=(--validate-app -f "$IPA" "${COMMON[@]}")
+              UPLOAD=(--upload-app -f "$IPA" "${COMMON[@]}") ;;
+            *) echo "::error::No upload-tool syntax was probed."; exit 1 ;;
+          esac
+          [ "$(shasum -a 256 "$IPA" | awk '{print $1}')" = "$UPLOAD_IPA_SHA256" ] || { echo "::error::The IPA changed since it was re-checked. Nothing was uploaded."; exit 1; }
+          urc=-1
+          # 1. Validate (Apple's own pre-upload validation; it uploads nothing). A failure ends the step: there is no upload after a failed validation.
+          env -u APPLE_API_KEY_P8 -u APPLE_API_KEY_ID -u APPLE_API_ISSUER_ID xcrun altool "${VALIDATE[@]}" > "$RUNNER_TEMP/validate.raw.log" 2>&1
+          vrc=$?
+          redact "$RUNNER_TEMP/validate.raw.log" evidence/upload-validate.log || red=1
+          # 1b. Before the upload, and only if the validation succeeded: the validation log must have been kept (redaction is fail-closed), and the file
+          # on disk must STILL be the verified IPA (its digest is computed again now, after the validation and immediately before the upload).
+          proceed=0
+          skip_reason="the validation failed"
+          if [ "$vrc" -eq 0 ]; then
+            if [ "$red" -ne 0 ]; then
+              skip_reason="the redaction of the validation log failed"
+            elif [ "$(shasum -a 256 "$IPA" | awk '{print $1}')" != "$UPLOAD_IPA_SHA256" ]; then
+              skip_reason="the IPA changed after the validation"
+            else
+              proceed=1
+            fi
+          fi
+          if [ "$proceed" -eq 1 ]; then
+            # 2. Upload THE SAME file, once. No loop, no retry: a failure is reported and a person decides.
+            env -u APPLE_API_KEY_P8 -u APPLE_API_KEY_ID -u APPLE_API_ISSUER_ID xcrun altool "${UPLOAD[@]}" > "$RUNNER_TEMP/upload.raw.log" 2>&1
+            urc=$?
+            redact "$RUNNER_TEMP/upload.raw.log" evidence/upload.log || red=1
+          fi
+          cleanup
+          {
+            echo "ipa_sha256=$UPLOAD_IPA_SHA256"
+            echo "bundle_id=$UPLOAD_BUNDLE_ID"; echo "version=$UPLOAD_SHORT_VERSION"; echo "build=$UPLOAD_BUILD"
+            echo "tool_syntax=$UPLOAD_SYNTAX"
+            echo "validate_exit=$vrc"
+            if [ "$proceed" -eq 1 ]; then echo "upload_exit=$urc"; else echo "upload_exit=not attempted ($skip_reason)"; fi
+            if [ "$proceed" -eq 1 ] && [ "$urc" -eq 0 ]; then echo "uploaded=yes"; else echo "uploaded=no"; fi
+            echo "finished_utc=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          } > evidence/upload-result.txt
+          cat evidence/upload-result.txt
+          [ "$red" -eq 0 ] || { echo "::error::A redaction failed. The log of this step is withheld; the result above stands."; exit 1; }
+          echo "---- altool (redacted), last 40 lines ----"
+          if [ "$proceed" -eq 1 ]; then tail -n 40 evidence/upload.log; else tail -n 40 evidence/upload-validate.log; fi
+          if [ "$vrc" -ne 0 ]; then
+            echo "::error::Apple's validation of the IPA failed (exit $vrc). Nothing was uploaded. The signed IPA is gone with the runner; read evidence/upload-validate.log."
+            exit 1
+          fi
+          if [ "$proceed" -ne 1 ]; then
+            echo "::error::Nothing was uploaded: $skip_reason. The signed IPA is gone with the runner."
+            exit 1
+          fi
+          if [ "$urc" -ne 0 ]; then
+            echo "::error::The upload failed (exit $urc). The signed IPA is gone with the runner. Look in App Store Connect (the staging application) for build $UPLOAD_SHORT_VERSION ($UPLOAD_BUILD) BEFORE any new run, and do not use GitHub's Re-run."
+            exit 1
+          fi
+          echo "The IPA was uploaded. Processing in App Store Connect follows; it is not an approval, and no tester has been assigned."
+
+      - name: Check again that no key file remains (after the upload step)
+        if: always()
+        run: |
+          set +e
+          mkdir -p evidence
+          left="$(find "$RUNNER_TEMP" "$HOME" -maxdepth 4 \( -name 'apple-api-key.p8' -o -name 'AuthKey_*.p8' \) 2>/dev/null | head -n 5)"
+          # The name of a key file contains the key ID: it is NEVER printed, not even in an error (the commands' own messages are discarded too).
+          if [ -n "$left" ]; then
+            nleft="$(printf '%s\n' "$left" | wc -l | tr -d ' ')"
+            echo "::error::A key file remained after the upload step ($nleft file(s)); removal was attempted. The name is deliberately not shown."
+            rm -P -f $left >/dev/null 2>&1 || rm -f $left >/dev/null 2>&1
+          fi
+          rm -rf "$RUNNER_TEMP/asc-private-keys" >/dev/null 2>&1
+          [ -z "$left" ] && echo "key_file_removed_after_upload_step=yes" | tee evidence/key-removed-after-upload.txt
+
+      # Phase 7C (Issue #71). READ-ONLY EVIDENCE for the open V8 question (what did the export change in the app's top-level Info.plist?) and for
+      # the DER entitlements blob of the Distribution-signed executable. It runs even when V7 or V8 failed (if: always()), uses no secret and no
+      # network, writes only under evidence/, keeps no IPA and no profile, decides nothing, and is NOT continue-on-error: if the export
+      # succeeded and the evidence cannot be captured, this step fails and so does the job. V7, V8 and V9 are untouched.
+      # (tool/verify_ipa.py capture-evidence; docs/IOS_SIGNING.md section 3.1d.)
+      - name: Capture the Info.plist and DER entitlements evidence (V8 diagnostics; read-only, decides nothing)
+        if: always()
+        run: |
+          set -uo pipefail
+          set +e
+          mkdir -p evidence/v8-capture
+          ipa="${IPA:-}"
+          [ -n "$ipa" ] || ipa="$(find "$RUNNER_TEMP/export" -maxdepth 1 -name '*.ipa' 2>/dev/null | head -n 1)"
+          python3 -I tools/tool/verify_ipa.py capture-evidence --out evidence/v8-capture --evidence-dir evidence \
+            --ipa "$ipa" --archive-app "${BASELINE_APP:-}" --run-id "$GITHUB_RUN_ID" --run-attempt "$GITHUB_RUN_ATTEMPT" --tools-sha "$GITHUB_SHA"
+          exit $?
+
+      # Traceability: ONE text file that ties the staging promotion to what was delivered. It reads files this job already wrote; no secret, no network.
+      - name: Record the delivery (promotion commit, version, build, delivery identifier)
+        if: always()
+        env:
+          EXPECTED_VERSION: ${{ needs.authorize.outputs.version }}
+        run: |
+          set +e
+          mkdir -p evidence
+          val() { sed -n "s/^$2=//p" "evidence/$1" 2>/dev/null | head -n 1; }
+          {
+            echo "environment=staging"
+            echo "promotion_commit=$GITHUB_SHA"
+            echo "promotion_subject=$(val source.txt promotion_subject)"
+            echo "authorized_version=$EXPECTED_VERSION"
+            echo "bundle_id=$(val v1-identity.txt CFBundleIdentifier)"
+            echo "version=$(val v1-identity.txt CFBundleShortVersionString)"
+            echo "build=$(val v1-identity.txt CFBundleVersion)"
+            echo "ipa_sha256=$(val upload-result.txt ipa_sha256)"
+            echo "uploaded=$(val upload-result.txt uploaded)"
+            echo "validate_exit=$(val upload-result.txt validate_exit)"
+            echo "upload_exit=$(val upload-result.txt upload_exit)"
+            echo "delivery_uuid=$(sed -n 's/^.*Delivery UUID: *//p' evidence/upload.log 2>/dev/null | head -n 1 | tr -d '\r' | cut -c1-64)"
+            echo "finished_utc=$(val upload-result.txt finished_utc)"
+            echo "run=$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID (attempt $GITHUB_RUN_ATTEMPT)"
+          } > evidence/delivery-record.txt
+          cat evidence/delivery-record.txt
+
+      - name: Seal the evidence (text only, secret scan, SHA-256 sums)
+        if: always()
+        run: |
+          set -uo pipefail
+          set +e
+          [ -d evidence ] || { echo "no evidence directory"; exit 0; }
+          bad="$(find evidence -type f | while IFS= read -r f; do [ -s "$f" ] || continue; enc="$(file -b --mime-encoding "$f")"; [ "$enc" = "binary" ] && echo "$f"; done)"
+          if [ -n "$bad" ]; then echo "::error::Binary file(s) in the evidence; refusing to keep them:"; echo "$bad"; rm -f $bad; fi
+          if grep -rlE 'PRIVATE KEY|BEGIN PKCS7|eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}' evidence >/dev/null; then
+            echo "::error::A private-key, profile or token-shaped marker is in the evidence; refusing to upload it."; grep -rlE 'PRIVATE KEY|BEGIN PKCS7|eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}' evidence | head -n 5; rm -rf evidence; exit 1
+          fi
+          # The PUBLIC leaf certificate is kept (public data); it must not hold a private key.
+          if [ -f evidence/signer.pem ] && grep -q 'PRIVATE' evidence/signer.pem; then echo "::error::signer.pem holds a private key."; rm -rf evidence; exit 1; fi
+          kb="$(du -sk evidence | awk '{print $1}')"; echo "evidence size: ${kb} KB"
+          if [ "$kb" -gt 20480 ]; then echo "::error::The evidence is larger than 20 MB; refusing to upload it."; exit 1; fi
+          ( cd evidence && find . -type f ! -name SHA256SUMS.txt -print0 | xargs -0 shasum -a 256 | sort -k2 > SHA256SUMS.txt )
+          echo "SHA256SUMS.txt sha256: $(shasum -a 256 evidence/SHA256SUMS.txt | awk '{print $1}')"
+
+      - name: Report (job summary)
+        if: always()
+        run: |
+          set +e
+          {
+            echo "## iOS staging delivery: sign, verify and upload to the STAGING application"
+            echo
+            echo "The IPA stayed on the runner and is gone with it: it is not an artifact. It was sent only to the staging App Store Connect application named in the staging record, and only after every verification passed."
+            echo "A successful upload is not an App Review submission, not tester assignment and not a release; Apple's processing follows."
+            echo
+            for f in evidence/delivery-record.txt evidence/certificate-sha256.txt evidence/pin.txt evidence/export-result.txt evidence/ipa-digest.txt evidence/v1-identity.txt evidence/v4-profile-summary.txt evidence/v6-environment.txt evidence/v9-native.txt evidence/export-diagnosis.txt evidence/packaging-log-source.txt evidence/v8-capture/status.txt evidence/upload-tool-probe.txt evidence/upload-precheck.txt evidence/upload-result.txt; do
+              [ -f "$f" ] || continue   # an optional file that does not exist is not an error (a successful run has no export-diagnosis.txt)
+              echo "### ${f#evidence/}"; echo '```'; cat "$f"; echo '```'
+            done
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload the text evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: ios-staging-delivery-evidence_${{ github.run_id }}-${{ github.run_attempt }}
+          path: evidence/
+          if-no-files-found: warn
+          retention-days: 30

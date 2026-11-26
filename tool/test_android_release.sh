@@ -80,8 +80,9 @@ done
 t "gitignore: no tracked file matches an ignore rule" eq "$(git -C "$root" ls-files -ci --exclude-standard | wc -l | tr -d ' ')" 0
 
 # CI stays credential-free: no workflow selects release signing or names a secret. The one exception is the manual, development-only
-# iOS hosted signing workflow (Issue #71), whose three secrets, single step and environment are pinned by tool/test_ios_hosted_signing.sh.
-wf_hits="$(grep -rlE 'CADENA_SIGNING|CADENA_KEYSTORE|CADENA_KEY_|CADENA_EXPECTED_CERT|secrets\.' "$root/.github/workflows" 2>/dev/null | grep -v -e 'ios-signing-feasibility' -e 'ios-hosted-signing' | tr '\n' ' ')"
+# iOS hosted signing workflow (Issue #71), whose three secrets, single step and environment are pinned by tool/test_ios_hosted_signing.sh, and the automatic
+# iOS staging delivery workflow (Issues #54, #71), whose three secrets, two steps and environment are pinned by tool/test_ios_staging_delivery.sh.
+wf_hits="$(grep -rlE 'CADENA_SIGNING|CADENA_KEYSTORE|CADENA_KEY_|CADENA_EXPECTED_CERT|secrets\.' "$root/.github/workflows" 2>/dev/null | grep -v -e 'ios-signing-feasibility' -e 'ios-hosted-signing' -e 'ios-staging-delivery' | tr '\n' ' ')"
 t "ci: no workflow enables release signing or reads a secret (${wf_hits:-none})" test -z "$wf_hits"
 t "ci: no workflow runs the local release procedure" eq "$(grep -rlE 'release_android\.sh' "$root/.github/workflows" 2>/dev/null | wc -l | tr -d ' ')" 0
 t "ci: the plan job of build-variants runs this credential-free test" eq "$(grep -cE '^        run: tool/test_android_release\.sh$' "$root/.github/workflows/build-variants.yml")" 1
