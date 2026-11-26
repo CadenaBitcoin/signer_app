@@ -24,6 +24,8 @@ PODS:
   - mobile_scanner (7.0.0):
     - Flutter
     - FlutterMacOS
+  - package_info_plus (0.4.5):
+    - Flutter
   - path_provider_foundation (0.0.1):
     - Flutter
     - FlutterMacOS
@@ -41,6 +43,7 @@ DEPENDENCIES:
   - flutter_secure_storage (from `.symlinks/plugins/flutter_secure_storage/ios`)
   - fluttertoast (from `.symlinks/plugins/fluttertoast/ios`)
   - mobile_scanner (from `.symlinks/plugins/mobile_scanner/darwin`)
+  - package_info_plus (from `.symlinks/plugins/package_info_plus/ios`)
   - path_provider_foundation (from `.symlinks/plugins/path_provider_foundation/darwin`)
   - shared_preferences_foundation (from `.symlinks/plugins/shared_preferences_foundation/darwin`)
   - workmanager_apple (from `.symlinks/plugins/workmanager_apple/ios`)
@@ -66,6 +69,8 @@ EXTERNAL SOURCES:
     :path: ".symlinks/plugins/fluttertoast/ios"
   mobile_scanner:
     :path: ".symlinks/plugins/mobile_scanner/darwin"
+  package_info_plus:
+    :path: ".symlinks/plugins/package_info_plus/ios"
   path_provider_foundation:
     :path: ".symlinks/plugins/path_provider_foundation/darwin"
   shared_preferences_foundation:
@@ -83,6 +88,7 @@ SPEC CHECKSUMS:
   fluttertoast: 21eecd6935e7064cc1fcb733a4c5a428f3f24f0f
   IdensicMobileSDK: a8ec2cf5c216ae138b00e2ff32e0e31c5e366cec
   mobile_scanner: 77265f3dc8d580810e91849d4a0811a90467ed5e
+  package_info_plus: c0502532a26c7662a62a356cebe2692ec5fe4ec4
   path_provider_foundation: 0b743cbb62d8e47eab856f09262bb8c1ddcfe6ba
   shared_preferences_foundation: 5086985c1d43c5ba4d5e69a4e8083a389e2909e6
   workmanager_apple: 4cb452c58500fede6fb2f099faf7ebc5fcf2d034
