@@ -24,6 +24,9 @@ never distributable. The iOS archive has no signature, no embedded profile and n
 beyond what the project declares. File names say so, also after decryption:
 `NON-DISTRIBUTABLE_INTERNAL-EVALUATION_cadena-signer-<env>-<version>+<build>-<platform>-<kind>-<commit7>-run<id>.<attempt>.<ext>`
 (the canonical name of `tool/build_manifest.py name`, plus the existing evaluation label).
+A MANUALLY GENERATED run (docs/RELEASE_TRIGGERS.md, "Manually generated staging build") puts
+`MANUALLY_GENERATED_` in front of that name and of the GitHub artifact names; nothing else about the
+bundle changes.
 
 ## 2. Who can read it: encryption to public keys
 
@@ -68,7 +71,7 @@ One GitHub artifact per variant, `retained_<variant>_a<attempt>`, with exactly f
 |---|---|
 | `NON-DISTRIBUTABLE_INTERNAL-EVALUATION_<canonical name>.age` | the ciphertext (an `.apk`, `.aab` or `.xcarchive.tar.gz`) |
 | `<variant>.retained.json` | the **retained manifest** (`cadena-retained-artifact/1`): source commit and ref, run and attempt, version and build, application ID, configuration file digest, plaintext SHA-256 and size, content digest, the correspondence to the validated build, the recipients' short ids, ciphertext SHA-256 and size, the round-trip result |
-| `<variant>.manifest.json` | the unchanged **build manifest** (`cadena-build-manifest/1`: toolchain with Flutter, Dart, Java or Xcode, SDK, CocoaPods and runner image; native library SHA-256; configuration; signing status) |
+| `<variant>.manifest.json` | the unchanged **build manifest** (`cadena-build-manifest/2`; a bundle made before the origin fields holds schema 1 and still verifies: toolchain with Flutter, Dart, Java or Xcode, SDK, CocoaPods and runner image; native library SHA-256; configuration; signing status) |
 | `<variant>.txt` | the unchanged text evidence of `tool/verify_artifact.sh` and the workflow |
 | `SHA256SUMS` | `sha256sum -c` compatible checksums of the four other files |
 

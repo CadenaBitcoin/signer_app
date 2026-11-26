@@ -1,0 +1,23 @@
+variant=android-staging-apk
+build_command=flutter build apk --release --flavor staging --dart-define-from-file=config/build/staging.json
+config_file=config/build/staging.json
+config_file_sha256=564b3a1d7cbe9dadde6a8fa5ef3b338d79d7226100a032b1dcf3d79ad4f7b9b6
+commit=7b63c9791fccc8f9711ed853e2294967899be972
+ref=staging
+run=https://github.com/CadenaBitcoin/signer_app/actions/runs/39237471969 (attempt 1)
+artifact_kind=apk
+artifact_file=app-staging-release.apk
+artifact_sha256=bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+artifact_bytes=100
+signing=debug
+signer_dn=C=US, O=Android, CN=Android Debug
+signer_cert_sha256=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+native_lib_sha256.arm64-v8a=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+environment=staging
+application_id=com.cadenabitcoin.mobile.signer.staging
+display_name=Cadena Signer STAGING
+version_name=1.0.3
+version_code=1000034
+distributable=no
+environment_check=staging-url-present-other-absent
+environment_check_snapshots=3

@@ -19,7 +19,7 @@
 #       Only when the run retains artifacts (Stage 2, docs/RETAINED_ARTIFACTS.md): DIR must hold
 #       one non-empty directory retained_<variant>_a<attempt> for every required variant and no
 #       other entry.
-#       Environment: REQUIRED_VARIANTS, RUN_ATTEMPT
+#       Environment: REQUIRED_VARIANTS, RUN_ATTEMPT, and ARTIFACT_PREFIX (`MANUALLY_GENERATED_` for a manual run, else empty).
 set -euo pipefail
 
 mode="${1:-}"
@@ -84,7 +84,7 @@ case "$mode" in
     [ -d "$dir" ] || { echo "::error::No retained directory '$dir'"; exit 1; }
     [ -n "${RUN_ATTEMPT:-}" ] || { echo "::error::RUN_ATTEMPT is not set"; exit 1; }
     for v in ${REQUIRED_VARIANTS:-}; do
-      d="$dir/retained_${v}_a${RUN_ATTEMPT}"
+      d="$dir/${ARTIFACT_PREFIX:-}retained_${v}_a${RUN_ATTEMPT}"
       if [ ! -d "$d" ] || [ -z "$(ls -A "$d" 2>/dev/null)" ]; then
         echo "::error::Missing retained artifact for $v ($d)"
         exit 1
@@ -95,7 +95,7 @@ case "$mode" in
       name="$(basename "$d")"
       ok=false
       for v in ${REQUIRED_VARIANTS:-}; do
-        [ "$name" = "retained_${v}_a${RUN_ATTEMPT}" ] && ok=true
+        [ "$name" = "${ARTIFACT_PREFIX:-}retained_${v}_a${RUN_ATTEMPT}" ] && ok=true
       done
       if [ "$ok" != true ] || [ ! -d "$d" ]; then
         echo "::error::Unexpected retained entry $name (not a required variant of this attempt)"

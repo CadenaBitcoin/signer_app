@@ -2,7 +2,7 @@
 """Build manifest: ties one built artifact to its source, version, build run and signing status.
 
   tool/build_manifest.py create  --evidence F.txt --toolchain T.txt --out M.json [--repo ROOT] [--release-id ID]
-  tool/build_manifest.py verify  M.json [--repo ROOT] [--evidence F.txt]
+  tool/build_manifest.py verify  M.json [--repo ROOT] [--evidence F.txt] [--require-current]
   tool/build_manifest.py verify-dir DIR --variants "v1 v2 ..." [--repo ROOT]
   tool/build_manifest.py name    M.json [--classification internal-evaluation]
   tool/build_manifest.py check-file M.json FILE_OR_APP_DIR
@@ -29,7 +29,14 @@ import re
 import subprocess
 import sys
 
-SCHEMA = "cadena-build-manifest/1"
+# Schema 2 (Issue #57, manual staging trigger) adds source.origin and source.on_development. New
+# manifests are always written, and in a run always required, in schema 2. Schema-1 manifests
+# (every manifest made before that change) stay verifiable under exactly their own rules: the
+# schema-1 key set, no origin, the unprefixed file name. A schema-1 manifest must not carry the
+# new keys and a schema-2 manifest must not lack them, so neither can be turned into the other.
+SCHEMA = "cadena-build-manifest/2"
+LEGACY_SCHEMA = "cadena-build-manifest/1"
+ACCEPTED_SCHEMAS = (LEGACY_SCHEMA, SCHEMA)
 LEDGER_SCHEMA = "cadena-published-versions/1"
 HERE = os.path.dirname(os.path.abspath(__file__))
 DEFAULT_ROOT = os.path.dirname(HERE)
@@ -57,6 +64,13 @@ REQUIRED_TOOLCHAIN = {
 }
 EXTENSION = {"apk": ".apk", "aab": ".aab", "ios-app": ".app"}
 INTERNAL_PREFIX = "NON-DISTRIBUTABLE_INTERNAL-EVALUATION_"
+# Origin of a build. A promotion (push to a release branch) is "automatic". A run started by hand
+# (workflow_dispatch) is always labelled MANUALLY GENERATED, in the manifest and in every file name,
+# and never changes the version, the application identity or the signing (docs/RELEASE_TRIGGERS.md).
+ORIGIN_AUTOMATIC = "automatic"
+ORIGIN_MANUAL = "MANUALLY GENERATED"
+MANUAL_PREFIX = "MANUALLY_GENERATED_"
+ORIGIN_OF_EVENT = {"push": ORIGIN_AUTOMATIC, "workflow_dispatch": ORIGIN_MANUAL}
 MAX_ANDROID_VERSION_CODE = 2100000000  # Google Play's upper bound
 
 HEX40 = re.compile(r"^[0-9a-f]{40}$")
@@ -71,6 +85,7 @@ DIGITS = re.compile(r"^[1-9][0-9]*$")
 class Problems:
     def __init__(self):
         self.items = []
+        self.notes = []  # information, never a failure
 
     def add(self, text):
         self.items.append(text)
@@ -212,15 +227,17 @@ def derive_gate(platform, environment, build, app_id, entries):
 
 
 def canonical_name(m, classification=None):
+    """The one file name of a build. A manual build carries MANUAL_PREFIX in front of everything else."""
     v = m["version"]
     base = "cadena-signer-%s-%s+%s-%s-%s-%s-run%s.%s%s" % (
         m["environment"], v["name"], v["platform_build_number"], m["platform"], m["kind"],
         m["source"]["commit"][:7], m["ci"]["run_id"], m["ci"]["run_attempt"], EXTENSION[m["kind"]])
     if classification == "internal-evaluation":
-        return INTERNAL_PREFIX + base
-    if classification not in (None, "compile-validation"):
+        base = INTERNAL_PREFIX + base
+    elif classification not in (None, "compile-validation"):
         die("no file name is defined for the classification '%s'" % classification)
-    return base
+    # A schema-1 manifest has no origin: its names are, as they always were, unprefixed.
+    return (MANUAL_PREFIX if m["source"].get("origin") == ORIGIN_MANUAL else "") + base
 
 
 # ---- create -----------------------------------------------------------------------------
@@ -247,11 +264,21 @@ def cmd_create(args):
         die("GITHUB_RUN_ID / GITHUB_RUN_ATTEMPT are missing or not positive integers")
     server = env.get("GITHUB_SERVER_URL", "")
     repo = env.get("GITHUB_REPOSITORY", "")
+    event = env.get("GITHUB_EVENT_NAME", "")
+    if event not in ORIGIN_OF_EVENT:
+        die("GITHUB_EVENT_NAME '%s' is neither push nor workflow_dispatch" % event)
+    # The commit that was built: the commit of the run (the pushed commit of a promotion; for a manual run
+    # the commit of the workflow itself, which is the tip of development). No other source is accepted.
     commit = env.get("GITHUB_SHA", "")
     if not (server and repo and HEX40.match(commit)):
         die("GITHUB_SERVER_URL, GITHUB_REPOSITORY or GITHUB_SHA is missing or malformed")
     if commit != need(ev, "commit"):
         die("GITHUB_SHA differs from the evidence commit")
+    on_dev = None
+    if event == "workflow_dispatch":
+        on_dev = {"true": True, "false": False}.get(env.get("CADENA_COMMIT_ON_DEVELOPMENT", ""))
+        if on_dev is None:
+            die("CADENA_COMMIT_ON_DEVELOPMENT must be true or false for a manual run")
 
     pubspec, name, pub_build = load_pubspec(root)
     entries = load_ledger(root)
@@ -293,7 +320,9 @@ def cmd_create(args):
             "commit": commit,
             "ref": env.get("GITHUB_REF_NAME", ""),
             "ref_type": env.get("GITHUB_REF_TYPE", ""),
-            "event": env.get("GITHUB_EVENT_NAME", ""),
+            "event": event,
+            "origin": ORIGIN_OF_EVENT[event],
+            "on_development": on_dev,
             "release_id": opts.get("--release-id"),
         },
         "ci": {
@@ -351,12 +380,12 @@ def is_str(x):
 
 
 def check_shape(m, p):
-    """Exactly the documented keys, with the documented types."""
+    """Exactly the documented keys of the manifest's schema, with the documented types."""
     top = ("schema", "variant", "platform", "kind", "environment", "classification", "source", "ci",
            "version", "application", "configuration", "toolchain", "native_libs", "artifact",
            "signing", "distribution", "verification", "release_gate", "known_issues")
     sections = {
-        "source": ("commit", "ref", "ref_type", "event", "release_id"),
+        "source": ("commit", "ref", "ref_type", "event", "release_id") + (("origin", "on_development") if m.get("schema") == SCHEMA else ()),
         "ci": ("repository", "workflow", "run_id", "run_attempt", "run_url", "build_id"),
         "version": ("pubspec", "name", "pubspec_build", "platform_version_name", "platform_build_number"),
         "application": ("id", "display_name"),
@@ -387,11 +416,18 @@ def check_shape(m, p):
     return not p
 
 
-def verify_manifest(m, root, evidence=None):
+def verify_manifest(m, root, evidence=None, allow_legacy=False):
+    """allow_legacy: also accept a schema-1 manifest (a historical one), under the schema-1 rules.
+    Everything that checks a NEW build (the build jobs, a run's manifests, packing) leaves it False."""
     p = Problems()
-    if m.get("schema") != SCHEMA:
-        p.add("schema is %r, expected %r" % (m.get("schema"), SCHEMA))
+    accepted = ACCEPTED_SCHEMAS if allow_legacy else (SCHEMA,)
+    if m.get("schema") not in accepted:
+        p.add("schema is %r, expected %s" % (m.get("schema"), " or ".join(repr(x) for x in accepted)))
         return p
+    legacy = m["schema"] == LEGACY_SCHEMA
+    if legacy:
+        p.notes.append("schema 1: a manifest made before the origin fields; it has no source.origin or source.on_development, "
+                       "so whether the build was started by hand is NOT recorded in it")
     if not check_shape(m, p):
         return p
 
@@ -421,6 +457,18 @@ def verify_manifest(m, root, evidence=None):
         # A promotion push builds only the variants of its own branch's environment.
         if src["ref_type"] != "branch" or src["ref"] != environment:
             p.add("a push to '%s' (%s) cannot build the %s environment" % (src["ref"], src["ref_type"], environment))
+    if not legacy:
+        # The origin follows from the event and cannot be chosen: a manual build is always labelled.
+        if src["origin"] != ORIGIN_OF_EVENT.get(src["event"]):
+            p.add("source.origin is %r but a %s run is %r" % (src["origin"], src["event"], ORIGIN_OF_EVENT.get(src["event"])))
+        if src["event"] == "push":
+            if src["on_development"] is not None:
+                p.add("source.on_development must be null for a promotion (its source is the merge commit on the release branch)")
+        else:
+            if not isinstance(src["on_development"], bool):
+                p.add("source.on_development must be true or false for a manual run")
+            elif environment == "staging" and src["on_development"] is not True:
+                p.add("a manually generated staging build must be built from a commit of development")
     rid = src["release_id"]
     if rid is not None:
         mm = RELEASE_ID.match(rid) if is_str(rid) else None
@@ -612,10 +660,11 @@ def crosscheck(manifests):
     if not manifests:
         p.add("no manifest")
         return p
-    for key in (("source", "commit"), ("source", "ref"), ("source", "event"), ("ci", "run_id"),
+    for key in (("source", "commit"), ("source", "ref"), ("source", "event"), ("source", "origin"),
+                ("source", "on_development"), ("ci", "run_id"),
                 ("ci", "run_attempt"), ("ci", "repository"), ("version", "pubspec"),
                 ("source", "release_id")):
-        values = {json.dumps(m[key[0]][key[1]]) for m in manifests}
+        values = {json.dumps(m[key[0]].get(key[1], "<absent>")) for m in manifests}
         if len(values) != 1:
             p.add("the manifests of one run disagree on %s.%s: %s" % (key[0], key[1], ", ".join(sorted(values))))
     for label, getter in (("variant", lambda m: m["variant"]), ("ci.build_id", lambda m: m["ci"]["build_id"]),
@@ -647,12 +696,15 @@ def crosscheck(manifests):
 
 
 def cmd_verify(args):
-    opts = parse_opts(args, {"--repo": 1, "--evidence": 1}, positional=1)
+    # A historical (schema 1) manifest verifies unless --require-current is given. The build jobs
+    # pass it: a manifest that was just made must be in the current schema.
+    require_current = "--require-current" in args
+    opts = parse_opts([a for a in args if a != "--require-current"], {"--repo": 1, "--evidence": 1}, positional=1)
     m = read_json(opts["_"][0])
     ev = read_kv(opts["--evidence"]) if "--evidence" in opts else None
     # Without --repo nothing is recomputed from the repository (the identity matrix still comes
     # from the repository that holds this tool).
-    return report(opts["_"][0], verify_manifest(m, opts.get("--repo"), ev))
+    return report(opts["_"][0], verify_manifest(m, opts.get("--repo"), ev, allow_legacy=not require_current))
 
 
 def parse_opts(args, spec, positional=0):
@@ -683,6 +735,8 @@ def need_opt(opts, name):
 
 
 def report(label, problems):
+    for text in problems.notes:
+        print("  NOTE  %s" % text)
     if problems:
         for text in problems.items:
             print("  FAIL  %s" % text)
@@ -740,8 +794,8 @@ def cmd_check_file(args):
     manifest, target = opts["_"]
     m = read_json(manifest)
     p = Problems()
-    if m.get("schema") != SCHEMA or not isinstance(m.get("artifact"), dict):
-        die("%s is not a %s manifest" % (manifest, SCHEMA))
+    if m.get("schema") not in ACCEPTED_SCHEMAS or not isinstance(m.get("artifact"), dict):
+        die("%s is not a %s manifest" % (manifest, " or ".join(ACCEPTED_SCHEMAS)))
     art = m["artifact"]
     if art.get("digest_kind") == "directory-manifest":
         if not os.path.isdir(target):
@@ -760,7 +814,7 @@ def cmd_check_file(args):
     if got is not None and got != art.get("sha256"):
         p.add("SHA-256 mismatch: the file is %s, the manifest says %s" % (got, art.get("sha256")))
     base = os.path.basename(target.rstrip("/"))
-    names = (art.get("file"), art.get("canonical_name"), INTERNAL_PREFIX + str(art.get("canonical_name")))
+    names = (art.get("file"), art.get("canonical_name"), canonical_name(m, "internal-evaluation"))
     if base not in names:
         print("  NOTE  the file name '%s' is none of the recorded names (a renamed file is still decided by its digest)" % base)
     if not p:
@@ -771,6 +825,7 @@ def cmd_check_file(args):
         print("  application    %s \"%s\"" % (a["id"], a["display_name"]))
         print("  version        %s  build %s  (pubspec %s)" % (v["name"], v["platform_build_number"], v["pubspec"]))
         print("  source commit  %s  (ref %s, %s)" % (m["source"]["commit"], m["source"]["ref"], m["source"]["event"]))
+        print("  origin         %s%s" % (m["source"]["origin"], "  (commit of development: %s)" % str(m["source"]["on_development"]).lower() if m["source"]["on_development"] is not None else ""))
         print("  CI execution   %s" % ci["run_url"])
         print("  CI build id    %s  (attempt %s)" % (ci["build_id"], ci["run_attempt"]))
         print("  configuration  %s  sha256 %s" % (c["file"], c["sha256"]))

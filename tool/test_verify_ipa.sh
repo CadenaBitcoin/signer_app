@@ -77,6 +77,15 @@ mk good staging
 expect_ok "a correctly signed staging IPA passes (pinned certificate)" staging "$tmp/good.ipa" --expect-cert-sha256 "$PIN"
 expect_ok "...with the build manifest and the unsigned bundle (provenance and same-code)" staging "$tmp/good.ipa" \
   --expect-cert-sha256 "$PIN" --manifest "$tmp/staging.json" --unsigned-app "$tmp/staging/Runner.app"
+# The unsigned build job can run the tools of an older commit, which write a schema-1 build manifest (before the
+# origin fields, Issue #57). Every field this verifier reads exists in both schemas, so such a manifest still counts;
+# an unknown schema never does.
+python3 -I -c 'import json,sys; m=json.load(open(sys.argv[1])); m["schema"]="cadena-build-manifest/1"; [m["source"].pop(k, None) for k in ("origin", "on_development")]; json.dump(m, open(sys.argv[2], "w"))' "$tmp/staging.json" "$tmp/staging_schema1.json"
+expect_ok "...with a schema-1 (historical) build manifest" staging "$tmp/good.ipa" \
+  --expect-cert-sha256 "$PIN" --manifest "$tmp/staging_schema1.json" --unsigned-app "$tmp/staging/Runner.app"
+python3 -I -c 'import json,sys; m=json.load(open(sys.argv[1])); m["schema"]="cadena-build-manifest/9"; json.dump(m, open(sys.argv[2], "w"))' "$tmp/staging.json" "$tmp/staging_schema9.json"
+expect_fail "a build manifest of an unknown schema is refused" "is not a" staging "$tmp/good.ipa" \
+  --expect-cert-sha256 "$PIN" --manifest "$tmp/staging_schema9.json"
 expect_ok "...with its own SHA-256 handed over" staging "$tmp/good.ipa" --expect-cert-sha256 "$PIN" \
   --expect-sha256 "$(python3 -c "import hashlib,sys;print(hashlib.sha256(open(sys.argv[1],'rb').read()).hexdigest())" "$tmp/good.ipa")"
 mk good_dual staging dual

@@ -257,7 +257,7 @@ def safe_extract_tar_gz(path, dest):
 def plaintext_name(m, kind):
     """The label and the canonical name of the build (tool/build_manifest.py name), with the
     archive suffix for iOS. The label says what the file is, also after it is decrypted."""
-    base = LABEL + bm.canonical_name(m)
+    base = bm.canonical_name(m, "internal-evaluation")  # LABEL, and MANUALLY_GENERATED_ in front for a manual run
     if kind == "ios-xcarchive":
         if not base.endswith(".app"):
             raise Fail("unexpected canonical name %s" % base)
@@ -502,7 +502,7 @@ def verify_bundle(directory, repo, against, identity, age, keep=None):
 
     # -- the ciphertext ------------------------------------------------------------------------
     cpath = os.path.join(directory, cipher["file_name"])
-    if not cipher["file_name"].endswith(".age") or not cipher["file_name"].startswith(LABEL):
+    if not cipher["file_name"].endswith(".age") or not cipher["file_name"].removeprefix(bm.MANUAL_PREFIX).startswith(LABEL):
         p.add("the ciphertext file name is not the labelled <canonical name>.age")
     if cipher.get("sha256") != sha256_file(cpath) or cipher.get("size") != os.path.getsize(cpath):
         p.add("the ciphertext differs from the retained manifest (checksum or size)")
@@ -525,7 +525,8 @@ def verify_bundle(directory, repo, against, identity, age, keep=None):
     ev = bm.read_kv(ev_path)
     if r["build_manifest"].get("sha256") != sha256_file(bm_path) or r["build_evidence"].get("sha256") != sha256_file(ev_path):
         p.add("the retained manifest does not match the build manifest or evidence it names")
-    for item in bm.verify_manifest(m, repo, ev).items:
+    # A bundle made before the origin fields holds a schema-1 build manifest: it stays verifiable.
+    for item in bm.verify_manifest(m, repo, ev, allow_legacy=True).items:
         p.add("build manifest: " + item)
     if m.get("variant") != variant:
         p.add("the build manifest is that of variant %r" % m.get("variant"))
