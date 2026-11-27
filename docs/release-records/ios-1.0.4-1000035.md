@@ -1,8 +1,13 @@
-# Release record: iOS 1.0.4 (1000035), skeleton
+# Release record: iOS 1.0.4 (1000035), G1 AUTHORIZED (source only); G2S Authorizations A, B, C, D and E all consumed and withdrawn: Authorization E signed, verified and UPLOADED build 1000035 to internal TestFlight; no current authorization
 
-> **Record Status: `DRAFT`. NOT AUTHORIZED. This file is a skeleton.** Every blank is unknown until someone
-> with the stated role fills it, in a reviewed pull request. A blank or "TBD" is a stop, never a
-> default. Procedure: [../IOS_RELEASE.md](../IOS_RELEASE.md); this file holds only what is specific to
+> **Record Status: `G1 AUTHORIZED`: the source commit only; no authorization is current.** **G2S Authorization E** (section 4.6; the CTO's decision
+> https://github.com/CadenaBitcoin/signer_app/issues/71#issuecomment-7105691953; ONE hosted `sign-verify-and-upload` operation) was **executed once, by run `45221165334`, and SUCCEEDED**: Apple Distribution signing, every verification V1 to V9 and `altool --validate-app` passed, and **the same verified IPA was uploaded to App Store Connect once** for
+> the initial internal TestFlight stage (IPA SHA-256 `6a9a5d3e4c5d904152271b50b65d39482c8ecc2801dca3376682998cc21c14cd`; Apple's Delivery UUID `7f891ccb-147b-4371-b377-ac14e8bc6dee`). Authorization E is **consumed and withdrawn** (`G2S-STATUS: WITHDRAWN`, section 6.1) and the gate refuses it.
+> The earlier hosted operations were signing and verification without upload and are also consumed and withdrawn: **Authorization A** (section 4.2; Developer-role key; run `44800943301`, PR #118), **Authorization B** (section 4.3; App Manager-role key; run `44821325087`, PR #120),
+> **Authorization C** (section 4.4, D16; Admin-role key; run `44834801248`: Apple signing succeeded and the repository's own IPA verification (V7/V8) failed; PR #122) and **Authorization D** (section 4.5, D17; run `45148346007`: Apple signing succeeded and only the strict V8 byte comparison of the top-level `Info.plist` failed; PR #132).
+> None is reactivated; any further signing or upload needs a **new explicit CTO authorization** and a new reviewed record pull request. The status returns to `G1 AUTHORIZED` because the one G2 operation is consumed (section 0); G2 is not an open permission.
+> **Not authorized and not done by this record:** App Review submission (G4), public release (G5), external testers or public links, any rebuild, second operation or other build. G1 accepts no security risk; the dispositions of section 4 are decided or deferred exactly as marked there; Issue #22 stays open. Section 3 holds the verified evidence for the
+> approved source. A blank or "TBD" is a stop, never a default. Procedure: [../IOS_RELEASE.md](../IOS_RELEASE.md); this file holds only what is specific to
 > this release. It contains no secret, no key material and no credential, and must never receive
 > one. Counterpart of [../ANDROID_RELEASE.md](../ANDROID_RELEASE.md) section 9.
 
@@ -11,90 +16,998 @@
 Allowed values: `DRAFT`, `G1 AUTHORIZED`, `G2 AUTHORIZED`, `WITHDRAWN` (IOS_RELEASE.md section 3). Changed only by a reviewed
 pull request; `M` (section 3 below) never changes after G1 without a new G1.
 
-**Record Status: `DRAFT`**
+**Record Status: `G1 AUTHORIZED`**
+
+Set by this record's pull request on the strength of the coordinator's G1 comment on Issue #71 (section 3.1), after the record
+had been on `development` as `DRAFT` (PR #103). Under IOS_RELEASE.md (Quick start, section 3) this status lets the operator
+retrieve and verify the source and make the unsigned build only. It does **not** allow signing by an operator or any upload:
+those need G2 (section 6), which is pending. The exceptions are the G2S operations: one hosted signing and
+verification run each, recorded by the G2S lines of section 6.1, never an upload; none of the four G2S operations (Authorizations A, B, C and D) changes this status. **Authorization A is consumed and withdrawn** (section 4.2, "Second attempt");
+**Authorization B is consumed and withdrawn** (section 4.3, "Execution of Authorization B");
+**Authorization C is consumed and withdrawn** (section 4.4, "Execution of Authorization C"). **Authorization D is consumed and withdrawn** (section 4.5, "Execution of Authorization D"); it did not change this status and allowed no upload. No G2S authorization (signing without upload) is current.
+
+**Authorization E is consumed and withdrawn** (section 4.6, "Execution of Authorization E"). While it was current this status was `G2 AUTHORIZED` (set by PR #135, the only moment the gate could accept the upload operation); the one operation it authorized ran as run `45221165334` and uploaded build 1000035, so **this record's pull request returns the status to `G1 AUTHORIZED` and sets `G2S-STATUS` to `WITHDRAWN`**, which are two independent reasons for the gate to refuse (the upload operation needs both `G2 AUTHORIZED` and `G2S-STATUS: AUTHORIZED`). The change is not a downgrade of what was verified: the approved source, the evidence and every earlier decision stay as recorded. No G2S or G2 authorization is current; a later signing or upload operation needs a new CTO decision, a new reviewed record pull request and a new `G2 AUTHORIZED`.
 
 ## 1. Fixed by the repository (not an authorization)
 
 | | |
 |---|---|
 | Platform, channel | iOS, App Store Connect / TestFlight (production record, first delivery internal only) |
-| Bundle ID | `com.app.cadenabitcoin` |
-| Version / build | `1.0.4` / `1000035` (`pubspec.yaml`; Android already published 1.0.4 (1000035)) |
-| Configuration | `config/build/production.json` (SHA-256: TBD) |
-| Reviewed content (`CONTENT_REF`) | `862831e0b3a0f30c4155d2e086c69fc28bdab286` (`development`, merge of PR #97; includes PRs #97, #98 and #99) unless the coordinator records another reviewed commit |
+| Bundle ID | `com.app.cadenabitcoin` (display name "Cadena Bitcoin") |
+| Version / build | `1.0.4` / `1000035` (`pubspec.yaml`; Android already published 1.0.4 (1000035); the ledger has no iOS entry) |
+| Configuration | `config/build/production.json`: `APP_ENV` `production`, `NETWORK_ENVIRONMENT` `bitcoin`, `USE_TESTNET` `false`, `API_BASE_URL` `https://cadenabitcoin.com/app`; SHA-256 `4b640c4fac2ba9cdde8526d2ed36aab80ec3835679eedba4052f5c094d610409` |
+| Reviewed content (`CONTENT_REF`) | `862831e0b3a0f30c4155d2e086c69fc28bdab286` (`development`, merge of PR #97; includes PRs #97, #98 and #99) |
+| Verification tooling | **G2S (D10, decided):** the workflow, gate and tools named by the three blob lines of section 6.1 (`G2S-WORKFLOW-BLOB`, `G2S-GATE-BLOB`, `G2S-TOOL-BLOBS`), computed from the repository with `bash tool/check_signing_authorization.sh --print-expected --tools-root .`. The Mac route's `TOOLS_SHA` (`f1bc92ed518bdac19cecab68d4877f03051093bd`, merge of PR #107; `tool/verify_ipa.py` blob `6ee2b9d74c31321904e2c042aa2bc82fc402ab35`) is **not used for G2S** and would be decided again for a G2 operation on an operator Mac |
 | Unsigned compile validation of `CONTENT_REF` | run `43210431581`, `ios-production`, success (compile and link only; no signing, no runtime evidence) |
 
 ## 2. Roles for this release (names or accounts; no role is implied by another)
 
 | Role | Held by | Date confirmed |
 |---|---|---|
-| Release coordinator | TBD | TBD |
-| Apple-side operator | TBD | TBD |
-| Independent release authorizer (not the coordinator, not the operator) | TBD | TBD |
+| Release coordinator and release authority | CTO. The accounts `sziller` (preparation) and `CadenaWizard` (review, merge, and the G1 comment) are **the same person** | 2026-11-12: the G1 comment on Issue #71 (section 3.1) states "As CTO and release coordinator"; it was posted from `CadenaWizard`. Restated by the CTO on 2026-11-17 |
+| Apple-side operator | Noah, intended (needed only for an operator-Mac route; **not needed for G2S**, where the hosted workflow performs the Apple-side work, D3) | TBD (Noah's acceptance is not yet recorded) |
+| Deployment confirmation of the G2S run | The required reviewers of the GitHub environment `ios-hosted-signing`: `sziller` and `CadenaWizard`, **the same person** (the CTO); `prevent_self_review` is off, so no second person is required or claimed. The confirmation does not replace the CTO's authorization (D12) | 2026-11-20 (configuration read from the GitHub API, section 4.2) |
 
-## 3. Approved source (G1, by the release coordinator)
+Under the authorization policy of 2026-11-17 ([../RELEASE_POLICY.md](../RELEASE_POLICY.md) principle 9 and section 2.3) the authorized merge is the single human authorization boundary. **This release has no independent authorizer and none is required**; no row of this record may call anyone independent. The operator is a separate role for who performs the Apple-side work; the operator's acceptance of the role is recorded above when given.
+
+## 3. Approved source (G1, by the release coordinator) and its verified evidence
+
+### 3.1 Approved source (G1)
 
 | | |
 |---|---|
-| `APPROVED_SHA` = `M` (a `production` merge commit; never the commit of a record pull request) | TBD |
-| Also written on Issue #71 by the coordinator / by the independent authorizer | TBD / TBD |
-| Proof that its application content equals `CONTENT_REF` | output of the empty `git diff --stat` of IOS_RELEASE.md section 5: TBD |
-| `build-variants` runs of the two promotions | staging: TBD; production: TBD |
-| Native library SHA-256 | `203dcd7abe4187de0b756638a55f691b2d5c680b17d4fbfa7dda550ed703949b` (pinned; confirm unchanged) |
+| `APPROVED_SHA` = `M` (a `production` merge commit; never the commit of a record pull request) | **`42d358a4e7bcbf85b92aa992ec6439214dbd4405`** (version `1.0.4+1000035`) |
+| Content reference | `CONTENT_REF` `862831e0b3a0f30c4155d2e086c69fc28bdab286` (section 1); proof of equality in 3.2 |
+| G1 decision | "G1 APPROVED — Source selection only" |
+| Authorizing account and date | GitHub account `CadenaWizard`, which states "As CTO and release coordinator"; comment created 2026-11-12T19:21:05Z, never edited (created and updated times are equal) |
+| Written on Issue #71 by the coordinator | https://github.com/CadenaBitcoin/signer_app/issues/71#issuecomment-6833584989 (comment id 6833584989); it names `42d358a4e7bcbf85b92aa992ec6439214dbd4405`, version `1.0.4+1000035`, staging run `43214314837`, production run `43279190732`, and states that signing, TestFlight upload, App Review and public release are not permitted by it and that #22 and the later gates remain pending |
 
-## 4. Dispositions and accepted deviations
+The SHA in the comment equals the SHA of this record, `git rev-parse origin/production` and the merge commit of PR #102 when this
+record was prepared. A different `M` after this point is a new G1: set `WITHDRAWN` and start again (IOS_RELEASE.md section 3).
 
-| Item | Decision | By | Date |
+### 3.2 `M` and what was verified (2026-11-12, read-only verification; the decision is in 3.1)
+
+| | |
+|---|---|
+| Production commit | `42d358a4e7bcbf85b92aa992ec6439214dbd4405` = tip of `production` at verification time and when G1 was recorded |
+| How it got there | PR #102 (`staging` into `production`), **merge commit**, signature verified by GitHub; parents `fceeb667e04fd7b4f582d0aa9027ae0e06477237` (previous `production`) and `f7e0bd5902e2046b64ef59c6c5ce7467eeec95ee` (`staging`) |
+| Staging step | PR #101 (`development` into `staging`) produced `f7e0bd5902e2046b64ef59c6c5ce7467eeec95ee`; its parents are the previous `staging` tip (`a4df412…`) and `d6238bf19547c8b55b37e9a3ae5abb9030e153ad` |
+| Source tree | `5f18173ea3382fc96eb2572e6b73b0d8c32e363f`, identical for `42d358a`, `f7e0bd5` and `d6238bf` (`git diff` between them is empty) |
+| Content equals `CONTENT_REF` | `git diff --stat 862831e0b3a0f30c4155d2e086c69fc28bdab286 42d358a4e7bcbf85b92aa992ec6439214dbd4405 -- lib ios flutter_plugin pubspec.yaml pubspec.lock config/build android` printed nothing. The two commits differ only in `docs/IOS_RELEASE.md` and this record |
+| Native library | `flutter_plugin/flutter_plugin/ios/Classes/libdlcplazacryptlib.a`, SHA-256 `203dcd7abe4187de0b756638a55f691b2d5c680b17d4fbfa7dda550ed703949b` (the file the podspec vendors and the CI hashes; unchanged; the pinned binary, not a rebuild). The repository holds further copies in `device/` and `simulator/` that the podspec does not reference; the operator confirms in the build which one is linked |
+| Podfile.lock | `ios/Podfile.lock` is identical at `42d358a` and `d6238bf`; CI drift check: none (diff 0 bytes) |
+
+### 3.3 Hosted CI evidence (compile and link only)
+
+| Run | What | Result |
+|---|---|---|
+| `43214314837` | `build-variants`, push to `staging` at `f7e0bd5`; selected exactly `android-staging-apk` and `ios-staging` | success; `build_manifest.py verify-dir` OK for both and the cross-checks |
+| `43279190732` | `build-variants`, push to `production` at `42d358a`, attempt 1; selected exactly `android-production-apk`, `android-production-aab`, `ios-production` | success; `build_manifest.py verify-dir --repo` OK for all three and the cross-checks (re-run on a fresh checkout of `42d358a`) |
+| `43214314838` / `43214314751` | Android / iOS CI validation on `staging` at `f7e0bd5` | success |
+| `43210431581` | `ios-production` on `CONTENT_REF` | success (section 1) |
+
+Production run `43279190732`: jobs `android-production-apk` (131396218340), `android-production-aab` (131396218335) and
+`ios-production` (131396218408) succeeded. GitHub keeps the evidence artifacts until 2026-11-26; they are text and manifests,
+not release artifacts, and are not the retention of IOS_RELEASE.md section 12: `build-evidence_android-production-apk_a1`
+(13973605131), `build-evidence_android-production-aab_a1` (13973015679), `build-evidence_ios-production_a1` (13970774833) and
+`ios-diagnostics_ios-production_a1` (13971034423).
+
+`ios-production` manifest (`cadena-build-manifest/1`, classification `compile-validation`):
+
+| | |
+|---|---|
+| Source | commit `42d358a4e7bcbf85b92aa992ec6439214dbd4405`, ref `production`, event `push`, `release_id` null; build id `43279190732.1:ios-production` |
+| Version | pubspec `1.0.4+1000035`; platform version `1.0.4`, build `1000035` |
+| Identity | `com.app.cadenabitcoin`, "Cadena Bitcoin", environment `production`; production URL present and staging URL absent in the built app |
+| Command | `flutter build ios --release --no-codesign --flavor production --dart-define-from-file=config/build/production.json` |
+| Toolchain | Xcode 26.3 (17C529), iPhoneOS SDK 26.2, Flutter 3.35.3 (a402d9a437), Dart 3.9.2, CocoaPods 1.17.0, runner `macos15` arm64 |
+| Native library | `203dcd7abe4187de0b756638a55f691b2d5c680b17d4fbfa7dda550ed703949b` |
+| Deployment targets | app 14.0; frameworks between 12.0 and 15.5; 5 known conflicts reported; Rust objects up to 18.5 (known open item, IOS_RELEASE.md section 13) |
+| Signing | `unsigned`, `distributable=no`; `Runner.app` directory-manifest SHA-256 `86fea16b5087ca78e5d893d179c6c773bfb46ac186e98ac81505d80948a192fa` (a hash of the unsigned directory; no installable artifact exists and none was kept) |
+
+The Android variants of the same run are `com.cadenabitcoin.mobile.signer`, `1.0.4+1000035`, debug-signed, not distributable.
+`tool/build_manifest.py gate --channel production` prints PASS for iOS and FAIL for Android (1000035 is already published there);
+that is the documented expected result (IOS_RELEASE.md section 4).
+
+**What this does not prove.** No code signing, no entitlements or provisioning, no archive or IPA, no App Store Connect
+validation, and no runtime or device behavior. The unsigned build cannot show that the app starts on a device.
+
+## 4. Dispositions and the policy basis of the manual operation
+
+G1 decides none of these and accepts no security risk. On **2026-11-20** the CTO decided **D3, D6, D7, D8, D9, D10, D11, D12 and D14** for the G2S operation
+(section 4.2; the accepted risks are written into each row). **The G2S operation of Authorization A has since been consumed and that authorization withdrawn** (PR #118; section 4.2, "Second attempt"): these decisions are retained as the history of what was decided and authorize no run by themselves. On **2026-11-20** the CTO also decided **D15**, the App Manager credential of **Authorization B** (section 4.3): D14 stays the historical decision for the Developer-role key of Authorization A, and D15 is separate from it. **Authorization B has since been consumed and withdrawn** (section 4.3): D15 is retained as the history of what was decided and authorizes no run by itself. On **2026-11-20** the CTO also decided **D16**, the Admin credential of **Authorization C** (section 4.4): D14 and D15 stay the historical decisions for the keys of Authorizations A and B, and D16 is separate from them. **Authorization C has since been consumed and withdrawn** (section 4.4): D16 is retained as the history of what was decided and authorizes no run by itself. On **2026-11-23** the CTO decided **D17**, the credential of **Authorization D** (section 4.5): reuse of the Admin-role key of D16, subject to confirmation of its validity before execution. D16 stays the consumed decision for Authorization C; D17 applies to Authorization D only. **Authorization D has since been consumed and withdrawn** (section 4.5): D17 is retained as the history of what was decided and authorizes no run by itself. **D1, D2, D4, D5 and X2 were decided on 2026-11-23 for Authorization E (section 4.6, comment `7105691953`); X1 stays with the CTO, who completes the export-compliance and App Privacy declarations in App Store Connect before any tester distribution. Until that decision they were not decided**: they were deferred to G2 and the later gates
+(section 4.2), and D13 stays as it is. Each row states the **exact decision text as it
+will stand once approved**; "Proposed" means the coordinator suggests it. A row takes effect only when the CTO fills in the decision,
+the name and the date in a reviewed pull request; no row changes status by itself. There is one approver, the CTO, who is the release
+authority under [../RELEASE_POLICY.md](../RELEASE_POLICY.md) principle 9; no row needs, and none may claim, a second person. D-numbers
+are stable references. X1 and X2 are external decisions (owner and legal, or evidence still outstanding); they are not proposed here.
+Evidence for each row is in the document it cites; nothing in this table is new technical research.
+
+| ID | Item and exact proposed decision text | Status | By | Date |
+|---|---|---|---|---|
+| D1 | **Issue #22.** Issue #22 stays open. For iOS 1.0.4 (1000035) only, the existing pinned native Rust library (`libdlcplazacryptlib.a`, SHA-256 `203dcd7abe4187de0b756638a55f691b2d5c680b17d4fbfa7dda550ed703949b`) is retained without a rebuild, although it still contains and exports `_create_deterministic_nonce_c` (PR #97 removed the helper from the source interfaces only). No call path to it has been identified in the application (source review and symbol checks; not a proof). The residual risk is accepted by the CTO, **before G2 is requested**, for internal TestFlight with zero-value wallets (D2) only. This is not a remediation of #22, and it is no disposition for App Review or public release, which need a new one. Evidence: IOS_RELEASE.md section 11 ("Issue #22"), section 9 (symbol inspection), Issue #89 (no `Cargo.lock`) **Decided for Authorization E (comment `7105691953`):** the risk is accepted for this internal TestFlight build; Issue #22 remains open; no production use involving real funds is authorized. | Decided | CTO (CadenaWizard) | 2026-11-23 |
+| D2 | **Zero-value wallets.** Testing of this candidate uses disposable, zero-value wallet material only: a newly generated wallet, never a mnemonic that ever held value, never a wallet that will hold value, and an account created for the test, because the production build talks to the production backend and mainnet. The approver of the production-backend test account is recorded in section 5, item 12. Evidence: IOS_RELEASE.md section 11 **Decided for Authorization E (comment `7105691953`):** only zero-value wallets and test accounts are permitted; the CTO (`CadenaWizard`) approves the production-backend test account for this restricted testing purpose (section 5, item 12); no real funds may be exposed. | Decided | CTO (CadenaWizard) | 2026-11-23 |
+| D3 | **Hosted signing instead of an Apple-side operator Mac (G2S only).** For the G2S operation on 1.0.4 (1000035), signing and verification are performed by the GitHub-hosted workflow `.github/workflows/ios-hosted-signing.yml` on a GitHub-hosted macOS runner, started by hand from `development` and confirmed by the required reviewers of the protected environment `ios-hosted-signing`, instead of by an Apple-side operator on a Mac. It is an operational exception to the future automation (RELEASE_POLICY.md section 2.3, "Manual operations before automation exist"); it is **not** an exception to the authorization policy. **Risks accepted by the CTO:** the trust placed in a GitHub-hosted runner, which holds the Apple API key during one step; no operator-controlled machine; the controls of IOS_HOSTED_SIGNING.md in place of an operator's judgment. Mitigated by V1 to V9, by the gate and the bound blobs, by no credential entering the repository, a chat or a log, and by the evidence of IOS_HOSTED_SIGNING.md. The Mac route of IOS_RELEASE.md sections 6 to 12 remains the procedure for any operation G2S does not cover. Evidence: the CTO's comment https://github.com/CadenaBitcoin/signer_app/issues/71#issuecomment-7038341975; IOS_HOSTED_SIGNING.md sections 1, 2 and 5 **Extension to Authorization E (comment `7105691953`, 2026-11-23):** this decision extends to the operation `sign-verify-and-upload`; all its other controls, including the single archive and single export per authorized operation, remain effective. | Decided | CTO (CadenaWizard) | 2026-11-20 |
+| D4 | **Production App Store Connect record.** For 1.0.4 (1000035) only, the first internal TestFlight delivery uses the existing production record (bundle ID `com.app.cadenabitcoin`) instead of the staging record of IOS_SIGNING.md section 2, item 1, because no staging record is registered. One-release exception to the architecture, not to the authorization policy; RELEASE_POLICY.md section 8.1 and IOS_SIGNING.md section 2 are unchanged. Consequences accepted: the build number 1000035 is consumed in the production record, and the build is processed beside the live application. Evidence: IOS_RELEASE.md section 1; the record's section 5, item 2 is still TBD and must show the exact bundle ID **Decided for Authorization E (comment `7105691953`):** the existing production App Store Connect record is used and build number 1000035 is consumed in it. | Decided | CTO (CadenaWizard) | 2026-11-23 |
+| D5 | **Production gate for iOS.** `python3 -I tool/build_manifest.py gate --channel production` is read as applicable to iOS only for this release: `PASS ios` is the applicable result and `FAIL android` (1000035 is already published there) is not. After the upload the iOS number enters the ledger and the rule then applies to iOS too. Evidence: IOS_RELEASE.md section 4 **Decided for Authorization E (comment `7105691953`):** the production gate is interpreted as PASS for this iOS operation only; the hosted workflow does not run that gate, so this is documentary. **Ledger (closeout, 2026-11-24):** `config/release/published_versions.json` is **not** changed by the upload of 1000035 to internal TestFlight (reason in section 4.6, "Ledger"); the production gate therefore still reports `PASS ios` (no iOS floor recorded) and the rule of this decision (`FAIL android` is not read as applicable) is unchanged. | Decided | CTO (CadenaWizard) | 2026-11-23 |
+| D6 | **No `aps-environment` in 1.0.4.** Version 1.0.4 ships without the push-notification entitlement: the repository has no entitlements file and no push-related pod (checked in `ios/Podfile.lock` and `ios/` on 2026-11-17); Push Notifications is enabled on the App ID but unused; the `remote-notification` background mode stays. Apple warning ITMS-90078 is expected at a later upload and recorded, not dismissed. Enforced after signing by `verify_ipa.py verify --forbid-entitlement aps-environment` (V5 and V7 of the hosted signing job). **Risk accepted by the CTO:** no server-sent push notifications in this build (the app's use of them is unconfirmed, APPLE_ACCOUNT_QUESTIONNAIRE.md B3). Evidence: IOS_SIGNING.md section 3.2, IOS_RELEASE.md section 9 (V5, V7) | Decided | CTO (CadenaWizard) | 2026-11-20 |
+| D7 | **Apple cloud-managed Distribution signing with automatic provisioning, through a team API key.** The archive is built unsigned and exported with `signingStyle` automatic, `-allowProvisioningUpdates` and the dedicated team API key of D14, so that Apple's **cloud-managed** Distribution certificate signs it (no private key on any Mac or runner). **Risks accepted by the CTO:** Xcode may **create** an Xcode-managed App Store provisioning profile and other certificate or profile objects in the team's account; these are changes in the Apple account that nobody can preview. Whether the Developer role suffices for cloud-managed Distribution signing, and whether an unsigned archive can be exported and signed, are **Unconfirmed**: a failure is a result of the experiment, not a defect, and a temporary Admin-level credential would need its own authorization (D14). Evidence: IOS_HOSTED_SIGNING.md sections 2 and 6; IOS_SIGNING.md section 5 **Applicability (added for Authorization B; the decision and its accepted risks are unchanged):** the text above describes Authorization A, with the Developer-role key. For Authorization B the same question is open for the App Manager role (D15): whether it suffices for cloud-managed Distribution signing is **Unconfirmed**, a failure is again a result of the experiment and not a defect, and no Admin-level credential is authorized. **Applicability (added for Authorization C; the decision and its accepted risks are unchanged):** for Authorization C the same question is open for the Admin role (D16): whether it suffices for cloud-managed Distribution signing is **Unconfirmed**, an Admin credential does not guarantee success, and a failure is again a result of the experiment and not a defect. **Outcome (added after run `44834801248`; the decision and its accepted risks are unchanged):** the Apple signing step succeeded with the Admin-role key of Authorization C, whereas those of the Developer-role (A) and App Manager-role (B) keys failed. The evidence supports the role as a plausible explanation and does not prove it; Authorization C is consumed and withdrawn (section 4.4). **Extension to Authorization E (comment `7105691953`, 2026-11-23):** this decision extends to the operation `sign-verify-and-upload`; all its other controls, including the single archive and single export per authorized operation, remain effective. | Decided | CTO (CadenaWizard) | 2026-11-20 |
+| D8 | **Certificate verification: discovery in the first run.** The signing certificate's SHA-256 fingerprint is read from the signed IPA (`verify_ipa.py certificate`), cross-checked with `codesign` and `openssl`, and **recorded by the coordinator in section 7**. In the first run it is only **discovered** (`pin_source=DISCOVERED`, a circular pin); it becomes a pin when the recorded value is passed as `expected_cert_sha256` to a later run or checked before any upload. **Limits accepted by the CTO:** the value is read from the artifact it later judges; no chain to Apple without `--trust-anchors`; no revocation check. Evidence: IOS_RELEASE.md section 9 (V3, "V3 is discovery, then approval"); PR #107; IOS_HOSTED_SIGNING.md section 1 **Applicability (added after run `44834801248`; the decision and its limits are unchanged):** the first run that produced a signed IPA (Authorization C) **discovered** the signing certificate's SHA-256 `7ee3f6ce78eea83748e198102f6ab66527c626296baaea437c3a90db81ef418e` (section 4.4 and section 7). It is a discovered value, circular by D8's own terms, recorded as evidence; it is **not** an approved pin. | Decided | CTO (CadenaWizard) | 2026-11-20 |
+| D9 | **One archive, one export, verification; no upload.** G2S authorizes ONE operation: one archive is built from the approved commit, exported once, and the exported IPA is verified (V1 to V9; the comparison baseline of V8 is the application inside that archive; no second compile). The signed IPA **must not be uploaded or retained for distribution**: it stays on the runner and is gone with it, and nothing is sent to App Store Connect. The single-archive rule applies **per authorized operation**: a later G2 operation (upload) builds and signs its own archive under its own authorization, and its native-library hash is authorized again. A failed security or identity verification stops the operation. Evidence: IOS_HOSTED_SIGNING.md sections 1, 2.1 and 5 **Applicability (added for Authorization B; the decision is unchanged):** the limit is per authorization. The operation of Authorization A is consumed (section 4.2). Authorization B (section 4.3) authorizes one **new** operation, separately, under the same rules (one archive, one export, verification, no upload); it is not a second operation of Authorization A. **Applicability (added for Authorization C; the decision is unchanged):** the limit stays per authorization. Authorization C (section 4.4) authorizes one **new** operation, separately, under the same rules (one archive, one export, verification, no upload); it is not a further operation of Authorization A or B, both of which are consumed. **Extension to Authorization E (comment `7105691953`, 2026-11-23):** the prohibition of upload in this decision is **superseded solely for Authorization E**: that operation uploads the SAME verified IPA once, from the runner, and nothing else; the single archive and single export remain effective, and the IPA is still never retained as an artifact. | Decided | CTO (CadenaWizard) | 2026-11-20 |
+| D10 | **Verification tooling and implementation identity.** The workflow, the authorization gate and the tools that verify the IPA are exactly those named by the G2S blob lines of section 6.1: `G2S-WORKFLOW-BLOB`, `G2S-GATE-BLOB` and `G2S-TOOL-BLOBS` (the five tools `tool/build_manifest.py`, `tool/ipa_inspect.py`, `tool/validate_handover_archive.py`, `tool/verify_artifact.sh`, `tool/verify_ipa.py`), computed from the repository contents with `bash tool/check_signing_authorization.sh --print-expected --tools-root .`. The gate refuses to authorize if any of them differs, so a later change needs a new, reviewed authorization. This replaces the Mac route's `TOOLS_SHA` for G2S (section 1). Evidence: IOS_HOSTED_SIGNING.md section 5 | Decided | CTO (CadenaWizard) | 2026-11-20 |
+| D11 | **Reading of the gates for this release.** The merge of PR #102 (producing `M`) predates the authorization policy of 2026-11-17 and is G1, source selection only; it is not authorization to sign or upload. **G2S** is the CTO's separate, written authorization of one GitHub-hosted signing-and-verification operation, recorded by the G2S lines of section 6.1; it is signing only, never an upload or a distribution, and it is **not G2**. G2 (production signing for the one upload as "TestFlight & App Store"), G3 (assignment to named internal testers), G4 (submission to App Review, only after the acceptance evidence of IOS_RELEASE.md section 11, which has no minimum duration) and G5 (public release) remain the CTO's separate, written authorizations of specific **manual** operations and are **not authorized**. G2 and G3 are the initial internal TestFlight stage; submission is G4. No gate needs a second person | Decided | CTO (CadenaWizard) | 2026-11-20 |
+| D12 | **Policy basis.** The G2S operation is a manual operation started by hand (a manually started workflow in a protected environment) and is an operational exception to the future automation. It is **not** an exception to the authorization policy of RELEASE_POLICY.md principle 9 and section 2.3 (the authorized merge is the single human authorization boundary; `sziller` and `CadenaWizard` are one person): it needs the CTO's written authorization of that operation (section 4.2) and the merged record. The approval of the required reviewers of the environment `ios-hosted-signing` **confirms the deployment only; it does not replace the CTO's authorization** and does not create one. Upload and distribution remain **pending** until the prerequisites of section 4.1 are met and the CTO gives G2 **Extension to Authorization E (comment `7105691953`, 2026-11-23):** this decision extends to the operation `sign-verify-and-upload`; all its other controls, including the single archive and single export per authorized operation, remain effective. | Decided | CTO (CadenaWizard) | 2026-11-20 |
+| D13 | Xcode other than 26.3 (17C529), if any | none | TBD | TBD |
+| D14 | **Dedicated Developer-role Apple Team API key.** A **dedicated** App Store Connect **Team API key with the Developer role** is accepted as the credential of the G2S operation. It is stored only as environment secrets of `ios-hosted-signing` and never in the repository, a chat or a log. **Risk accepted by the CTO:** a team key's scope **cannot be restricted to this application** (access to all apps of the team, limited only by role; IOS_SIGNING.md section 5, option A, with the fallback recorded there). **Rotation and revocation remain available security controls; automatic revocation after the G2S operation is not mandatory.** Any temporary Admin-level credential requires its own, separate authorization. Evidence: IOS_SIGNING.md section 5; IOS_HOSTED_SIGNING.md section 2 **Applicability (added for Authorization B; the decision and its accepted risk are unchanged):** D14 is the historical decision for the Developer-role credential of Authorization A, which is consumed; it does not govern Authorization B, whose credential is decided by D15. **Applicability (added for Authorization C; the decision and its accepted risk are unchanged):** D14 likewise does not govern Authorization C, whose Admin credential is decided by D16; its sentence that any Admin-level credential requires its own separate authorization is met for Authorization C by D16 and the CTO's decision `7052148143`. | Decided | CTO (CadenaWizard) | 2026-11-20 |
+| D15 | **Dedicated App Manager-role Apple Team API key for G2S Authorization B.** A **dedicated** App Store Connect **Team API key** is approved for Authorization B only (section 4.3): name `Cadena iOS CI Signing -AppMngr`, **Key ID `47PP4C673P`** (an identifier, not a secret), role **App Manager**, purpose: the hosted iOS signing-and-verification experiment. The CTO states that the private key is stored locally outside the repository, with restricted filesystem permissions, and that its cryptographic format has been validated (a statement of the CTO; this record holds no key material and cannot verify it). Whether the key's capability is sufficient is **Unconfirmed**. It may be configured as an environment secret of `ios-hosted-signing` **only after** the record that makes Authorization B effective is merged and the gate has passed against the final `development` revision, and the three secrets are removed after the attempt (section 4.3). **Risks accepted by the CTO:** (1) the App Manager role provides broader permissions than Developer; (2) the team key is not restricted to a single application; (3) App Manager cloud-signing capability remains unverified; (4) another signing failure is possible even if the workflow operates correctly; (5) the independent backup of the private key is deferred; (6) the private key is temporarily available to the protected GitHub Actions signing job. **No Admin-level or Account Holder credential is authorized.** The previous Developer-role key (D14) remains unchanged; **neither key is revoked automatically**: revocation remains a separate operational decision, unless a compromise is suspected. D15 governs Authorization B only and does not extend to G2 or any later gate. Evidence: the CTO's decision https://github.com/CadenaBitcoin/signer_app/issues/71#issuecomment-7050074107 (section 3, "New credential: D15") **Applicability (added after the attempt; the decision and its accepted risks are unchanged):** Authorization B was consumed by run `44821325087` and withdrawn (section 4.3). D15 is retained as the history of what the CTO decided; the risks were accepted for that one operation only, and it authorizes no further use of the key. **Applicability (added for Authorization C; the decision and its accepted risks are unchanged):** D15's sentence "No Admin-level or Account Holder credential is authorized" described Authorization B. The Admin credential of Authorization C is decided separately by D16; D15 itself is not amended and authorizes no Admin credential. | Decided | CTO (CadenaWizard) | 2026-11-20 |
+| D16 | **Dedicated Admin-role Apple Team API key for G2S Authorization C.** A **dedicated** App Store Connect **Team API key** is approved for Authorization C only (section 4.4): name `Cadena iOS CI Signing -Admin`, **Key ID `9Y3NM5CN5B`** (an identifier, not a secret), role **Admin**, purpose: the hosted iOS signing-and-verification experiment. The CTO states that the private key has been downloaded, stored locally outside the repository with restricted filesystem permissions, and validated with OpenSSL, and that an independent backup is **deferred** (statements of the CTO; this record holds no key material and cannot verify them). **The CTO explicitly accepts the elevated security risk of an Admin-role Team API key**, including: (1) account-wide access, not restricted to the Signer App; (2) broad administrative capabilities beyond application signing; (3) temporary exposure of the credential to the protected GitHub Actions signing environment; (4) the possibility that the Admin role will still fail to satisfy Apple's cloud-managed signing requirements (an Admin credential does not guarantee success); (5) the deferred independent backup of the private key. The credential must never enter the repository, application source, logs or release artifacts. It may be registered as environment secrets of `ios-hosted-signing` **only after** the record that makes Authorization C effective is merged and the gate has passed against the final `development` revision; **all three secrets are removed immediately after the experiment**; **no indefinite GitHub credential storage is authorized**. **Revocation of the Admin key remains a separate explicit CTO decision.** D16 governs Authorization C only and does not extend to G2 or any later gate; D14 and D15 remain the historical credential decisions of Authorizations A and B. If the Admin experiment produces the same Apple signing failure, **further privilege escalation is not authorized** by this decision. Evidence: the CTO's decision https://github.com/CadenaBitcoin/signer_app/issues/71#issuecomment-7052148143 (section 2, "New credential: D16") **Applicability (added after the attempt; the decision and its accepted risks are unchanged):** Authorization C was consumed by run `44834801248` and withdrawn (section 4.4). D16 is retained as the history of what the CTO decided; the risks were accepted for that one operation only, it authorizes no further use of the key, and **revocation of the Admin key remains a separate CTO decision** (the locally stored key has not been revoked). | Decided | CTO (CadenaWizard) | 2026-11-20 |
+| D17 | **Admin-role Apple Team API key for G2S Authorization D (decided; section 4.5).** The CTO's decision of 2026-11-23 (https://github.com/CadenaBitcoin/signer_app/issues/71#issuecomment-7094820406): **reuse of the previously successful Admin-role key** of D16 (name `Cadena iOS CI Signing -Admin`, Key ID `9Y3NM5CN5B`, an identifier and not a secret) is approved **for Authorization D only**, **provided its validity is confirmed before execution**; the elevated privileges are accepted for this narrowly scoped operation. The risks of D16 apply again and are accepted again by that decision: account-wide scope, broad administrative capabilities, temporary exposure to the protected environment, the deferred independent backup, and no guarantee of success. **Conditions:** the CTO confirms the key's validity before execution (this record cannot verify it, and neither the workflow nor the gate binds the key ID or its role); the three secrets are registered as environment secrets of `ios-hosted-signing` **only after** this record is merged and the gate has been independently validated against the final `development` tip (section 4.5), and are **removed immediately after the execution**, whatever its result; no other credential is authorized. Revocation of the key afterwards is not decided here and stays a separate CTO decision. **D17 does not extend D16**, which stays the decision for Authorization C and is consumed. The gate never reads D17: it rests on the CTO's comment and on this record as reviewed and merged, not on an automated check. **Authorization D has since been consumed (run `45148346007`) and withdrawn (section 4.5): D17 is retained as the history of what was decided and authorizes no run by itself.** | Decided | CTO (CadenaWizard) | 2026-11-23 |
+| D18 | **Admin-role Apple Team API key for G2S Authorization E (decided; section 4.6).** The CTO's decision of 2026-11-23 (https://github.com/CadenaBitcoin/signer_app/issues/71#issuecomment-7105691953): **reuse of the existing Admin-role App Store Connect API key, Key ID `9Y3NM5CN5B`** (an identifier and not a secret; the key of D16 and D17) for **this operation only**, **provided its validity is confirmed before dispatch**; the elevated privileges are accepted. The risks of D16 apply again and are accepted again. The three environment secrets are registered **only after this record's pull request is merged** and are removed after their required use. D17 stays the consumed decision of Authorization D. **Authorization E was executed (run `45221165334`) and is consumed; the three environment secrets were removed after the run (GitHub reports none, section 4.6).** The key itself is **not revoked** by removing the secrets and no revocation is decided here; the CTO reports encrypted backups of it (section 4.6). | Decided | CTO (CadenaWizard) | 2026-11-23 |
+| X1 | **Export compliance and App Privacy (external; no decision proposed).** Export-compliance and App Privacy answers (owner and legal). Technical facts only, no declaration: HTTPS (Flutter and `dio`); secp256k1 ECDSA, Schnorr and ECDH in the native library; `rand_chacha` as a random-number generator; `pointycastle` as a Dart dependency; Keychain through `flutter_secure_storage`; third-party Sumsub and FingerprintPro SDKs; `ITSAppUsesNonExemptEncryption` is not set The questions and answers are the owner's and legal's, never the operator's and never an assistant's **Authorization E (comment `7105691953`):** the CTO takes responsibility for completing the declarations accurately in App Store Connect; **no tester distribution is authorized until the compliance questions have been answered**. No answer is recorded here and none is decided by this row. **Reported done (2026-11-24):** the CTO reports that the export-compliance questions for build 1000035 were completed in App Store Connect; the answers are the CTO's declaration there and are **not** recorded or decided by this record. | Open | TBD | TBD |
+| X2 | **Privacy manifest (external; no decision proposed).** Privacy-manifest finding (no `PrivacyInfo.xcprivacy`). Read-only investigation, 2026-11-16: the pinned Rust library's arm64 slice imports `_stat _fstat _lstat _opendir _fdopendir _readdir_r _fsetattrlist _clock_gettime` from `std` and `_sysctlbyname` from `std_detect`/`compiler_builtins`; **only `_stat`, `_fstat` and `_lstat` are in a category of Apple's required-reason list (file timestamp)**, and no boot-time, disk-space or user-defaults symbol is imported; the library's only first-party file read (`init_from_file_c` → `fs::read_to_string`) has **no active caller** in the app (the call in `lib/main.dart` is commented out) but is an exported symbol of a force-loaded library in a **dynamic framework** (`use_frameworks!`), so `_fstat` is expected in `Frameworks/dlc_wallet.framework/dlc_wallet`; the Runner and plugin native code use no covered API; `dlc_wallet` and `flutter_idensic_mobile_sdk_plugin` ship no manifest; the other seven plugins of `Podfile.lock` ship one that their podspec packages; Sumsub's `IdensicMobileSDK` 1.42.0 ships none but imports none of the covered symbols and FingerprintPro 2.14.0 ships its own (both **carried from the earlier read of the vendor packages, not re-verified**). Apple's documentation says an app that does not describe required-reason use "aren't accepted by App Store Connect" (and that each executable or dynamic library using a covered API needs a manifest in its own bundle); Apple's own e-mail text and forum reports describe a warning e-mail only, and no Apple source found says a TestFlight upload is refused (**Unconfirmed** for November 2026). **Credible concern, not a finding of non-compliance: source-level inspection identifies `dlc_wallet.framework` as a likely carrier of a required-reason API symbol without a manifest, and Apple's documented enforcement is that such an app is not accepted by App Store Connect. Nothing here shows that the app is compliant or that Apple will accept the upload, and nothing shows that it will be refused; the decisive evidence is inspection of the final linked `dlc_wallet.framework` (the scan of IOS_RELEASE.md section 9) and Apple's own response to a processed build.** The smallest legitimate correction, if the coordinator chooses one, is a `PrivacyInfo.xcprivacy` in the `dlc_wallet` pod (podspec `resource_bundles`) declaring the file-timestamp category with the reason code that truthfully matches use; which code that is (for example C617.1 for files in the app container) is a determination by the code owner, not made here What the linked app really imports is read by the scan of IOS_RELEASE.md section 9 (preflight build, no credential). A manifest in `dlc_wallet` would change the frozen source and need a new G1. Accepting the possible Apple message or changing the source is the coordinator's decision **Technical evidence completed 2026-11-19 and 2026-11-20 by the credential-free hosted diagnostics runs `44619876867`, `44625655320` and `44726071796` (same commit, Xcode 26.3, corrected scanner of PR #113):** the linked `Frameworks/dlc_wallet.framework/dlc_wallet` imports `_stat`, `_fstat` and `_lstat` (file timestamp; also `_clock_gettime` and `_sysctlbyname`) and ships **no** `PrivacyInfo.xcprivacy`; every other binary that imports a covered API ships one. This is the inspection the row waited for. **The row stays Open:** the decision (accept the possible Apple message, or add a manifest to the pod, which changes frozen source and needs a new G1) is the CTO's, before G2; no statement of compliance is made, no privacy reason code is accepted and the frozen source is not changed. **Risk accepted for Authorization E (comment `7105691953`):** the CTO accepts that Apple may warn about or reject the build because of the missing privacy manifest of `dlc_wallet.framework`; Apple's actual response determines whether remediation is necessary; a refusal is an artifact failure and any source correction needs a new G1 and a new build number. This accepts the risk of the upload; it asserts no compliance. **Apple's response to the upload of 1000035:** neither `altool --validate-app` nor the upload reported a privacy-manifest warning or error (two warnings only: 90725, SDK version, and 90068, deployment target; verbatim in section 4.6). The CTO reports the build as processed and in testing (2026-11-24). No later Apple e-mail has been reported to this record. | Decided | CTO (CadenaWizard) | 2026-11-23 |
+
+### 4.1 Prerequisites for the CTO's G2 authorization of the manual operation (NOT GIVEN)
+
+G2 is the CTO's written authorization of **this specific operation** under the policy of 2026-11-17. It is not an exception to that
+policy and it is not given by this section, by the merge of this record, or by any earlier merge. It is **pending**.
+
+**The operation G2 would authorize (exhaustive).** Production signing and one upload to App Store Connect of the IPA that passed
+IOS_RELEASE.md section 9, for the initial internal TestFlight stage, of: iOS `1.0.4` build `1000035`; commit
+`42d358a4e7bcbf85b92aa992ec6439214dbd4405`; bundle ID `com.app.cadenabitcoin`; Apple Team `D65458CPDP` (confirmed by the operator before
+signing, section 5 item 1; a different team stops the operation); zero-value wallets only (D2).
+
+**What G2 would not authorize.** Tester assignment (G3), App Review submission (G4), public release or distribution (G5), external
+TestFlight testers or public links, any other version, build, commit, bundle ID or team, any later release, any rebuild or second
+archive, any change to code, version or build number, any bypass of signing or artifact verification (V1 to V9, the certificate record
+of D8, `--forbid-entitlement aps-environment`, the single-archive rule, the evidence of IOS_RELEASE.md section 12), and any use of
+wallets that hold or will hold value.
+
+**Prerequisites, all required before the CTO gives G2:**
+
+1. D1 to D12 and D14 are each decided (no row still "Proposed"), by the CTO, in a merged pull request. D3, D6 to D12 and D14 were decided on 2026-11-20 **for the G2S operation**; the CTO's G2 decision states whether and how they extend to the G2 operation (D3, D7, D9 and D12 describe the hosted G2S route and the per-operation single archive); D1, D2, D4 and D5 are still to be decided.
+2. X1 (export compliance and App Privacy) is decided by the owner and legal, and X2 (privacy manifest) is decided by the CTO after the
+   compiled-framework inspection is recorded here.
+3. Section 5 is filled with no stop answer: team, enrollment type and Team ID; the App Store Connect record (name, SKU, status, exact
+   bundle ID); the live iOS version and the highest uploaded build; the operator's role and access (upload; certificate and profile
+   management for route A); the zero-value test account's approver (item 12).
+4. The operator has accepted the role (section 2) and has completed IOS_RELEASE.md steps 1 to 3 with the outputs returned, including the
+   required-reason scan, so the CTO decides with that evidence. The credential-free hosted diagnostics runs `44619876867`, `44625655320` and
+   `44726071796` (same commit and toolchain) supply that evidence for steps 1 to 3 and the required-reason scan; whether a G2 operation still
+   needs an operator Mac is decided with G2.
+5. The `development` record names the verification tooling (D10: the blob lines of section 6.1 for a hosted route, `TOOLS_SHA` for an operator Mac)
+   and the status is `G1 AUTHORIZED` at the moment of G2.
+
+**G2 evidence.** The CTO's written G2 decision on Issue #71 (naming the commit SHA, the version, the bundle ID and the operation) and the
+merged reviewed pull request that sets `Status` to `G2 AUTHORIZED`. No second person is involved, required or claimed.
+
+### 4.2 G2S Authorization A: one GitHub-hosted signing-and-verification operation (WITHDRAWN: CONSUMED by run 44800943301)
+
+> **Current state.** This section is **Authorization A**, and its text is the **historical record** of what the CTO authorized, on which conditions, and what happened. **Authorization A
+> is permanently consumed and withdrawn**: run `44800943301` reached Apple credential use, so its one operation is consumed (see "Second attempt" below), and its withdrawal became effective through
+> **PR #118**, which set `G2S-STATUS` to `WITHDRAWN`. Statements below such as "G2S is no longer executable", "`G2S-STATUS` is `WITHDRAWN`" and "G2S authorization withdrawn" describe
+> **Authorization A as of PR #118**; they are kept as the historical facts and are not rewritten. They do **not** describe the current status of the record. **Authorization B** (section 4.3) is a
+> **separate** operation with its own CTO decision, credential (D15) and single operation; it was authorized after A was withdrawn, is not an extension, a retry or a reactivation of A, and A stays consumed. **Authorization B has itself since been
+> consumed by run `44821325087` and withdrawn (section 4.3).** **Authorization C** (section 4.4) was a separate, later authorization and has itself since been consumed by run `44834801248` and withdrawn; **when Authorization C was withdrawn no G2S authorization was current; Authorization D (section 4.5) was authorized later and has itself since been consumed and withdrawn, so no G2S authorization is current**. The authorization text and the CTO decisions of A are preserved unchanged as history; they authorize no further run.
+
+**The authorization.** The CTO's written decision "CTO Decision: G2S Hosted iOS Signing Authorization" on Issue #71:
+https://github.com/CadenaBitcoin/signer_app/issues/71#issuecomment-7038341975
+(comment id `7038341975`, account `CadenaWizard`, created 2026-11-20T11:26:04Z, never edited). It names the application (Cadena Bitcoin
+Signer App), release `1.0.4 (1000035)`, `APPROVED_SHA` `42d358a4e7bcbf85b92aa992ec6439214dbd4405`, bundle ID `com.app.cadenabitcoin` and Apple Team ID
+`D65458CPDP`, and accepts D3, D6, D7, D8, D9, D10, D11, D12 and D14 as worded in section 4. It states: "G2S execution becomes authorized only when
+these conditions are reflected in the approved and merged release record and the workflow's authorization gate passes." **Supplemented on 2026-11-20 by the
+CTO's decision https://github.com/CadenaBitcoin/signer_app/issues/71#issuecomment-7046097307** (workflow correction; see "Failed attempt and corrected workflow" below), which does not replace this authorization.
+
+**The operation G2S authorizes (exhaustive).** One run of `.github/workflows/ios-hosted-signing.yml`, started by hand from `development` for the
+approved source, version, bundle ID and team above, through the protected environment `ios-hosted-signing`: one unsigned archive is built, exported
+and signed with Apple's cloud-managed Distribution certificate through the dedicated team API key (D7, D14), the IPA is verified (V1 to V9), and text
+evidence is kept (the signing certificate's SHA-256, the IPA's SHA-256, the checks).
+
+**What G2S does not authorize.** Upload to App Store Connect, TestFlight distribution, tester assignment or any distribution of the IPA (the IPA is not
+uploaded or retained), App Review, public release, any other version, build, commit, bundle ID or team, a second run (condition 8), a temporary Admin-level
+credential, and any decision of D1, D2, D4, D5, X1 or X2. G2, G3, G4 and G5 are **not authorized**; this record's status stays `G1 AUTHORIZED`.
+
+**The CTO's conditions, and how they are met.**
+
+| # | Condition (comment of 2026-11-20) | Where it is met |
+|---|---|---|
+| 1 | The release-policy and release-record amendments are reviewed and merged into `development` | The pull request that merges this section |
+| 2 | All required G2S decisions are formally recorded | Section 4: D3, D6, D7, D8, D9, D10, D11, D12 and D14 are `Decided`, 2026-11-20; the gate refuses unless each is |
+| 3 | The authorization binds the approved source, version, workflow, gate, verification tools and native framework hash | The eleven G2S lines of section 6.1 (the blobs of the workflow, the gate and five tools; `G2S-DLC-WALLET-SHA256`); a later change to any of them invalidates the authorization |
+| 4 | Signing executes through the protected `ios-hosted-signing` environment | The `sign` job is the only job with an environment (IOS_HOSTED_SIGNING.md section 4); configuration verified below |
+| 5 | Any failed security or identity verification stops the operation | The workflow fails closed at every check; the native-library hash is compared **before** Xcode is selected and before any secret exists |
+| 6 | No upload or tester distribution | The workflow contains no upload operation (statically tested); the IPA is not an artifact; D9 |
+| 7 | Results, certificate identity, IPA hash and verification evidence are recorded | Section 7, filled by a reviewed pull request after the run |
+| 8 | Additional signing runs require separate authorization | **Not technically enforced**: there is no run counter. Kept by the operational controls below (consumption at credential use, a new CTO authorization for any further attempt, a deliberate and specific environment approval, removal of the three credentials from the environment and withdrawal of the G2S lines by a reviewed pull request); see "One operation" below and IOS_HOSTED_SIGNING.md sections 5.1 and 7 |
+
+**One operation: the limitation and its operational controls.** The CTO authorized **exactly one** hosted signing-and-verification operation. **The workflow does not
+technically enforce a one-time execution limit.** It has no run counter; neither the gate, the release record nor the GitHub environment marks the authorization as used; the gate
+keeps accepting the G2S lines of section 6.1, and the workflow can be started again, until the record is changed and the secrets are gone. The limit is therefore kept by the
+following controls, which are procedures, not mechanisms:
+
+1. **An attempt that reaches Apple credential use consumes the authorization**, whether or not signing succeeds. "Reaches credential use" means that the step "Export and
+   sign with the cloud-managed Distribution certificate (the only step with secrets)" of the `sign` job started, that is, the three secrets were read.
+2. **Any additional signing attempt requires explicit CTO authorization**: a new written decision on Issue #71 and a new reviewed record pull request that re-issues the G2S
+   lines (with blobs and the `dlc_wallet` hash recomputed). Nothing else, including a retry button, a repeated run or a reviewer's approval, is such an authorization.
+3. **A failure before Apple credentials are accessed is not a completed signing attempt**: a gate refusal, the tip check, a failed build, the archive validator, the
+   `dlc_wallet` hash comparison or any other check that stops the run before the secret step. It does not consume the authorization by itself, but **any subsequent
+   attempt still requires an explicit operator decision**: the person who starts runs (for this release, the CTO) decides, notes the decision on Issue #71 with the failed
+   run's ID and the cause that was understood, and only then dispatches again. A hash mismatch or a changed bound file is not retried until a reviewed record pull request
+   has authorized the new value or implementation (section 6.1).
+4. **The environment deployment approval must be deliberate and specific to the authorized operation.** The required reviewers confirm the deployment of one particular run.
+   Before approving, the approver checks that this run was started by the CTO for this authorization; that it is the first attempt (not a re-run of an earlier run, and no other
+   attempt is waiting); that its workflow commit is the tip of `development` and contains this record; that the inputs are the approved source, content reference and version
+   `1.0.4+1000035`; and that the `authorize` and `build` jobs succeeded with `authorized=true`. An unexpected or doubtful deployment is **rejected**, never approved "to see
+   what happens". The approval confirms a deployment only (D12); it does not authorize anything and does not replace the checks above.
+5. **After the signing attempt, whatever its result:** (a) remove the three Apple credentials (`APPLE_API_KEY_P8`, `APPLE_API_KEY_ID`, `APPLE_API_ISSUER_ID`) from the GitHub
+   environment `ios-hosted-signing` at once, because that is what actually stops a further run while the next step is reviewed; (b) withdraw the G2S authorization through a
+   reviewed pull request that sets the first line of section 6.1 to `G2S-STATUS: WITHDRAWN` (the gate then refuses). The results are recorded separately (section 7).
+6. **Removing the GitHub secrets does not revoke the Apple Developer API key.** The key stays valid in App Store Connect, and the CTO's own copies of the `.p8` file are
+   untouched, until the key is rotated or revoked there. Rotation and revocation remain available security controls and are **not** made mandatory by D14; they are a separate
+   decision, to be taken at once if anything about the attempt is in doubt.
+
+**Failed attempt and corrected workflow (authorization update of 2026-11-20).**
+
+| Item | Fact |
+|---|---|
+| Run | `44738600156`, `workflow_dispatch` from `development` at `5270380c1b379ae63967d0dbc1c3e72bc3fee2b9` (2026-11-20): https://github.com/CadenaBitcoin/signer_app/actions/runs/44738600156 |
+| Result | **FAILED** |
+| Authorization gate | **PASSED** |
+| Unsigned archive build | **PASSED** (archive SHA-256 `360746599adeccd28c6b72d79b4dd8a2b3c12e638733ca06af3375c493737163`) |
+| Archive validation | **PASSED** before and after extraction; the `dlc_wallet` SHA-256 equals the authorized `9a2d1d98ee4cf7aa608a161cff3d57aa380fec227876ab9c4b2b93f3f381fc13` (a fourth independent build) |
+| Failure | The unsigned-state check of the `sign` job: `codesign -dv` exits non-zero for an unsigned bundle and the step ran under `pipefail`, so a genuinely unsigned archive was refused ("The archived app is not unsigned."). The archive was unsigned (no `_CodeSignature`, no embedded profile, the same Mach-O state as the preflight archive) |
+| Apple credential-use step | **NOT REACHED**: skipped; no secret was read (the job log has no `APPLE_API` and no `exportArchive`) |
+| Apple signing | **NOT EXECUTED** |
+| App Store Connect upload | **NONE** |
+| G2S operation consumed | **NO**: a failure before Apple credential use is not a completed signing attempt (section 4.2, control 3) |
+| Credentials | The three environment secrets were removed afterwards: 0 environment, 0 repository and 0 organization secrets (read from GitHub on 2026-11-20) |
+| Corrective implementation | **PR #116** (merge commit `e83201c9011925d118d356fa911e7c0a37502131`): the unsigned-state check judges `codesign`'s text instead of its exit status; the Report step no longer fails on an absent optional file; the V9 privacy-manifest line no longer decides the step's exit status. No security check is weakened |
+| Workflow identity | `G2S-WORKFLOW-BLOB`: `2a0b4c3c07730c034bb4ac5fa7d859b3a5cf8f4a` (before) to `60945f9aeabc6c0a3dbeaee5de541879b641fd2c` (PR #116). The gate (`3807ee8a...`), the five bound tools, the application, the native library and `G2S-DLC-WALLET-SHA256` are unchanged. The previous workflow blob is **no longer authorized** |
+| CTO decision | "CTO Decision: G2S Workflow Correction and Authorization Update", Issue #71 comment `7046097307` (`CadenaWizard`, 2026-11-20T17:26:33Z, never edited): https://github.com/CadenaBitcoin/signer_app/issues/71#issuecomment-7046097307 |
+
+**This is a corrected attempt, not a second signing operation.** The CTO approved proceeding with a corrected attempt after a failure that stopped before Apple credential use.
+The original G2S authorization (comment `7038341975`) stays the authorization of the operation and of its nine decisions; the update of comment `7046097307` supplements it with the
+corrected workflow identity and replaces nothing else. The authorized scope is unchanged: **one** signing-and-verification operation, **no upload, no distribution**; it does not authorize an
+additional signing operation after Apple credential use. The CTO's conditions of that update, and where they are met:
+
+| # | Condition (comment of 2026-11-20, 17:26) | Where it is met |
+|---|---|---|
+| 1 | The updated workflow identity is recorded through a reviewed pull request merged into `development` | This record update |
+| 2 | The authorization gate accepts the updated release record | The gate's verdict on this record with the corrected workflow, gate and tools |
+| 3 | The protected `ios-hosted-signing` environment remains enforced | Reviewers `sziller` and `CadenaWizard`, administrator bypass disabled, deployment branch `development` only (read on 2026-11-20) |
+| 4 | No further change to the bound workflow, gate or verification tools without reauthorization | The G2S blob lines of section 6.1: any change makes the gate refuse |
+| 5 | No upload, TestFlight distribution or later gate is authorized | Unchanged: G2, G3, G4 and G5 are not authorized; the workflow has no upload operation |
+| 6 | The Apple credentials are restored only after the updated authorization is merged and verified | The owner re-creates the three environment secrets only after this record is merged on `development` and the gate has been re-checked against it |
+| 7 | The one-operation controls and the post-attempt credential-removal requirements remain in force | Section 4.2, "One operation" (controls 1 to 6), unchanged |
+
+**Second attempt: run 44800943301 (consumed; Authorization A withdrawn by PR #118).** The corrected workflow of PR #116 was dispatched by `sziller` from `development`
+at `78f77d0456cf85c4fefcdf60237d08cfec54d1d9` (the merge of PR #117, which made the CTO's update of comment `7046097307` effective) after the three credentials were restored
+(2026-11-20, 19:18 to 19:29 UTC); the deployment was approved by `CadenaWizard` (the required reviewer, the same person as the dispatcher, D12). Evidence read from the run's GitHub
+Actions record and from the evidence artifact (the downloaded copy equals the artifact file for file):
+
+| Item | Fact |
+|---|---|
+| Run | `44800943301`, attempt 1, `workflow_dispatch`: https://github.com/CadenaBitcoin/signer_app/actions/runs/44800943301 |
+| Authorized workflow revision | `78f77d0456cf85c4fefcdf60237d08cfec54d1d9` (the `development` tip; `workflow_blob` `60945f9aeabc6c0a3dbeaee5de541879b641fd2c`, the gate and the five tools as recorded in section 6.1) |
+| Result | **FAILED** |
+| Authorization gate | **PASSED** (job `authorize`); re-checked in the `sign` job before any secret was touched |
+| Unsigned archive build | **PASSED** (job `build`; no secret, no environment); archive tar SHA-256 `b20362280ba12e4fac0b789a36dc5d3e74a31533ce49888419e66c46f7f3c02c` |
+| Archive validation | **PASSED** before and after extraction (250 members, 0 symbolic links); bundle `com.app.cadenabitcoin`, `1.0.4`, `1000035`; archived app **not signed at all** |
+| Authorized `dlc_wallet` SHA-256 | **PASSED**: the archive's binary equals the authorized `9a2d1d98ee4cf7aa608a161cff3d57aa380fec227876ab9c4b2b93f3f381fc13` |
+| Xcode | 26.3 (17C529) selected |
+| Pre-signing environment | **VERIFIED** empty: `0 valid identities found`, `provisioning profiles installed: 0` |
+| Apple credential-use step | **REACHED**: "Export and sign with the cloud-managed Distribution certificate (the only step with secrets)" started and failed |
+| Xcode export | **FAILED**: `xcodebuild -exportArchive` exit **70** (`** EXPORT FAILED **`) |
+| Errors (verbatim) | `error: exportArchive Cloud signing permission error` (16 lines); `error: exportArchive No signing certificate "iOS Distribution" found` (15 lines); `error: exportArchive No profiles for 'com.app.cadenabitcoin' were found` (1 line) |
+| Distribution certificate | **Not available to the export** ("No signing certificate "iOS Distribution" found") |
+| Provisioning profile | **Not found** ("No profiles for 'com.app.cadenabitcoin' were found") |
+| Signed IPA | **NONE** (the run's artifacts are the build evidence, the unsigned archive and the signing evidence; no IPA; the workflow retains none) |
+| App Store Connect upload | **NONE** (the workflow has no upload operation) |
+| Signing certificate / IPA hashes (D8) | No signing certificate fingerprint or IPA hash was obtained or recorded; no signed IPA was produced. The D8 certificate fingerprint remains unrecorded. |
+| **G2S operation** | **CONSUMED** (control 1: the credential-use step started, so the authorization is consumed whether or not signing succeeds) |
+| Credentials | The key file was removed from the runner (`key_file_removed=yes`); afterwards the three environment secrets were deleted: GitHub reports 0 environment, 0 repository and 0 organization secrets visible to the repository (read on 2026-11-20) |
+| Evidence artifact | `ios-hosted-signing-evidence_44800943301-1` (also `ios-hosted-build-evidence_44800943301-1` and `ios-hosted-unsigned-archive_44800943301-1`); its `SHA256SUMS.txt` has SHA-256 `65af5138443c72a04a62341ff3046e1d1c56181392bb1db62c453d55833ab415` |
+
+**What the evidence shows, and what remains uncertain.** The failure is an Apple **cloud-signing permission error** raised by `xcodebuild -exportArchive`, followed by the absence of
+a Distribution certificate and of a profile for the bundle ID. The evidence does **not** establish the underlying cause. The workflow's diagnosis step found 16 lines of
+`Cloud signing permission error` and none of `forbidden`, `401`/`403`, `does not have permission`, `No Accounts` or `Failed to Use Accounts`; its own note says that the text
+alone does not prove a cause. In particular, **it is not established that the Developer role of the API key is the root cause**, and it is not established that the key was
+accepted or refused as such. Whether a cloud-managed Distribution certificate can be used by any role, whether an App Manager key would suffice, and what other requirement
+Apple's cloud signing has on the team or the key, are **unconfirmed**. No Apple-side setting was read or changed for this record, and the key was not rotated or revoked
+(control 6: removing the GitHub secrets does not revoke the Apple API key; that remains a separate decision of the CTO).
+
+**Authorization A withdrawn (the state when PR #118 was merged).** Because the operation was consumed, PR #118 set `G2S-STATUS` to `WITHDRAWN` in section 6.1 (control 5(b)). The gate then refused, so the workflow could not be started
+again on the strength of that record, and **at that time no signing operation was authorized.** The history is retained as it was: the original authorization (comment `7038341975`), the
+failed pre-credential attempt `44738600156` and its outcome (not consumed), the CTO's update (comment `7046097307`), PR #116, PR #117 and the nine decisions of section 4 are
+unchanged. The other G2S lines of section 6.1 kept their values as the record of what was authorized, and authorized nothing while the status was `WITHDRAWN`. Any further
+signing attempt required, as control 2 says, a **new explicit CTO authorization**: a new written decision on Issue #71 and a new reviewed record pull request that re-issues
+the G2S lines. That is **Authorization B** (section 4.3, CTO decision `7050074107`), a separate authorization and **not** a corrected attempt of the consumed operation of Authorization A.
+G1 stays authorized; G2, G3, G4 and G5 stay **not authorized** (section 6).
+
+**Next experiment: a proposal only, not an authorization.** The direction the CTO intends to consider is a **new App Store Connect team API key with the App Manager role**
+(a new dedicated key; the Developer-role key of D14 is not widened). The reasoning: the Developer-role key met a cloud-signing permission error, and the preference is **incremental
+privilege escalation** rather than issuing an Admin-level key at once. Whether the App Manager role can use cloud signing is **unverified**; **another failure is an explicitly
+accepted possibility**. This paragraph is a proposal: it does **not** authorize creating, storing or using that key, does not amend D14 (which accepts a Developer-role key),
+authorizes no signing operation and no use of any credential. Before any such attempt the CTO would decide, in a new written decision and a reviewed record pull request, the
+credential, its role, its accepted risks (the decision about a role above Developer amends D14 and is the CTO's), whether the bound workflow needs changes, and the new operation.
+**Update (2026-11-20):** the CTO has since decided this direction as **D15** and **Authorization B** (section 4.3); the paragraph above is kept as the history of the proposal.
+
+**Historical statement.** This authorization update became effective when PR #117 was merged into `development` (2026-11-20, merge commit `78f77d0456cf85c4fefcdf60237d08cfec54d1d9`). It governed run `44800943301` (section 4.2, "Second attempt"). That operation was **consumed**, and **Authorization A was withdrawn** through PR #118 (`G2S-STATUS: WITHDRAWN` at that time); the update authorizes nothing further, and merging the record that withdrew it enabled no signing operation. Authorization B (section 4.3) is separate and does not revive it.
+G1 remains authorized; G2, G3, G4 and G5 remain unauthorized.
+
+**Credential-free preflight (2026-11-20).** Run `44726071796`, `workflow_dispatch` from `development` (`02375314a50d0da52872bbab01921f58c82d3196`) with the approved inputs:
+https://github.com/CadenaBitcoin/signer_app/actions/runs/44726071796 . Result: success; the gate said `authorized=false`, the `sign` job was **skipped** (no
+deployment to the environment, no secret, nothing signed or uploaded). The unsigned archive (`Runner.xcarchive.tar`, SHA-256
+`6905272e54a679cec75fb3ed21fce0ba3cbcea46ba0670e3d8d6636aa0a48106`, 212,678,656 bytes) was downloaded and checked: source `42d358a4...`, version `1.0.4+1000035`, bundle
+ID `com.app.cadenabitcoin`, Rust library `203dcd7abe4187de0b756638a55f691b2d5c680b17d4fbfa7dda550ed703949b` (the pinned value); `tool/validate_handover_archive.py list` passed before extraction (250 members,
+0 symbolic links) and `tree` passed after extraction (249 entries); `Frameworks/dlc_wallet.framework/dlc_wallet` has SHA-256
+`9a2d1d98ee4cf7aa608a161cff3d57aa380fec227876ab9c4b2b93f3f381fc13`, equal to the value authorized in section 6.1 and identical in three independent builds on two runner images
+(15 of the 16 Mach-O binaries were identical in all of them; the Dart snapshot `App.framework/App` was not). **A later build is not assumed to reproduce it:**
+if it differs, the run stops before any secret is used and only a reviewed record pull request can authorize another binary.
+
+**The GitHub environment `ios-hosted-signing` (read from the GitHub API on 2026-11-20).** Required reviewers: `sziller` and `CadenaWizard`;
+administrator bypass **disabled**; `prevent_self_review` off; wait timer none; deployment branches: custom policy, exactly `development`; environment
+secrets **0**, environment variables 0, repository secrets 0, organization secrets 0. The three environment secrets of IOS_HOSTED_SIGNING.md section 3
+are created by the owner after this record is merged; no Apple credential is in GitHub today.
+
+**Deferred: not prerequisites of G2S, required before the gate shown.** The signed IPA never leaves the runner under G2S: nothing is sent to App Store
+Connect and nobody can install it.
+
+| Row | Why G2S does not need it | Required before |
+|---|---|---|
+| D1 (Issue #22) | The CTO accepted the residual risk for internal TestFlight on Issue #71 (comment `6833982603`, 2026-11-12); the row is still to be recorded as decided | G2 |
+| D2 (zero-value wallets) | No wallet material is involved in signing | G2 and every device test |
+| D4 (production App Store Connect record) | The build number is consumed only by an upload | G2 |
+| D5 (production gate) | It concerns the ledger and the upload; this run adds no ledger entry | G2 |
+| X1 (export compliance, App Privacy) | Asked at upload and processing | G2 (App Privacy also before G3 and G4) |
+| X2 (privacy manifest) | Apple evaluates it at upload processing; the technical evidence is complete (section 4, X2) | G2 (accept or fix); a fix changes frozen source and needs a new G1 before G4 or G5 |
+
+### 4.3 G2S Authorization B: one new hosted signing-and-verification operation with the App Manager key (WITHDRAWN: CONSUMED by run 44821325087)
+
+> **Current state.** This section is **Authorization B**, and everything in it except "Execution of Authorization B" is the **historical record** of what the CTO authorized and on which conditions. **Authorization B is consumed and withdrawn**:
+> run `44821325087` reached Apple credential use, so its one operation is consumed, and PR #120 set `G2S-STATUS` to `WITHDRAWN`. Present-tense statements in this section (for example "authorizes", "may be configured", "is authorized,
+> conditional") describe Authorization B **as authorized**, before the attempt; they do not describe the current status. **Authorization A also stays consumed and withdrawn.** **Authorization C** (section 4.4) was a separate, later authorization and has itself since been consumed and withdrawn;
+> **when Authorization C was withdrawn no G2S authorization was current; Authorization D (section 4.5) was authorized later and has itself since been consumed and withdrawn, so no G2S authorization is current**.
+
+**Authorizations A and B, kept apart.**
+
+| | Authorization A (historical) | Authorization B (historical) |
+|---|---|---|
+| CTO decisions | Original: Issue #71 comment `7038341975`; corrected workflow: comment `7046097307` | Issue #71 comment `7050074107` |
+| Credential decision | D14: dedicated **Developer**-role team key | D15: dedicated **App Manager**-role team key, Key ID `47PP4C673P` |
+| Workflow blob | `2a0b4c3c07730c034bb4ac5fa7d859b3a5cf8f4a`, then `60945f9aeabc6c0a3dbeaee5de541879b641fd2c` (PR #116) | `60945f9aeabc6c0a3dbeaee5de541879b641fd2c`, unchanged |
+| Runs | `44738600156` (failed before credential use; not consumed); `44800943301` (reached credential use, failed at the export; **CONSUMED**) | `44821325087` (reached credential use, failed at the export; **CONSUMED**) |
+| State | **CONSUMED, permanently; WITHDRAWN** by PR #118 (merge `3dd49937e80961dbcd5459762d30aabf5c07709d`) | **CONSUMED by run `44821325087`; WITHDRAWN** by the reviewed record pull request (PR #120) that set `G2S-STATUS` to `WITHDRAWN` (authorized, conditional, ONE operation, before the attempt) |
+| `G2S-AUTHORIZATION` (section 6.1) | `https://github.com/CadenaBitcoin/signer_app/issues/71#issuecomment-7038341975` | `https://github.com/CadenaBitcoin/signer_app/issues/71#issuecomment-7050074107` |
+
+Authorization A stays permanently consumed and is not reactivated. **Authorization B is independent of A**: it is not an extension, a continuation, a retry or a reactivation of A, and a run
+under it is not "the second attempt" of A. The distinction is kept by this record (this ledger and sections 0, 4.2, 6, 6.1 and 7), by the CTO's written decisions, by human review of the record pull request and of the deployment, by the run IDs and evidence artifacts
+(`ios-hosted-signing-evidence_<run>-<attempt>`) recorded in section 7 for each, and by the controlled registration of the credential (below). **It is not technically enforced** by the authorization gate (section 6.1), so this table is what a reader and the approver use.
+
+**The authorization.** The CTO's written decision "CTO Decision: G2S Authorization B: App Manager Signing Experiment" on Issue #71:
+https://github.com/CadenaBitcoin/signer_app/issues/71#issuecomment-7050074107
+(comment id `7050074107`, account `CadenaWizard`, created 2026-11-20T20:38:48Z, never edited). It is **APPROVED, conditional on a reviewed and merged release-record update**. It names
+the application (Cadena Bitcoin Signer App), `APPROVED_SHA` `42d358a4e7bcbf85b92aa992ec6439214dbd4405`, `CONTENT_REF` `862831e0b3a0f30c4155d2e086c69fc28bdab286`, version `1.0.4 (1000035)`,
+bundle ID `com.app.cadenabitcoin`, Apple Team ID `D65458CPDP`, API key `47PP4C673P` (App Manager), workflow blob `60945f9a...`, gate blob `3807ee8a...` and the native-library SHA-256
+`9a2d1d98ee4cf7aa608a161cff3d57aa380fec227876ab9c4b2b93f3f381fc13`; it requires the five bound tool identities to match this record and to be re-verified before execution; it introduces **D15**
+(section 4), explicitly accepts the risks listed there, and authorizes **one new** GitHub-hosted signing-and-verification operation: one archive export using Apple's cloud-managed Distribution signing,
+followed by the prescribed IPA verification. It does **not** authorize upload, TestFlight distribution, App Review submission or public release, changing the application source, or changing the signing infrastructure.
+G1 remains authorized; G2, G3, G4 and G5 remain unauthorized.
+
+**The operation Authorization B authorizes (exhaustive).** One run of `.github/workflows/ios-hosted-signing.yml`, started by hand from `development` for the approved source, content reference,
+version, bundle ID and team above, through the protected environment `ios-hosted-signing` (unchanged: required reviewers `sziller` and `CadenaWizard`, administrator bypass disabled, deployment branch
+`development` only), with the three environment secrets holding the key of D15. The rules of section 4.2 apply unchanged: one archive, one export, verification V1 to V9, text evidence, no upload, no retained IPA.
+
+**Single operation and controls (CTO decision, section 4).**
+
+1. **Exactly one new operation.** It is **consumed when Apple credential use begins** (the step "Export and sign with the cloud-managed Distribution certificate (the only step with secrets)" starts), regardless of
+   whether signing succeeds.
+2. **A failure before credential use** (the gate, the tip check, the build, the archive validator, the `dlc_wallet` hash comparison) does not consume it, but **another dispatch then needs a documented operator decision** on Issue #71 under
+   the existing policy (section 4.2, control 3). Nothing else is such an authorization, and a further attempt after consumption needs a new CTO decision and a new reviewed record pull request.
+3. **The environment stays mandatory** with its reviewers, branch restriction and disabled administrator bypass. The reviewers confirm the deployment only (D12); before approving, the approver checks the points of section 4.2, control 4,
+   and that this is the first run under Authorization B.
+4. **The private key may be configured as a GitHub environment secret only after** this record is merged into `development` **and the authorization gate has passed against the final `development` revision.** The three Apple secrets
+   must not be restored before that. This record's pull request must be the **final merge into `development` before execution** (the gate requires the workflow revision to be the `development` tip).
+5. **After the attempt, whatever its result:** all three Apple environment secrets are removed at once; the outcome is recorded (section 7); **Authorization B is withdrawn through a reviewed release-record pull request**
+   (`G2S-STATUS: WITHDRAWN`). Removing the secrets does not revoke the Apple key; neither key is revoked automatically (D15).
+
+**The CTO's conditions for effectiveness, and where they are met.**
+
+| # | Condition (comment `7050074107`) | Where it is met |
+|---|---|---|
+| 1 | The release record explicitly distinguishes Authorization A from Authorization B | This section, the ledger above, sections 0, 4.2, 6, 6.1 and 7 |
+| 2 | D15 records the accepted App Manager credential risks | Section 4, row D15 |
+| 3 | The new authorization reference identifies this CTO decision | `G2S-AUTHORIZATION` in section 6.1 names comment `7050074107` |
+| 4 | The workflow, gate, verification tools and approved native-library identities are verified | See "Implementation identity" below; the gate verifies the blobs again at every run |
+| 5 | The authorization gate accepts the revised record | The gate's verdict on this record, with the workflow, gate and tools of this checkout, is recorded in the pull request |
+| 6 | The revised record has been reviewed and merged into `development` | The pull request that merges this section; effective only from that merge |
+
+**Execution of Authorization B: run 44821325087 (consumed; Authorization B withdrawn).** Facts read from GitHub (the run, its jobs and steps, its artifacts and approvals) and from the evidence artifact, downloaded
+and checked against its own `SHA256SUMS.txt` (every file verified):
+
+| Item | Fact |
+|---|---|
+| Run | `44821325087`, attempt 1, `workflow_dispatch` by `sziller` from `development` at `f8ab48bdd464044d4df4688033604f0d8b9e267c` (the merge of PR #119), 2026-11-20T21:33:10Z to 21:45:30Z: https://github.com/CadenaBitcoin/signer_app/actions/runs/44821325087 |
+| Deployment | Approved by `CadenaWizard` (the required reviewer; the same person as the dispatcher, D12) |
+| Credential | The CTO states that the App Manager-role key `47PP4C673P` (D15) was used. **Not verifiable from the run**: the workflow and the gate bind neither the key ID nor its role, and the logs redact their values (section 4.3, "Known limitations") |
+| Result | **FAILED** |
+| Jobs | `authorize` **success**; `build` **success**; `sign` **failure** |
+| Authorization gate | **PASSED**, and re-checked in the `sign` job (step 4) before any secret was touched |
+| Unsigned archive build | **PASSED**; archive tar SHA-256 `4663954e595711f2dedd6d5f21754efa71286027fdddbd74be4a0893857b2e0f` (the tar differs from run `44800943301`'s, `b2036228...`; the `dlc_wallet` binary does not) |
+| Archive validation | **PASSED** before and after extraction (250 members, 0 symbolic links); bundle `com.app.cadenabitcoin`, `1.0.4`, `1000035`; archived app "not signed at all" |
+| Authorized `dlc_wallet` SHA-256 | **PASSED**: equals `9a2d1d98ee4cf7aa608a161cff3d57aa380fec227876ab9c4b2b93f3f381fc13`; Rust library `203dcd7a...` equals the pinned value |
+| Pre-signing environment | Xcode 26.3 (17C529); `0 valid identities found`, `provisioning profiles installed: 0` |
+| Apple credential-use step | **REACHED**: step 13, "Export and sign with the cloud-managed Distribution certificate (the only step with secrets)", ran and **failed** |
+| Xcode export | `xcodebuild -exportArchive` exit **70** (`** EXPORT FAILED **`, 1 line) |
+| Diagnostic counts (`export-diagnosis.txt`) | `Cloud signing permission error` **16**; `No signing certificate "iOS Distribution" found` **15**; `No profiles for 'com.app.cadenabitcoin' were found` **1**; `forbidden`, `401`/`403`, `does not have permission`, `No Accounts`, `Failed to Use Accounts`, `ITMS-`: **0** each |
+| Signed IPA | **NONE**: the verification steps V1 to V9 and the IPA digest (steps 15 to 21) were **skipped**; the run's artifacts are text evidence, build evidence and the unsigned archive; no `.ipa` exists in any of them |
+| App Store Connect upload / distribution | **NONE**: the workflow has no upload operation (`destination` is `export`; its only upload steps publish GitHub artifacts) |
+| Signing certificate / IPA hashes (D8) | No signing certificate fingerprint or IPA hash was obtained or recorded; no signed IPA was produced. The D8 certificate fingerprint remains unrecorded |
+| Key file | Removed from the runner (`key_file_removed=yes`, step 14) |
+| Credentials | The CTO removed all three environment secrets afterwards; GitHub reports 0 environment, 0 repository and 0 organization secrets visible to the repository (read on 2026-11-20). The CTO reports the locally stored Apple API keys unchanged; this record revokes nothing (revocation of either key remains a separate decision, D14, D15) |
+| Evidence artifacts | `ios-hosted-signing-evidence_44821325087-1` (text; `SHA256SUMS.txt` SHA-256 `156893e442945a8a71383b162f0241b1f3d0cd3b40f728cb108eb83c45e93058`; `export.log` `5a97aa6455020c287afb6cc7c6ae65a05096ade858309e4413918f77bda10be4`), `ios-hosted-build-evidence_44821325087-1`, `ios-hosted-unsigned-archive_44821325087-1` (one day). GitHub keeps the evidence artifact until 2026-12-20 |
+| **G2S Authorization B** | **CONSUMED** (control 1: the credential-use step started), **WITHDRAWN** by PR #120 |
+
+**Authorization A and Authorization B compared (evidence, not proof).** The two experiments used different credentials (Developer role, D14; App Manager role, D15) with the same source, workflow, gate, tools and native library, and ended alike:
+
+| Compared | Run `44800943301` (A, Developer) | Run `44821325087` (B, App Manager) |
+|---|---|---|
+| Stage reached | credential use, export step | credential use, export step |
+| Export exit | 70 | 70 |
+| `Cloud signing permission error` / `No signing certificate "iOS Distribution" found` / `No profiles for 'com.app.cadenabitcoin' were found` | 16 / 15 / 1 | 16 / 15 / 1 |
+| `export-diagnosis.txt` (SHA-256 `12ee043a...`), `export-result.txt`, `signing-material-before.txt`, `archive-codesign-state.txt`, `dlc-wallet-hash.txt`, `key-removed.txt` | identical | identical |
+| `export.log` | `99c6ab10...` | `5a97aa64...`: differs from A's only in the timestamp and bundle path of line 1 and in the order of the last two error lines (the certificate line and the profile line) |
+| Signed IPA / upload | none / none | none / none |
+
+**What this shows, and what it does not.** The two failures **match**: the same error messages in the same counts, from two different roles of key. That is **evidence** and **not proof**. It does **not** establish the root cause, and in particular it does **not**
+establish that the key's role (Developer or App Manager) caused either failure, or that it did not: the wording of "permission" in an Apple error does not name a role. The evidence does not show whether the key was accepted or refused by Apple, which requirement of Apple's cloud
+signing was unmet (a team, account or key setting, the key type, the export method, or something else), or whether any App Store Connect API key can satisfy it. No Apple-side setting was read or changed for this record. The workflow's diagnostic line "The Developer role of the key is a
+candidate cause…" is the stale wording documented above and decides nothing. **No further experiment was proposed or authorized by the record of PR #120** (Authorization C, section 4.4, was authorized later by a separate CTO decision); a credential of any other role, or any other route, is a separate decision of the CTO (D15 stated that no Admin-level or Account Holder
+credential was authorized **for Authorization B**; that restriction applied to B only, and the Admin credential of Authorization C is separately authorized by D16, section 4.4), and any further signing attempt needs a **new explicit CTO authorization** and a new reviewed record pull request (section 4.2, control 2).
+
+**Authorization B withdrawn (the state when PR #120 was merged).** Because the operation was consumed, PR #120 set `G2S-STATUS` to `WITHDRAWN` in section 6.1 (control 5 of this section). The gate then refused. **At that time no G2S authorization was current**: Authorization A stayed consumed and withdrawn, and Authorization B was consumed and
+withdrawn. The history is retained: both CTO authorizations (comments `7038341975`, `7046097307` for A; `7050074107` for B), the failed pre-credential attempt `44738600156`, run `44800943301`, run `44821325087`, PRs #116 to #119, D14 and D15 are unchanged. G1 stays authorized; G2, G3, G4 and G5 stay **not authorized**.
+
+**Implementation identity (verified for Authorization B; nothing is changed).** Verified on 2026-11-20 against `development` at `3dd49937e80961dbcd5459762d30aabf5c07709d`, independently with `git hash-object` and with
+`bash tool/check_signing_authorization.sh --print-expected --tools-root .`: workflow `60945f9aeabc6c0a3dbeaee5de541879b641fd2c`, gate `3807ee8a1b8caf4ce5f22a6f2540c0658aba90b6`, and the five tools
+(`tool/build_manifest.py` `6e6c153e...`, `tool/ipa_inspect.py` `af7ced43...`, `tool/validate_handover_archive.py` `ef4ce2c6...`, `tool/verify_artifact.sh` `99074f4b...`, `tool/verify_ipa.py` `6ee2b9d7...`; full values in
+section 6.1). They are the same files as under the corrected Authorization A (the workflow of PR #116): this record changes no workflow, gate, tool, application or native-library file. The native library's
+`dlc_wallet` SHA-256 `9a2d1d98...` was equal in every archive built so far, including run `44800943301`'s; **a later build is not assumed to reproduce it**: if it differs, the run stops before any secret is used.
+
+**Known limitations, recorded rather than fixed (the workflow is not modified).**
+
+- **Stale diagnostic wording.** The workflow's diagnosis step prints "The Developer role of the key is a candidate cause if a permission or 401/403 pattern matches; the text alone does not prove it.", and a comment of the
+  workflow says the run tests whether the Developer role suffices. Under Authorization B the key's role is App Manager: that wording is **informational and stale**. It decides nothing, and the text never proves a cause. In the
+  evidence of a run under Authorization B it is to be read as "the role of the key".
+- **The key is not machine-bound.** The gate and the workflow bind neither the API key ID nor its role: they read three secrets by name (`APPLE_API_KEY_P8`, `APPLE_API_KEY_ID`, `APPLE_API_ISSUER_ID`), and the logs redact the values.
+  Nothing in a run proves that the secrets hold key `47PP4C673P`. That is a procedural control: the CTO loads exactly that key (D15), and no other credential, after the conditions above are met.
+- **Capability unverified.** Whether an App Manager key can use Apple's cloud-managed Distribution signing is unconfirmed (D15, D7). The record does not assume it suffices; a failure is a result of the experiment, not a defect, and
+  would consume the operation.
+- **The D8 certificate fingerprint is still unrecorded**; if signing succeeds, it is only discovered in this run (`pin_source=DISCOVERED`) and is recorded in section 7 by the coordinator.
+
+**Not authorized.** Upload to App Store Connect, TestFlight distribution, tester assignment, App Review, public release; any second operation under B; any Admin-level or Account Holder credential **for Authorization B** (the original restriction of B, preserved here as historical; Authorization C is separately authorized by D16, section 4.4); any change of the source,
+the workflow, the gate or the bound tools; G2, G3, G4 and G5.
+
+### 4.4 G2S Authorization C: one new hosted signing-and-verification operation with the Admin key (WITHDRAWN: CONSUMED by run 44834801248)
+
+> **Current state.** This section is **Authorization C**, and everything in it except "Execution of Authorization C" is the **historical record** of what the CTO authorized and on which conditions. **Authorization C is consumed and withdrawn**:
+> run `44834801248` reached Apple credential use, so its one operation is consumed, and **PR #122** (merged 2026-11-20) withdrew it by setting `G2S-STATUS` to `WITHDRAWN`. Section 6.1 of the current record now represents Authorization D (section 4.5); the historical authorization and its outcome are unchanged. Present-tense statements in this section (for example "authorizes", "may be registered", "is authorized,
+> conditional") describe Authorization C **as authorized**, before the attempt; they do not describe the current status. **Authorizations A and B also stay consumed and withdrawn. Authorization C was followed by Authorization D (section 4.5), which has itself been consumed and withdrawn; no G2S authorization is current.** The lines of Authorization C no longer stand in section 6.1 (it holds the withdrawn lines of Authorization D); they are kept in this section, in the
+> table of section 4.5 and in this file's Git history.
+
+**Authorizations A, B and C, kept apart.**
+
+| | Authorization A (historical) | Authorization B (historical) | Authorization C (historical) |
 |---|---|---|---|
-| Issue #22 for this release (IOS_RELEASE.md section 11). #22 stays open. The deterministic-nonce helper is removed from the source interfaces (PR #97) but remains in the precompiled library; no identified call path | TBD | TBD | TBD |
-| **Proposed:** retain the existing native Rust binary for the 1.0.4 TestFlight candidate; no rebuild. **Requires the CTO's explicit approval before G2 is requested**; the independent authorizer accepts or rejects it at G2 | TBD | TBD | TBD |
-| Production App Store Connect record used for the first TestFlight delivery (IOS_SIGNING.md section 2 item 1 names a staging record) | TBD | TBD | TBD |
-| Mac-local signing instead of a protected CI environment (policy section 2.1) | TBD | TBD | TBD |
-| `gate --channel production` read as applicable to iOS only (IOS_RELEASE.md section 4) | TBD | TBD | TBD |
-| Push entitlement and `remote-notification` mode | TBD | TBD | TBD |
-| Export-compliance and App Privacy answers (owner and legal) | TBD | TBD | TBD |
-| Privacy-manifest finding | TBD | TBD | TBD |
-| Xcode other than 26.3 (17C529), if any | none | TBD | TBD |
-| Existing production App Store Connect record used for the first internal TestFlight delivery, instead of the staging record of IOS_SIGNING.md section 2 (one-release exception; no policy change) | TBD | TBD | TBD |
+| CTO decisions | Original: Issue #71 comment `7038341975`; corrected workflow: comment `7046097307` | Comment `7050074107` | Comment `7052148143` |
+| Credential decision | D14: dedicated **Developer**-role team key | D15: dedicated **App Manager**-role team key, Key ID `47PP4C673P` | D16: dedicated **Admin**-role team key, Key ID `9Y3NM5CN5B` |
+| Workflow blob | `2a0b4c3c...`, then `60945f9aeabc6c0a3dbeaee5de541879b641fd2c` (PR #116) | `60945f9aeabc6c0a3dbeaee5de541879b641fd2c` | `60945f9aeabc6c0a3dbeaee5de541879b641fd2c`, unchanged |
+| Runs | `44738600156` (failed before credential use; not consumed); `44800943301` (reached credential use, failed at the export) | `44821325087` (reached credential use, failed at the export) | `44834801248` (reached credential use; **Apple signing succeeded**; the workflow failed at V7/V8 verification; **CONSUMED**) |
+| Result | export exit 70; `Cloud signing permission error` 16, `No signing certificate "iOS Distribution" found` 15, `No profiles for 'com.app.cadenabitcoin' were found` 1; no signed IPA, no upload | the same counts; no signed IPA, no upload | `xcodebuild -exportArchive` exit 0 (`EXPORT SUCCEEDED`); a signed IPA was produced and **not retained**; V1 to V6 passed; V7/V8 failed (29 passed, 21 failed, 1 warning; unresolved); V9 not run; no upload |
+| Evidence artifact / `SHA256SUMS.txt` SHA-256 | `ios-hosted-signing-evidence_44800943301-1` / `65af5138443c72a04a62341ff3046e1d1c56181392bb1db62c453d55833ab415` | `ios-hosted-signing-evidence_44821325087-1` / `156893e442945a8a71383b162f0241b1f3d0cd3b40f728cb108eb83c45e93058` | `ios-hosted-signing-evidence_44834801248-1` / `393c412e0f7f6c5cda8a508505520e9a658af6ed1e4a389e2681ec948fb9bb69` |
+| State | **CONSUMED, permanently; WITHDRAWN** (PR #118) | **CONSUMED, permanently; WITHDRAWN** (PR #120) | **CONSUMED by run `44834801248`; WITHDRAWN** by PR #122, which set `G2S-STATUS` to `WITHDRAWN` (authorized, conditional, ONE operation, before the attempt) |
+| `G2S-AUTHORIZATION` (section 6.1) | `https://github.com/CadenaBitcoin/signer_app/issues/71#issuecomment-7038341975` | `https://github.com/CadenaBitcoin/signer_app/issues/71#issuecomment-7050074107` | `https://github.com/CadenaBitcoin/signer_app/issues/71#issuecomment-7052148143` |
+
+Authorizations A and B stay permanently consumed and are not reactivated. **Authorization C is independent of both**: it is not an extension, a continuation, a retry or a reactivation of either, and a run under it is not "the next attempt" of
+either. The distinction is kept by this record (this ledger and sections 0, 4.2, 4.3, 6, 6.1 and 7), by the CTO's written decisions, by human review of the record pull request and of the deployment, by the run IDs and evidence artifacts
+(`ios-hosted-signing-evidence_<run>-<attempt>`) recorded in section 7 for each, and by the controlled registration of the credential (below). **It is not technically enforced** by the authorization gate (section 6.1).
+
+**The authorization.** The CTO's written decision "CTO Decision: G2S Authorization C: Admin Signing Experiment" on Issue #71:
+https://github.com/CadenaBitcoin/signer_app/issues/71#issuecomment-7052148143
+(comment id `7052148143`, account `CadenaWizard`, created 2026-11-20T22:28:09Z, never edited). It is **APPROVED, conditional on a reviewed and merged release-record update**. It records the two completed experiments (A, Developer role; B, App Manager role), both of
+which built the unsigned application and failed during `xcodebuild -exportArchive` with identical diagnostic counts and produced no signed IPA, and states that **the matching errors do not establish that the API key's role caused either failure**. It introduces **D16**
+(section 4), explicitly accepts the elevated risks of an Admin-role Team API key listed there, and names the application (Cadena Bitcoin Signer App), `APPROVED_SHA` `42d358a4e7bcbf85b92aa992ec6439214dbd4405`, `CONTENT_REF` `862831e0b3a0f30c4155d2e086c69fc28bdab286`,
+version `1.0.4 (1000035)`, bundle ID `com.app.cadenabitcoin`, Apple Team ID `D65458CPDP`, API key `9Y3NM5CN5B` (Admin), workflow blob `60945f9a...`, authorization gate blob `3807ee8a...` and the native-library SHA-256
+`9a2d1d98ee4cf7aa608a161cff3d57aa380fec227876ab9c4b2b93f3f381fc13`. It requires the five bound tool identities to be independently reverified before execution, and authorizes **one new GitHub-hosted signing-and-verification operation**: one unsigned archive build,
+one export attempt using Apple's cloud-managed Distribution signing, verification of the resulting IPA if signing succeeds, and preservation of the prescribed evidence. It does **not** authorize upload, TestFlight distribution, App Review submission or public release,
+a second operation, or any change of the application source, the workflow or the verification tools. G1 remains authorized; G2, G3, G4 and G5 remain unauthorized.
+
+**The operation Authorization C authorizes (exhaustive).** One run of `.github/workflows/ios-hosted-signing.yml`, started by hand from `development` for the approved source, content reference, version, bundle ID and team above, through the protected
+environment `ios-hosted-signing` (unchanged: required reviewers `sziller` and `CadenaWizard`, administrator bypass disabled, deployment branch `development` only), with the three environment secrets holding the key of D16. The rules of section 4.2 apply
+unchanged: one archive, one export, verification V1 to V9 if signing succeeds, text evidence, no upload, no retained IPA.
+
+**Single operation and controls (CTO decision, section 4).**
+
+1. **Exactly one new operation.** It is **consumed when Apple credential use begins** (the step "Export and sign with the cloud-managed Distribution certificate (the only step with secrets)" starts), regardless of whether signing succeeds. No additional
+   signing operation is authorized by this decision.
+2. **A failure before credential use** (the gate, the tip check, the build, the archive validator, the `dlc_wallet` hash comparison) does not consume it, but **another dispatch then needs a documented operator decision** on Issue #71 under the existing policy
+   (section 4.2, control 3). A further attempt after consumption needs a new CTO decision and a new reviewed record pull request.
+3. **The environment stays mandatory** with its reviewers, branch restriction and disabled administrator bypass. The reviewers confirm the deployment only (D12); before approving, the approver checks the points of section 4.2, control 4, and that this is the
+   first run under Authorization C.
+4. **The Admin credential may be registered as GitHub environment secrets only after** this record is merged into `development` **and the authorization gate has passed against the final `development` revision.** The three Apple secrets must not be registered
+   before that. This record's pull request must be the **final merge into `development` before execution** (the gate requires the workflow revision to be the `development` tip).
+5. **After the attempt, whatever its result:** (a) remove all three GitHub environment secrets **immediately**; (b) preserve and verify the available evidence; (c) document the outcome (section 7); (d) **withdraw Authorization C through a reviewed
+   release-record pull request** (`G2S-STATUS: WITHDRAWN`). Removing the secrets does not revoke the Apple key; **revocation of the Admin key is a separate explicit CTO decision**, and no indefinite GitHub credential storage is authorized (D16).
+6. **If the Admin experiment produces the same Apple signing failure**, further privilege escalation is **not authorized** by this decision. The next action is **investigation of Apple's account-level signing configuration or engagement with Apple Developer Support**,
+   under a new CTO decision for anything that needs authorization. This authorization permits no further experiment if Authorization C also fails.
+
+**The CTO's conditions for effectiveness, and where they are met.**
+
+| # | Condition (comment `7052148143`) | Where it is met |
+|---|---|---|
+| 1 | The release record permanently preserves Authorizations A and B as consumed and withdrawn | The ledger above; sections 4.2, 4.3, 6 and 7 keep their history and evidence unchanged |
+| 2 | D16 documents the Admin credential and accepted security risks | Section 4, row D16 |
+| 3 | The new `G2S-AUTHORIZATION` references this CTO decision | `G2S-AUTHORIZATION` in section 6.1 names comment `7052148143` |
+| 4 | The workflow, gate, verification tools and native-library identities are reverified | See "Implementation identity" below; the gate verifies the blobs again at every run |
+| 5 | The authorization gate accepts the proposed record | The gate's verdict on this record, with the workflow, gate and tools of this checkout, is recorded in the pull request |
+| 6 | The release-record pull request is reviewed and merged into `development` | The pull request that merges this section; effective only from that merge, and it is the final merge before execution |
+
+**Execution of Authorization C: run 44834801248 (consumed; Authorization C withdrawn).** Facts read from GitHub (the run, its jobs and steps, its artifacts and approvals) and from the evidence artifact, downloaded and checked against its own `SHA256SUMS.txt`
+(every file verified; a fresh download equals the preserved local copy file for file). **The GitHub Actions workflow failed, but Apple signing succeeded; this is not an Apple signing failure.**
+
+| Item | Fact |
+|---|---|
+| Run | `44834801248`, attempt 1, `workflow_dispatch` by `sziller` from `development` at `ee440fbc16f5c097510be1fd2cb0932e55b0ec6a` (the merge of PR #121), 2026-11-20T23:10:27Z to 23:18:16Z: https://github.com/CadenaBitcoin/signer_app/actions/runs/44834801248 |
+| Deployment | Approved by `CadenaWizard` (the required reviewer; the same person as the dispatcher, D12) |
+| Credential | The CTO states that the Admin-role key `9Y3NM5CN5B` (D16) was used. **Not verifiable from the run**: the workflow and the gate bind neither the key ID nor its role, and the logs redact their values (section 4.4, "Known limitations") |
+| Result | **FAILED** (the workflow's conclusion), at step 19, the repository IPA verifier (V7/V8) |
+| Jobs | `authorize` **success**; `build` **success**; `sign` **failure** |
+| Authorization gate | **PASSED**, and re-checked in the `sign` job (step 4) before any secret was touched |
+| Unsigned archive build | **PASSED**; archive tar SHA-256 `13446eaacec1f0ad7a824072129d5d1192e6d832d53edc1db23c09c8d5d5ecc9` (the tar differs per run; the `dlc_wallet` binary does not) |
+| Archive validation | **PASSED** before and after extraction (250 members, 0 symbolic links); bundle `com.app.cadenabitcoin`, `1.0.4`, `1000035`; archived app "not signed at all" |
+| Authorized `dlc_wallet` SHA-256 | **PASSED**: equals `9a2d1d98ee4cf7aa608a161cff3d57aa380fec227876ab9c4b2b93f3f381fc13` |
+| Pre-signing environment | Xcode 26.3 (17C529); `0 valid identities found`, `provisioning profiles installed: 0` |
+| Apple credential-use step | **REACHED**: step 13, "Export and sign with the cloud-managed Distribution certificate (the only step with secrets)", ran and **succeeded** |
+| Xcode export | `xcodebuild -exportArchive` exit **0** (`** EXPORT SUCCEEDED **`); export options `method app-store-connect`, `destination export`, `signingStyle automatic`, `teamID D65458CPDP`, `manageAppVersionAndBuildNumber 0` |
+| Signed IPA | **PRODUCED**: 22,693,541 bytes, SHA-256 `4999d0fb8da454ed1d7063a9ad2d9dd8feda4dcc942ea028e32c4fa7b856b1cc`. **NOT RETAINED** (D9): it stayed on the runner, which is gone; the run's artifacts are text evidence, build evidence and the unsigned archive, and none contains an `.ipa` |
+| Verification steps | V1 (identity) **PASSED**; V2 (`codesign` verification: "valid on disk", "satisfies its Designated Requirement") **PASSED**; V3 (certificate extraction and cross-check) **PASSED**; V4 (embedded profile) **PASSED**; V5 (entitlements) **PASSED**; V6 (environment) **PASSED**; **V7/V8 (repository IPA verifier) FAILED**; V9 and the IPA digest re-check were **NOT EXECUTED** (steps 20 and 21 skipped) |
+| Evidence and report | Steps 22 to 24 ran: the text evidence was sealed, reported and uploaded |
+| App Store Connect upload / distribution | **NONE**: the workflow has no upload operation (`destination` is `export`; its only upload steps publish GitHub artifacts) |
+| Key file | Removed from the runner (`key_file_removed=yes`, step 14) |
+| Credentials | The CTO removed all three environment secrets afterwards; GitHub reports 0 environment, 0 repository and 0 organization secrets visible to the repository (read on 2026-11-20). The CTO states that the locally stored Admin key has **not** been revoked; revocation of any key remains a separate CTO decision (D16) |
+| Evidence artifacts | `ios-hosted-signing-evidence_44834801248-1` (text, 72,557 bytes; `SHA256SUMS.txt` SHA-256 `393c412e0f7f6c5cda8a508505520e9a658af6ed1e4a389e2681ec948fb9bb69`), `ios-hosted-build-evidence_44834801248-1`, `ios-hosted-unsigned-archive_44834801248-1` (one day: GitHub expires it on 2026-11-21T23:13Z). GitHub keeps the evidence artifact until 2026-12-20; a copy is kept outside the repository by the CTO's procedure |
+| Key evidence files (SHA-256) | `v7-ipa-verify-output.txt` `b5b621b275f52c28a6e5e2943bdefa4d02bf291e2c71086fb82c355f872c2826`; `Packaging.log` `9748b5051cab9405d4cc966e04eb6a3a3a75317573028c4ab7491ea61a78ec63`; `DistributionSummary.txt` `e024d58b86fb4779cdfc6e535d94b8e31cbeddf80bba576bb24e271e30d8ed96`; `signer.pem` (the PUBLIC certificate) `347b91be045f335157a6c3357e9a2b455abb354cad9a90d94e0f7d13b405a4c8`; `export.log` `3af4644b043783f66941ea7f1d9bf429eaa204ea1c2ff5c313c0fe444f4f0b0f`; `export-result.txt` `c41c90d198d40d83a2986827d49543d0ccf385dfcc54b6c496ca329364bd2bc4` |
+| **G2S Authorization C** | **CONSUMED** (control 1: the credential-use step started), **WITHDRAWN** by PR #122 |
+
+**Signing certificate discovered from the signed IPA (D8).** The evidence artifact's `v3-certificate-output.txt`, `v3-openssl-cert.txt`, `v3-codesign-identity.txt` and `DistributionSummary.txt` give:
+
+| Property | Value |
+|---|---|
+| Certificate type | Cloud Managed Apple Distribution (`DistributionSummary.txt`) |
+| Subject | `Apple Distribution: Cadena Bitcoin S.A. de C.V. (D65458CPDP)` |
+| Team ID | `D65458CPDP` |
+| Serial | `6E0B1FC31A51B362A9FC9378161167D6` |
+| Valid | from 2026-07-09T14:51:09Z until 2027-07-09T14:51:08Z |
+| Issuer | Apple Worldwide Developer Relations Certification Authority (G3) |
+| SHA-256 | `7ee3f6ce78eea83748e198102f6ab66527c626296baaea437c3a90db81ef418e` |
+| SHA-1 | `cd121c430bfeb3c650d3de75a6bb2bdd04a5d6f3` |
+| Embedded profile | "iOS Team Store Provisioning Profile: com.app.cadenabitcoin", type app-store, no device list, `get-task-allow` false, expires 2027-07-09T14:51:08Z |
+| Carried by | all 16 signed executables of the IPA; the embedded profile lists this certificate |
+
+This fingerprint is **DISCOVERED, not approved**: it was read from the artifact it would later judge (`pin_source=DISCOVERED`), so by D8's own terms it is circular and is evidence only. **It is not an approved signing identity and not a pin.** The chain to an Apple root and the revocation status were
+**not** verified (the workflow ran without trust anchors and with no OCSP/CRL lookup). Converting it into a pin needs the release coordinator's recording and an independent source (trust anchors, the profile, the Apple account), as IOS_RELEASE.md V3 says. The certificate's `notBefore` date (2026-07-09) is earlier than
+every run of this release, so it was not created by run `44834801248` (read from the X.509 dates); the log shows only certificate lookups and signing requests, but whether this run created or changed any other Apple-side object (for example the profile, D7's accepted risk) is **not established** and no Apple-side setting was read or changed for this record.
+
+**V7/V8 verification findings (UNRESOLVED).** The repository verifier (`tool/verify_ipa.py`, `v7-ipa-verify-output.txt`) reported **29 checks passed, 21 failed and 1 warning**. The 21 failures are: (1) **16** "CMS signature is unreadable: Invalid file" (the main executable and 15 nested executables, including
+`Frameworks/libswift_Concurrency.dylib`); (2) the main executable's DER entitlements "unreadable: unsupported DER entitlements version or layout"; (3) "the main executable has no embedded entitlements" (the verifier's report); (4) `Frameworks/libswift_Concurrency.dylib`: "the CodeDirectory seals Info.plist, which is absent" (reported twice); (5) V8: "files that differ from the unsigned build: Info.plist".
+The one warning is that `Info.plist` has no `ITSAppUsesNonExemptEncryption`. The checks that passed include the container, bundle ID, version and build number, the embedded profile (CMS signature, platform, type, Team ID, App ID, validity), `CodeResources` of every nested bundle and of the outer bundle, and "no file of the unsigned build is missing from the IPA". These failures are **why the workflow failed**.
+Apple's own `codesign` verification (V2) passed, the certificate was extracted and cross-checked (V3), and the provisioning-profile checks (V4) passed. **V9 and the final IPA digest re-check were not executed.** The IPA was not uploaded or distributed and was not retained.
+
+**Interpretation, and what is not established.** The failures are **consistent with** possible incompatibilities between the repository verifier and the output of Apple's cloud-managed signing, and the repository's own IOS_HOSTED_SIGNING.md recorded before any run that V7 and V8 had never seen a real Apple-signed IPA and might reject a legitimate one. **The root causes are not established.**
+An investigation lead only, not a conclusion: "Invalid file" is the default message of Python's `plistlib.InvalidFileException`, and by reading the code the only plist parse on the CMS path is the one of Apple's `cdhashes` signed attribute in `tool/ipa_inspect.py` (no traceback was captured, and the exact cause is unconfirmed). Accordingly this record does **not** declare the IPA invalid because V7/V8 failed,
+does **not** declare it release-ready because `codesign` passed, does **not** classify the verification failures as harmless, and does **not** recommend disabling any verification check. **The V7/V8 failures are recorded as unresolved findings that require investigation.** The verifier is not repaired in this record.
+Nothing here authorizes an upload, a distribution or a further signing operation, and a signed IPA that is not retained cannot be re-examined.
+
+**The three experiments.**
+
+| Authorization | API key role | Apple signing | Workflow outcome |
+|---|---|---|---|
+| A (`44800943301`) | Developer | **Failed** (export exit 70) | Failed at the export step |
+| B (`44821325087`) | App Manager | **Failed** (export exit 70, the same messages and counts as A) | Failed at the export step |
+| C (`44834801248`) | Admin | **Succeeded** (export exit 0; signed IPA produced, not retained) | Failed at the V7/V8 verification step |
+
+The workflow, gate, bound tools, source and native library were the same in all three, and seven evidence files are byte-identical across them (`archive-codesign-state`, `archive-validate-list`, `archive-validate-tree`, `dlc-wallet-hash`, `key-removed`, `signing-material-before`, `xcode`). The evidence supports the **Admin role as a plausible explanation** of the difference between A and B on one side and C on the other.
+It does **not** prove causation: the key is not machine-bound, so a run cannot show which key it used; Apple-side state could have changed between runs; and there are three observations only.
+
+**Authorization C withdrawn.** Because the operation was consumed, **PR #122** set `G2S-STATUS` to `WITHDRAWN` in section 6.1 (control 5 of this section), and the gate then refused. Section 6.1 of the current record now represents Authorization D (section 4.5); the outcome and the history of Authorization C are unchanged. **Authorizations A, B and C are all consumed and withdrawn, and at that point no further signing operation was authorized (Authorization D, section 4.5, was authorized later).** The history is retained: all three CTO authorizations (comments `7038341975`, `7046097307` for A; `7050074107` for B; `7052148143` for C),
+the failed pre-credential attempt `44738600156`, runs `44800943301`, `44821325087` and `44834801248`, PRs #116 to #121, D14, D15 and D16 are unchanged. G1 stays authorized; G2 and G3 stay pending, and G4 and G5 stay **not authorized**.
+
+**Implementation identity (verified for Authorization C; nothing is changed).** Verified on 2026-11-20 against `development` at `dbdfe7aa7fe1e249fb8ab9e99c9866ab14ff2bd4`, independently with `git hash-object` and with
+`bash tool/check_signing_authorization.sh --print-expected --tools-root .`: workflow `60945f9aeabc6c0a3dbeaee5de541879b641fd2c`, gate `3807ee8a1b8caf4ce5f22a6f2540c0658aba90b6`, and the five tools
+(`tool/build_manifest.py` `6e6c153e...`, `tool/ipa_inspect.py` `af7ced43...`, `tool/validate_handover_archive.py` `ef4ce2c6...`, `tool/verify_artifact.sh` `99074f4b...`, `tool/verify_ipa.py` `6ee2b9d7...`; full values in
+section 6.1). No workflow, gate, tool, application or native-library file has changed since run `44821325087` (the only changes on `development` since its revision `f8ab48bd...` are to this record), and the record update that withdrew Authorization C (PR #122) changed none. The native library's
+`dlc_wallet` SHA-256 `9a2d1d98...` was equal in every archive built so far, including those of runs `44800943301` and `44821325087`; **a later build is not assumed to reproduce it**: if it differs, the run stops before any secret is used.
+
+**Known limitations, recorded rather than fixed (the workflow and the gate are not modified).**
+
+- **The gate does not validate the CTO comment** (existence, author, date or content); it checks the format of the `G2S-AUTHORIZATION` URL and its link to Issue #71 only (section 6.1).
+- **The gate does not independently validate D16.** The gate's list of required decisions is fixed (`D3 D6 D7 D8 D9 D10 D11 D12 D14`) and it never reads the rows D15 or D16: a missing, altered or undecided D16 row would not change its verdict
+  (the same holds for D15). D16 is established by the CTO's decision (comment `7052148143`) and by this release record as reviewed and merged, **not** by any automated validation of that decision row. The gate is not modified.
+- **The key is not machine-bound.** The gate and the workflow bind neither the API key ID nor its role: they read three secrets by name (`APPLE_API_KEY_P8`, `APPLE_API_KEY_ID`, `APPLE_API_ISSUER_ID`), and the logs redact the values. Nothing in a run proves that the
+  secrets hold key `9Y3NM5CN5B`; that is a procedural control: the CTO loads exactly that key (D16), and no other credential, after the conditions above are met.
+- **The workflow does not enforce the single-operation limit** (no run counter); the controls above and in section 4.2 are procedures.
+- **Stale diagnostic wording.** The diagnosis step still prints "The Developer role of the key is a candidate cause if a permission or 401/403 pattern matches; the text alone does not prove it." and a comment of the workflow mentions the Developer role. Under Authorization C
+  the key's role is Admin: that wording is **informational and stale**, decides nothing, and is to be read as "the role of the key".
+- **The signing certificate fingerprint remains unrecorded** (D8): no signing certificate was obtained or recorded from any attempt; if signing succeeds, it is only discovered in this run (`pin_source=DISCOVERED`) and is recorded in section 7 by the coordinator.
+- **The Admin credential does not guarantee successful cloud signing** (D16, D7). The comparison of Authorizations A and B (section 4.3) remains **evidence, not proof** of the root cause; it does not establish that the role of the key caused either failure. A failure would
+  consume the operation and is a result of the experiment, not a defect.
+
+**Not authorized.** Upload to App Store Connect, TestFlight distribution, tester assignment, App Review, public release; any second operation under C; any further privilege escalation or other experiment after a failure of C; any change of the source, the workflow, the gate or
+the bound tools; indefinite storage of the credential in GitHub; G2, G3, G4 and G5.
+
+### 4.5 G2S Authorization D: one new hosted signing-and-verification operation to acquire evidence (WITHDRAWN: CONSUMED by run 45148346007)
+
+> **Current state.** This section is **Authorization D**, and everything in it except "Execution of Authorization D" is the **historical record** of what the CTO authorized and on which conditions. **Authorization D is consumed and withdrawn**:
+> run `45148346007` reached Apple credential use, so its one operation is consumed, and the pull request that merges this section sets `G2S-STATUS` to `WITHDRAWN`. Present-tense statements in this section (for example "authorizes", "is permitted", "may be configured")
+> describe Authorization D **as authorized**, before the attempt; they do not describe the current status. **Authorizations A, B and C also stay consumed and withdrawn. No G2S authorization is current.**
+
+**The CTO's decision.** Comment `7094820406` on Issue #71 (https://github.com/CadenaBitcoin/signer_app/issues/71#issuecomment-7094820406), read from the GitHub API on 2026-11-23 before this record was prepared: author `CadenaWizard` (the CTO; the accounts `sziller` and `CadenaWizard` are the same person), created 2026-11-23T07:54:00Z, never edited.
+Issue #71 was reopened by `CadenaWizard` on 2026-11-23 (08:13:25Z) before this record was prepared. The decision states:
+
+| | |
+|---|---|
+| Purpose | One Apple Distribution signing-and-verification operation to collect authoritative evidence about the unresolved V8 `Info.plist` discrepancy and to validate the corrected Distribution DER entitlements parser |
+| Approved source and version | `42d358a4e7bcbf85b92aa992ec6439214dbd4405`, `1.0.4+1000035` (section 3.1; G1 is not re-decided) |
+| Credential (D17) | Reuse of the previously successful Admin-role Apple API key, **provided its validity is confirmed before execution**; the elevated privileges are accepted for this narrowly scoped operation; the temporary GitHub environment secrets are removed immediately after execution |
+| Certificate fingerprint | No additional pin is required for this diagnostic operation |
+| Evidence limitations | The documented Phase 7C evidence-collection limitations are accepted (below) |
+| Verification | All existing V7, V8, DER, CMS and CodeDirectory checks remain mandatory and unchanged; **a failed verification remains a failed operation** |
+| Governance | The authorization-record PR must be the **final merge into `development`** before execution; no other PR may be merged during the signing window |
+| Scope restriction | No TestFlight upload, App Store submission, release publication or modification of verification requirements |
+| Number of executions | **One signing-and-verification execution only**; a subsequent operation requires fresh CTO authorization |
+
+**Purpose (evidence acquisition).** One GitHub-hosted Apple Distribution signing-and-verification operation, run **primarily to acquire authoritative evidence**, not to deliver a build:
+
+1. to verify the real Apple Distribution-signed IPA with the repaired verifier (V7);
+2. to obtain the actual Distribution-signed DER entitlements blob (it has never been seen: the strict reader was validated against Apple `codesign` output of a disposable test program, not against a Distribution-signed Runner);
+3. to establish precisely how the exported top-level `Info.plist` differs from the audited archive's (the unresolved V8 finding, below);
+4. to establish whether V8 needs a later, evidence-based correction. **No check is changed by this authorization.**
+
+**The operation may fail verification, and a failure remains a failure.** V8 is unchanged and byte-strict, and the cause of the difference seen in run `44834801248` is not established, so V7/V8 may fail again; the real Distribution DER may also meet a detail the strict reader does not accept. Such a result is evidence, not a defect of the run:
+no verifier check is relaxed, skipped or reinterpreted to obtain a pass, and the IPA is not accepted, retained or released because the run ended. A failed verification is a failed operation, and the evidence it yields does not make it a success.
+
+**Fixed for this authorization (unchanged from the approved release).**
+
+| | |
+|---|---|
+| Approved source (G1) | `42d358a4e7bcbf85b92aa992ec6439214dbd4405` |
+| Reviewed content (`CONTENT_REF`) | `862831e0b3a0f30c4155d2e086c69fc28bdab286` (section 1) |
+| Version | `1.0.4+1000035` |
+| Bundle ID, Apple Team ID | `com.app.cadenabitcoin`, `D65458CPDP` |
+| Operation | `sign-and-verify-only`: no upload, no distribution |
+| Verification | The authorization gate (`tool/check_signing_authorization.sh`, blob unchanged) and the byte-strict V8 comparison are unchanged; the verifier is the repaired one named below; nothing is relaxed |
+| Native library | `G2S-DLC-WALLET-SHA256` unchanged; a build that does not reproduce it stops the run before any secret exists |
+| Repository baseline of this record | `development` at `ee0c00ba9cafffbede5f06c7ad53a25dca84a871` (the merge of PR #130) |
+
+**Authorizations of Issue #71 (history and current state).**
+
+| | Decision | Credential | Run | Outcome |
+|---|---|---|---|---|
+| A | comments `7038341975`, `7046097307` | Developer-role key (D14) | `44800943301` | Failed at the export (exit 70); **consumed and withdrawn** (section 4.2) |
+| B | comment `7050074107` | App Manager-role key (D15) | `44821325087` | Failed at the export (exit 70); **consumed and withdrawn** (section 4.3) |
+| C | comment `7052148143` | Admin-role key (D16) | `44834801248` | **Apple signing succeeded**; failed at V7/V8; the IPA was not retained; **consumed and withdrawn** (section 4.4) |
+| **D** | comment `7094820406` | Admin-role key, reuse (D17) | `45148346007` | **Apple signing succeeded**; the workflow failed at V7/V8 on the strict `Info.plist` byte comparison only; the IPA was not retained; **consumed and withdrawn** (this section, "Execution of Authorization D") |
+
+**What has changed in the repository since run `44834801248`** (merged to `development`; each is a reviewed pull request of Issue #71):
+
+- PRs #123 and #124: repair of the CMS and embedded-`Info.plist`-seal verification defects found in run `44834801248` (regression-tested against the real Apple CMS and Swift-runtime fixtures), and hardened diagnostics;
+- PRs #125, #126 and #127: the credential-free DER experiment (prepared, run once as run `44956044650`, and removed again);
+- PR #128: the verifier recognizes Apple's real DER entitlements layout (`[APPLICATION 16]` wrapper, `[CONTEXT 16]` dictionaries) and compares XML and DER entitlements type-strictly, across architecture slices too;
+- PR #129: the DER reader is strict and canonical (no indefinite or non-minimal lengths, bounded depth);
+- PR #130: read-only evidence capture for V8 and the Distribution DER blob (below), and collection of the failed-export `Packaging.log`.
+
+The repaired verifier is **not proven** against a real Distribution-signed Runner: its DER evidence is from Apple `codesign` output on a test program (run `44956044650`), which this operation is to supplement (docs/IOS_SIGNING.md sections 3.1a to 3.1c).
+
+**Still unresolved: the V8 discrepancy.** In run `44834801248` the exported top-level `Info.plist` differed from the archive's (the only differing file besides signature seals and the embedded profile) although both were 2,551 bytes; the archive's SHA-256 is `34fd28f0...` and the exported file was not kept.
+What the export changed is **not known** and is **not asserted harmless**; a different serialization of the same content is an unproven hypothesis (docs/IOS_SIGNING.md sections 3.1a and 3.1d). V8 stays byte-strict.
+
+**Evidence the operation captures (PR #130; docs/IOS_SIGNING.md section 3.1d), and its accepted limitations.** Text evidence only, kept as the 30-day evidence artifact of the run (public, because the repository is public): the archived and exported `Info.plist` as base64 text and a typed and byte-level comparison; the CodeDirectory slot-1 seal of the exported executable against each plist;
+the DER entitlements blob of the Distribution-signed main executable as hex with the parser's verdict; the redacted export log and `Packaging.log` (also from a failed export); and provenance linking each file to the same run. The capture runs after a failed V7 or V8 and decides nothing. **Limitations accepted by the CTO's decision:** a file whose content fails the safety check is withheld (only sizes, digests and flags remain);
+only the main executable's DER blob and seal are captured (nested executables are covered by the verifier's text output only); the signed IPA is **not** retained (D9) and cannot be re-examined. A new failure of a kind not captured could force another operation, which would need its own authorization.
+
+**Bound implementation.** The workflow, the gate and the five tools are those of `development` at `ee0c00b...`; the three blobs that changed since Authorization C were refreshed in section 6.1 (the previous values are kept there). If any bound file changes before execution the blobs must be recomputed and this record reviewed again.
+
+**Credential (D17).** The Admin-role key of D16, `9Y3NM5CN5B`, which signed successfully in run `44834801248`, is approved for this operation, **provided its validity is confirmed before execution**. The record cannot verify validity, and neither the workflow nor the gate binds the key ID or its role.
+The GitHub environment `ios-hosted-signing` held **no secret** when this record was prepared (read from the GitHub API on 2026-11-23). No other credential is authorized.
+
+**No certificate pin.** The signing certificate fingerprint `7ee3f6ce78eea83748e198102f6ab66527c626296baaea437c3a90db81ef418e` read in run `44834801248` is **DISCOVERED, not approved** (D8) and stays so. The workflow input `expected_cert_sha256` stays empty: the run only discovers and reports the fingerprint again.
+
+**Conditions for the execution, in three stages (all required; each step is taken by the CTO, by the review or by the workflow itself, never by this record).** The CTO's decision names the gate and the environment approval among the conditions; both are events of the workflow run, so they are placed in the stage in which they can happen.
+**If any required condition fails, signing does not proceed.**
+
+*Before dispatch (outside the workflow; no credential is accessed to check any of these):*
+
+1. This record's pull request has passed review and CI and has been **merged**.
+2. It is the **final merge into `development`** before the execution. The gate requires the workflow revision to be the current tip of `development`, so no other pull request (for example #92) is merged from this merge until the `sign` job has passed its own re-check of the tip (see "During the workflow").
+3. The authorization gate has been **independently validated against the final merged `development` tip, without credentials**: `tool/check_signing_authorization.sh` run on a checkout of that tip with the inputs of the run (approved source, version, bundle ID, team ID, and that tip as both workflow revision and development tip) prints `AUTHORIZED`, and the three blob lines equal `--print-expected` for that checkout.
+4. The CTO has confirmed that the Admin-role key (D17) **remains valid**.
+5. The three secrets (`APPLE_API_KEY_P8`, `APPLE_API_KEY_ID`, `APPLE_API_ISSUER_ID`) have been configured as **environment** secrets of `ios-hosted-signing` only, **only after** steps 1 to 4, and never as repository or organization secrets (`docs/IOS_HOSTED_SIGNING.md` sections 3 and 4).
+
+Only then may the CTO dispatch the **single** authorized workflow run (`ios-hosted-signing`, from `development`, with the approved source, content reference and version, and an empty `expected_cert_sha256`). GitHub's "Re-run" is not used. The merge of this record does not itself start anything.
+
+*During the workflow (enforced by the workflow, in this order):*
+
+1. The `authorize` job passes (the gate, read at the dispatched revision, which must be the current tip of `development`).
+2. The protected environment `ios-hosted-signing` requests **deployment approval** when the `sign` job is to start.
+3. The CTO **deliberately approves** that deployment, for this one run; a doubtful deployment is rejected.
+4. The `sign` job **revalidates the authorization gate and the `development` tip before any secret is accessed**; a change of the tip, or a gate that no longer passes, stops the run there.
+5. All existing signing and verification requirements remain enforced and unchanged: the archive checks, the `dlc_wallet` hash, and V1 to V9 including V7, V8, DER, CMS and CodeDirectory verification. A failed verification remains a failed operation.
+
+*After the execution (whatever its result):*
+
+1. The three temporary GitHub environment secrets are **removed at once**. Removal does not revoke the Apple key; revocation stays a separate CTO decision.
+2. The run result and the retained evidence (run ID, conclusion, the evidence artifact and its `SHA256SUMS` value, the Phase 7C evidence files) are **recorded** in section 7 by the coordinator. A fingerprint read in the run stays evidence and is not a pin without the coordinator's separate recording (D8).
+3. Authorization D is **withdrawn through a reviewed release-record pull request** that sets `G2S-STATUS` to `WITHDRAWN`.
+4. **No second operation** without a fresh CTO authorization and a new reviewed record pull request.
+
+**One execution only.** The workflow does not count runs (section 6.1), so the limit is procedural (section 4.2, "One operation"). A run that **reaches Apple credential use** (the secret step of the `sign` job starts) **consumes** Authorization D, whatever its result and whether or not signing succeeds. A failure **before** credential use (the gate, the build, the archive checks, the `dlc_wallet` comparison, a moved tip)
+is not a completed attempt, but any new dispatch after it still needs an explicit decision of the CTO noted on Issue #71 with the failed run's ID and cause. A second operation needs a **fresh CTO authorization** and a new reviewed record pull request.
+
+**Not authorized, whatever the outcome.** Upload to App Store Connect, TestFlight distribution, tester assignment, App Review, public release, G2, G3, G4 and G5; a certificate pin; any change of the source, the version, the workflow, the gate, the bound tools or the verifier; relaxing V7, V8, DER, CMS or CodeDirectory verification;
+a second operation; and indefinite storage of any credential in GitHub.
+
+**Execution of Authorization D: run 45148346007 (consumed; Authorization D withdrawn).** Facts read from GitHub (the run, its jobs and steps, its artifacts and approval) and from the evidence artifact, downloaded and checked against its own `SHA256SUMS.txt` (all 35 entries verified).
+**The GitHub Actions workflow failed, but Apple signing succeeded; this is not an Apple signing failure.**
+
+| Item | Fact |
+|---|---|
+| Run | `45148346007`, attempt 1, `workflow_dispatch` by `sziller` from `development` at `f0a14b7e8748617a2f61af3617608107d9cc7407` (the merge of PR #131, the final merge before the run), 2026-11-23T09:34:58Z to 09:41:45Z: https://github.com/CadenaBitcoin/signer_app/actions/runs/45148346007 |
+| Deployment | Approved by `CadenaWizard` (the required reviewer; the same person as the dispatcher, D12) |
+| Credential | The Admin-role key of D17 was the authorized credential. **Not verifiable from the run**: the workflow and the gate bind neither the key ID nor its role, and the logs redact their values (section 4.4, "Known limitations") |
+| Result | **FAILED** (the workflow's conclusion), at the step "Repository IPA verifier ... (V7, V8)" |
+| Jobs | `authorize` **success**; `build` **success**; `sign` **failure** |
+| Authorization gate | **PASSED**, and re-checked in the `sign` job before any secret was touched |
+| Unsigned archive build | **PASSED**; archive tar SHA-256 `085fa2cf9bd6f2b1774dded1c13b772da74a00c9004e4158144160d39a884914` |
+| Archive validation | **PASSED** before and after extraction (250 members); bundle `com.app.cadenabitcoin`, `1.0.4`, `1000035`; archived app "not signed at all"; `archive-app.sha256` lists 95 files |
+| Authorized `dlc_wallet` SHA-256 | **PASSED**: equals `9a2d1d98ee4cf7aa608a161cff3d57aa380fec227876ab9c4b2b93f3f381fc13` |
+| Pre-signing environment | Xcode 26.3 (17C529); `0 valid identities found`, `provisioning profiles installed: 0` |
+| Apple credential-use step | **REACHED**: "Export and sign with the cloud-managed Distribution certificate (the only step with secrets)" ran and **succeeded** |
+| Xcode export | `xcodebuild -exportArchive` exit **0**; export options `method app-store-connect`, `destination export`, `signingStyle automatic`, `teamID D65458CPDP`, `manageAppVersionAndBuildNumber 0` |
+| Signed IPA | **PRODUCED**: 22,693,541 bytes, SHA-256 `22ec01cd620a8123681f3876f6d9548f1a8b4ca305038348652d46bd095e8c42`. **NOT RETAINED** (D9): it stayed on the runner, which is gone; no artifact of the run contains an `.ipa` |
+| Verification steps | V1 (identity) **PASSED**; V2 (`codesign` verification) **PASSED**; V3 (certificate extraction and cross-check) **PASSED**; V4 (embedded profile) **PASSED**; V5 (entitlements) **PASSED**; V6 (environment) **PASSED**; **V7/V8 (repository IPA verifier) FAILED**; V9 and the IPA digest re-check were **NOT EXECUTED** (skipped after the failure) |
+| Phase 7C evidence capture | **PASSED** (`state=export-succeeded`, both `Info.plist` files kept, DER blob kept, 0 problems); it ran after the failed verification, as designed |
+| Key file | Removed from the runner (`key_file_removed=yes`) |
+| Credentials | GitHub reports **0** secrets in the environment `ios-hosted-signing`, at repository level and at organization level (read on 2026-11-23 after the run). The Apple key itself is **not** revoked by removing the GitHub secrets; revocation stays a separate CTO decision (D17) |
+| App Store Connect upload / distribution | **NONE**: the workflow has no upload operation (`destination` is `export`) and this run performed none. **TestFlight, App Store submission and release publication were not authorized and did not happen** |
+| Evidence artifacts | `ios-hosted-signing-evidence_45148346007-1` (text, 81,465 bytes; `SHA256SUMS.txt` SHA-256 `b500065a202aac39a0922a8b9532efb2983e552d52da54ac075c7473b6c680b4`; GitHub keeps it until 2026-12-23), `ios-hosted-build-evidence_45148346007-1`, and `ios-hosted-unsigned-archive_45148346007-1` (one day: GitHub expires it on 2026-11-24). Copies of the evidence artifact and of the unsigned archive are kept outside the repository by the CTO's procedure; the archive tar's SHA-256 was checked equal to the digest the build job recorded |
+| Key evidence files (SHA-256) | `v7-ipa-verify-output.txt` `4721c934d5c760684a6924ce8dc92422c97e9952ba3f0f789f511a6131a062b2`; `v8-capture/infoplist-summary.txt` `834f7fe87bd9a46e58720c88f614ce91ed7f2c6d7902dad8608b3e9a10745989`; `v8-capture/der-summary.txt` `f735bd5f59b628e6611f42f898c002905d96b2cbdc5b4937248bd12ab8d277c3`; `v8-capture/status.txt` `5b99e19dca8b4e0b10398b5d2bbed358903a6ecfcdd16b85796e4ff7c463aa34`; `v8-capture/archive-Info.plist.b64` `a30728057287f879242ed3218e45eb786e891287f9d1d241ff2c266c13eb6442`; `v8-capture/ipa-Info.plist.b64` `c3e9fd47de22b9aab2e48408b5838d344567dfcb59adb457202233b823e4ce89`; `v8-capture/der-entitlements-slice0-cpu100000c.hex` `e56ea505e2a0e17b604d2e7df9595abd4f1ba32f9282ee52ee3d803f0ee49066`; `Packaging.log` `9fca7732e5fc6965947b9c27316716574d97eb6daa7ec7f5a9f9ae4a9fd776f4`; `export.log` `dcb252efff4a3a0c11b2e419ec069b9391192cc02a898e94c41d2927e5ea87e4`; `DistributionSummary.txt` `4d300567ed6c9bc19aa0ae2a4c29edcbcf064b01309b36b5200be1d29bf4e890`; `archive-app.sha256` `12a4732de0cad2978cce39b992d4e440732ebbcb2862113429257937cb9fd51e`; `signer.pem` (the PUBLIC certificate) `347b91be045f335157a6c3357e9a2b455abb354cad9a90d94e0f7d13b405a4c8`; `export-result.txt` `2d341d41a01c314363b6764ee0ede1c7e8aa01fde5405f3fe90ce7c566e39058` |
+| **G2S Authorization D** | **CONSUMED** (control 1: the credential-use step started), **WITHDRAWN** by the reviewed record pull request that merges this section |
+
+**What the evidence shows (and does not show).**
+
+- **The DER entitlements checks passed.** The verifier found the main executable's and every nested executable's signature intact (page hashes, special slots including the DER entitlements slot, CMS and bound cdhashes), and its entitlement checks passed (application identifier, team identifier, `get-task-allow` false, no `aps-environment`, every entitlement granted by the profile). The Phase 7C capture shows the main executable's DER entitlements blob (175 bytes, 4 top-level entitlements) **accepted by the strict reader**, and its CodeDirectory slot-7 seal **matches** the blob.
+  This is the first Distribution-signed DER blob the strict reader has seen: it is no longer unproven for this application.
+- **The only remaining verification failure is the strict `Info.plist` byte comparison (V8).** V7 reported **56 passed, 1 failed and 3 warnings**; the one failure is `files that differ from the unsigned build: Info.plist`. The archive's and the exported top-level `Info.plist` are both binary property lists of 2,551 bytes with 40 top-level keys and 96 objects. The typed comparison (every key, value and type) is
+  **identical** and the verifier classifies the difference as **serialization only**; the **top-level key order differs** (first difference at index 0), 2,315 bytes differ, and both binary plists report `offset_table_offset=2327` and `trailer_consistent=yes`. The CodeDirectory slot-1 seal of the exported executable **matches the exported `Info.plist`** (SHA-256 `ce5bf1f3139f8d66deadec0f713cb53588882376bfd91ceb99dffa0a5617538a`) and not the archive's (`34fd28f02721a5aeb93a1b9db9f25519d0840d8544bda9cc13220de27ddcb319`).
+  So what the export changed is, on this evidence, **a re-serialization of unchanged content**; **why** Xcode re-serializes it is not shown by the evidence.
+- **V8 is unchanged by this record.** The comparison stays **byte-strict**; no verification policy is changed, relaxed or reinterpreted here. Whether and how V8 should treat a serialization-only difference is a **separate CTO decision**, which would need its own reviewed pull request (verifier and tests, hence new gate blobs) and a new authorization to be proven on a real IPA.
+- **Warnings the repaired verifier now reports (informational; they decide nothing):** no `ITSAppUsesNonExemptEncryption` (X1); no trust anchors, so the certificate chain to Apple is not verified; and `Info.plist` declares the `remote-notification` background mode although the app has no `aps-environment` entitlement (a new observation, related to D6 and still open).
+- **The fingerprint pin PASS is circular.** The verifier's check that the certificate "is pinned" used the value discovered in the same run (`pin_source=DISCOVERED`), as D8 and the CTO's decision (no pin) provide for. The certificate is the same as in run `44834801248`.
+- **Not established:** that the IPA is acceptable to App Store Connect, installs or runs, or that the certificate chain is valid; V9 (the native library inspection) did not run.
+
+**Authorization D withdrawn.** Because the operation was consumed, the pull request that merges this section sets `G2S-STATUS` to `WITHDRAWN` in section 6.1 (control 5 of this section), and the gate then refuses. **Authorizations A, B, C and D are all consumed and withdrawn, and no further signing operation is authorized.**
+The history is retained: all CTO authorizations (comments `7038341975`, `7046097307` for A; `7050074107` for B; `7052148143` for C; `7094820406` for D), the failed pre-credential attempt `44738600156`, runs `44800943301`, `44821325087`, `44834801248` and `45148346007`, PRs #116 to #131, D14, D15, D16 and D17 are unchanged. G1 stays authorized; G2 and G3 stay pending, and G4 and G5 stay **not authorized**.
+The workflow, gate, bound tools, source and native library were those recorded in section 6.1 (blobs unchanged; the tip of `development` was `f0a14b7`); **no bound file changes in this record**.
+
+**Not authorized.** Upload to App Store Connect, TestFlight distribution, tester assignment, App Review, public release; any second operation under D; any change of the source, the version, the workflow, the gate, the bound tools or the verifier by this record; a certificate pin; G2, G3, G4 and G5.
+
+### 4.6 G2S Authorization E: ONE hosted sign-verify-and-upload operation for the first internal TestFlight build (WITHDRAWN: CONSUMED by run 45221165334; the upload succeeded)
+
+> **Current state.** This section is **Authorization E**. Everything in it except "Execution of Authorization E" is the **historical record** of what the CTO authorized and on which conditions. **Authorization E is consumed and withdrawn**: run `45221165334` reached Apple credential use, so its one operation is consumed, and the pull request that merges this closeout sets `G2S-STATUS` to `WITHDRAWN` and the record status to `G1 AUTHORIZED`. Present-tense statements below ("authorizes", "is permitted", "the status is `G2 AUTHORIZED`") describe Authorization E **as authorized, before the run**; they do not describe the current state. **Authorizations A to D also stay consumed and withdrawn. No authorization is current.**
+
+**The CTO's decision.** Comment `7105691953` on Issue #71 (https://github.com/CadenaBitcoin/signer_app/issues/71#issuecomment-7105691953), read from the GitHub API on 2026-11-23 before this record was prepared: author `CadenaWizard` (the CTO; the accounts `sziller` and `CadenaWizard` are the same person), created 2026-11-23T15:31:09Z, never edited.
+It authorizes **one GitHub-hosted signing, verification and upload operation**:
+
+| Item | Value |
+|---|---|
+| Operation | `sign-verify-and-upload` (`G2S-OPERATION`) |
+| Workflow | `.github/workflows/ios-hosted-signing.yml`, dispatched manually by the CTO from `development` with the approved default inputs and no certificate pin |
+| Approved source | `42d358a4e7bcbf85b92aa992ec6439214dbd4405` (content reference `862831e0b3a0f30c4155d2e086c69fc28bdab286`) |
+| Version | `1.0.4+1000035`; bundle ID `com.app.cadenabitcoin`; Apple Team `D65458CPDP`; App Store Connect Apple ID `6753348211` |
+| Destination | initial internal TestFlight testing only |
+| Implementation | the workflow, gate and verification tools at the blobs of section 6.1 (bound to the `development` tip `edc640b760a48091187129eaa4c3146a6398de8b` and its merge of PR #134) |
+| Decisions | D1, D2, D4, D5 (decided by the comment), X2 (risk accepted), X1 (answered by the CTO in App Store Connect before any tester distribution), D18 (credential), the extension of D3, D7, D9 and D12 |
+
+**What the operation does.** The workflow builds the unsigned archive of the approved source, signs it with Apple Distribution signing, completes V1 to V9 and uploads the same verified IPA, once, with `altool --validate-app` first (no retry, no second upload),
+as implemented by PR #134 (IOS_HOSTED_SIGNING.md section 9). A failed verification, a changed IPA, a failed redaction of the validation log or a failed validation means no upload.
+
+**Execution restrictions (from the comment).**
+
+1. This record's pull request is the **final merge into `development` before the dispatch**; no further merge is permitted until the `sign` job has passed its authorization re-check.
+2. The CTO dispatches the workflow manually from `development`, with the approved default inputs and no certificate pin.
+3. GitHub environment approval is required before the credentials are used.
+4. Every mandatory verification must succeed before the upload.
+5. **One execution only.** The authorization is consumed when the credential-bearing step begins, whatever the result. A failed operation requires a **new explicit authorization**; workflow re-runs are prohibited.
+6. The three environment secrets (`APPLE_API_KEY_P8`, `APPLE_API_KEY_ID`, `APPLE_API_ISSUER_ID`) are registered only after this record is merged and an independent read-only validation of the gate against the final tip, hold the key of D18 (validity confirmed before dispatch), and are removed after their required use.
+
+**After the upload (not part of the operation).** The CTO answers export compliance and App Privacy in App Store Connect after Apple has processed the build; **only then**, and after a successful processing, the CTO's comment authorizes assigning build `1.0.4 (1000035)` to the existing internal group "Cadena Internal Testing" (two internal testers; their names are in the comment and are not copied here). That is gate G3, a manual operation in App Store Connect; no workflow does it. **No external testing, public distribution, App Review submission (G4) or release (G5) is authorized.**
+
+**Known limits, stated before the run.** The upload tool of the runner's Xcode 26.3 (`altool`) has not been exercised; the workflow probes its `--help` before any credential is used and stops without consuming the authorization if the interface is incomplete. V8 (the re-serialization rule of PR #133) and V9 have never passed on a real IPA: a failure before the upload still consumes the authorization. If Apple refuses or warns about the privacy manifest (X2), that response is recorded verbatim and decides the next step; an upload that Apple partly received may consume build number 1000035.
+Until the CTO confirms the key of D18 and the credentials are registered, **no credential exists in the environment**; this record's merge registers nothing and dispatches nothing.
+
+**Gate G2 and section 4.1.** Prerequisite 5 of section 4.1 describes the status before G2; with Authorization E the status is `G2 AUTHORIZED` by design (section 0), and the gate requires it for this operation. The other prerequisites are met as follows: D1 to D12 and D14 are decided (D3, D7, D9 and D12 extended by this decision); X2 is decided and X1 is the CTO's declaration in App Store Connect before G3; section 5 items 9 to 12 are filled above. The operator-Mac route is not used.
+
+**Execution of Authorization E: run 45221165334 (consumed; Authorization E withdrawn).** Facts read from GitHub (the run, its jobs and steps, its approval, its artifacts) and from the two text evidence artifacts, downloaded and checked against their own `SHA256SUMS.txt` (45 entries of the signing evidence and 8 of the build evidence, all verified). https://github.com/CadenaBitcoin/signer_app/actions/runs/45221165334
+
+**The workflow succeeded. Apple signing, every verification and the upload to App Store Connect succeeded.**
+
+| Item | Fact |
+|---|---|
+| Run | `45221165334`, attempt 1, `workflow_dispatch` by `CadenaWizard` from `development` at `630b3c98c1b93367f3447a6008bf0d1b0cc76fa6` (the merge of PR #135, the final merge before the run), started 2026-11-23T16:51:19Z; the `sign` job ran 17:12:09Z to 17:15:21Z. The run's display title still reads "sign and verify only; no upload; not a release": a stale label of the workflow (not changed here), contradicted by its own evidence |
+| Deployment | Approved by `CadenaWizard` (the required reviewer; the same person as the dispatcher, D12) |
+| Credential | The Admin-role key of D18 was the authorized credential. **Not verifiable from the run**: the workflow and the gate bind neither the key ID nor its role (section 4.4, "Known limitations") |
+| Result | **SUCCESS**: jobs `authorize` **success**, `build` **success**, `sign` **success**; every step of the `sign` job succeeded |
+| Authorization gate | **PASSED**, operation `sign-verify-and-upload`, and re-checked in the `sign` job before any secret was touched and again with the live tip of `development` (`630b3c98...`) in the pre-upload step |
+| Unsigned archive build | **PASSED**: `flutter build ipa --release --no-codesign --flavor production --dart-define-from-file=config/build/production.json`; archive tar SHA-256 `13687dd0e6f711d8b3b632f65c750efc72198331cb066e1dec127aafc7e09572` (212,678,656 bytes); `archive-app.sha256` lists 95 files; source tree `5f18173ea3382fc96eb2572e6b73b0d8c32e363f`, `on_production=yes`, `content_equals_reviewed=yes` |
+| Source, version, identity | Approved source `42d358a4e7bcbf85b92aa992ec6439214dbd4405`, content reference `862831e0b3a0f30c4155d2e086c69fc28bdab286`, version `1.0.4+1000035`, bundle `com.app.cadenabitcoin`, "Cadena Bitcoin" (V1 passed) |
+| Authorized `dlc_wallet` SHA-256 | **PASSED**: archive binary equals `9a2d1d98ee4cf7aa608a161cff3d57aa380fec227876ab9c4b2b93f3f381fc13`; pinned Rust library `203dcd7abe4187de0b756638a55f691b2d5c680b17d4fbfa7dda550ed703949b` |
+| Toolchain | Xcode 26.3 (17C529), built with the iPhone OS 26.2 SDK, minimum OS 14.0; before signing `0 valid identities found` and no profile |
+| Upload tool probe | **PASSED** (no secret, before any credential): `altool` of Xcode 26.3, syntax `package` (`--validate-app` and `--upload-package`) |
+| Xcode export | `xcodebuild -exportArchive` exit **0**; signed IPA **22,693,539 bytes**, SHA-256 `6a9a5d3e4c5d904152271b50b65d39482c8ecc2801dca3376682998cc21c14cd`, equal after the export, after the verification and at the pre-upload re-check (`digest_equal_after_export_after_verification_and_now=yes`). **Not retained** as an artifact (D9; only the upload of the same file was added by Authorization E) |
+| Signing certificate (V3) | `Apple Distribution: Cadena Bitcoin S.A. de C.V. (D65458CPDP)`, issuer Apple Worldwide Developer Relations CA G3, serial `6e0b1fc31a51b362a9fc9378161167d6`, valid 2026-07-09 to 2027-07-09, SHA-256 `7ee3f6ce78eea83748e198102f6ab66527c626296baaea437c3a90db81ef418e` (the same certificate as in run `44834801248`); the fingerprint pin was **discovered in the run** (circular, as D8 provides for) |
+| Provisioning profile (V4) | `iOS Team Store Provisioning Profile: com.app.cadenabitcoin`, type app-store, `get-task-allow` false, no devices, expires 2027-07-09 |
+| Verification V1 to V9 | **All PASSED.** V7 `verify_ipa`: **all 57 checks passed, 3 warnings** (no `ITSAppUsesNonExemptEncryption`; no `--trust-anchors`, so the chain to Apple was checked by name only; `remote-notification` declared without `aps-environment`, D6). V8: the IPA is the unsigned build plus signatures only: 16 executables identical apart from the signature, 77 other files byte-identical, and the top-level `Info.plist` **accepted as a re-serialization of identical content** (2,551 to 2,551 bytes, SHA-256 `34fd28f0...` to `ce5bf1f3...`, rule of PR #133) |
+| V9 (native library) | Nine expected exports; no forbidden name; `create_deterministic_nonce` present in the exports (known, D1 and Issue #22); signed `dlc_wallet` binary SHA-256 `981e6aa98c353cc54e99e3ab61e559b319926d3686dcc3fc86d1273c8d7d3e02` (includes the signature); no privacy manifest (X2) |
+| Validation | `altool --validate-app`: exit **0**, "VERIFY SUCCEEDED with no errors, 2 warnings" |
+| Upload | `altool --upload-package`, one attempt: exit **0**, **"UPLOAD SUCCEEDED with no errors, 2 warnings"**, **Delivery UUID `7f891ccb-147b-4371-b377-ac14e8bc6dee`**, 22,693,539 bytes transferred, finished 2026-11-23T17:15:11Z. Apple's two warnings, verbatim in substance: **90725** "SDK version issue. This app was built with the iOS 26.2 SDK. Starting April 2027, iOS and iPadOS apps must be built with the iOS 27 SDK or later, included in Xcode 27 or later"; **90068** "Deployment target too low. Your app targets iOS 14.0. Starting in April 2027, iOS apps must target 15.0 or later". Both are future requirements; neither blocked the delivery. No warning about the missing privacy manifest (X2) or the push entitlement (D6, ITMS-90078) was reported |
+| Key file | Removed from the runner before and after the upload step (`key_file_removed=yes`, `key_file_removed_after_upload_step=yes`) |
+| Credentials | GitHub reports **0** secrets in the environment `ios-hosted-signing` and at repository level (read on 2026-11-24). Organization-level secrets were not readable with the token used for this record |
+| Evidence artifacts | `ios-hosted-signing-evidence_45221165334-1` (text, 89,487 bytes, artifact digest `sha256:e6781a636c35bc156ba1e52c289d57a6f89db26a2f36de65d9a90e87ca8c67ff`; its `SHA256SUMS.txt` SHA-256 `6b2254ee57c6e192cd643c7cc54dcd4c1fd15b5157dfa0e8858db853b1c2ea2a`; GitHub keeps it until 2026-12-23), `ios-hosted-build-evidence_45221165334-1` (5,221 bytes, `sha256:634534b0da1ca6a6a0398a7803585e4205dbc793d1f8229549c2ff89796b6d20`; `SHA256SUMS.txt` `57460be907c93430c890e07ebb674c7aa397f0dca0b666680e32ff78549ad3d3`; kept until 2026-12-23) and `ios-hosted-unsigned-archive_45221165334-1` (67,870,221 bytes, `sha256:8938722cfb59543d128daddd0ac4257a2539ab83312c7012e9a2afb337e22f12`; **GitHub deletes it on 2026-11-24 at 16:56Z**; this record keeps its tar SHA-256 above, not the file). Custody copies of the evidence artifacts are the CTO's to keep before 2026-12-23 |
+| Key evidence files (SHA-256) | `upload-result.txt` `7f75a5a391848336b08ba0d0426d88efa0d59d2cf5609a770bf75a7715943a6b`; `upload-precheck.txt` `c651516743bb343df1a2177e88fa4e8b10f67ed9cdcdcdac3832661f58816acb`; `upload-validate.log` `7f036b96d6e4b3e7991edd7a98a84bb79be376c743cb1e7a2f82f94c74179fa6`; `upload.log` `a0712aa41d230997381c357824228722529b9feea0d1f692b4fa84007bd2df8d`; `v7-ipa-verify-output.txt` `7541c3487ce2cb164a07d2400537d7af52451e0f3e412210d36e11b83446d8c0`; `v8-compare.txt` `a314de59c62a18f550b22a8e11e07d079b33fe0aaf3ebda11fb8aab18fcf1aed`; `v9-native.txt` `de18e7061b37f67de750a6c89b33a4fc3f2787e306c7eb9cdb438a0ad034142b`; `export-result.txt` `15715ee1dd4e9817a8ec1555b4bd4774bd0180dfe862a926b770b7f97212110f`; `ipa-digest.txt` `0084623eec591fcd2e1afc15be04cb73a435251a0333f17ce083b6ab3de023c2`; `certificate-sha256.txt` `3c54f49b88b237db1804030fb05d0e3f7a977f08bfadfb9430da73667bf2cf3a`; `dlc-wallet-hash.txt` `807c996d1578e93b375b0f01ee6940852c6d2c561fec6957d3e866b2495c62dc`; build evidence: `build.txt` `eb4313b2f9635e61c16ad150caf108b821640794f5bd19c36e18cd5cb4f0e08b`, `source.txt` `c2d9ebc0f08dc3b0a5fb9f452580cdd9b7fd2c5dd4488d8b622dcbf1bfe107fd` |
+| App Store Connect (CTO-reported, 2026-11-24; **not verified by this record**) | The application is visible with status **TESTING**; export compliance for the build was completed by the CTO; the build is in the internal TestFlight group "Cadena Internal Testing"; the Apple API key and the push (APNs) key have encrypted backups on the CTO's workstation and a server (restoration verified for the workstation copy only; the server copies were seen, not restored) |
+| **G2S Authorization E** | **CONSUMED** (the credential-using steps ran), **WITHDRAWN** by the reviewed record pull request that merges this section |
+
+**What the evidence shows (and does not show).**
+
+- **The whole pipeline worked on a real IPA for the first time**: Apple cloud-managed Distribution signing, the DER entitlements and signature checks, the `Info.plist` re-serialization rule of V8 (PR #133), V9, the pre-credential probe of `altool`, validation and upload. Every limit stated in section 4.6 before the run (the unexercised `altool` interface, V8 and V9 on a real IPA) is now exercised and passed.
+- **The upload is the same file that was verified**: one digest, `6a9a5d3e...`, from the export to the upload; the workflow re-checked it after the verification, immediately before the validation, and after the validation.
+- **Build 1000035 is now consumed in the production App Store Connect record** (D4). It must never be reused, whatever happens to the build.
+- **Not established by this record:** that the IPA installs and runs on a tester's device, Apple's processing result and its later e-mails, and the contents of the export-compliance answers (the CTO's declaration in App Store Connect). The CTO's report of the status above is recorded as reported.
+- **Mainnet:** the build uses `config/build/production.json` (`NETWORK_ENVIRONMENT=bitcoin`, `USE_TESTNET=false`, `API_BASE_URL=https://cadenabitcoin.com/app`); verified by a read-only trace on 2026-11-24 (`lib/config/build_config.dart` to the Rust `init_with_entropy`; no runtime override found). D2 (zero-value wallets and test accounts only) is therefore a rule of use, not a technical limit of the app.
+
+**Ledger.** `config/release/published_versions.json` is **not** changed. Its documented meaning is "facts about versions that are already **published**" (RELEASE_VERSIONING.md), confirmed from the store console, and `tool/build_manifest.py` reads every entry as a published floor: an iOS entry for 1000035 would make the production gate print `FAIL ios: build 1000035 is not above the published build number 1000035`, calling an internal TestFlight build "published". The ledger has no field that separates internal testing from release and no test of such an entry exists. Recording it needs a reviewed change to the ledger's semantics (a separate issue and a CTO decision, as D5 anticipated an iOS entry after the upload); until then **the consumed number 1000035 is recorded here only**, and the next iOS build must use a build number above 1000035.
+
+**Authorization E withdrawn.** Because the operation was consumed, the pull request that merges this section sets `G2S-STATUS` to `WITHDRAWN` in section 6.1 and the record status to `G1 AUTHORIZED` (section 0), and the gate then refuses. **Authorizations A, B, C, D and E are all consumed and withdrawn, and no signing or upload operation is authorized.**
+The history is retained: all CTO authorizations (comments `7038341975`, `7046097307` for A; `7050074107` for B; `7052148143` for C; `7094820406` for D; `7105691953` for E), the failed pre-credential attempt `44738600156`, runs `44800943301`, `44821325087`, `44834801248`, `45148346007` and `45221165334`, PRs #116 to #135, D14, D15, D16, D17 and D18 are unchanged. The workflow, gate, bound tools, source and native library were those recorded in section 6.1 (the tip of `development` was `630b3c98`); **no bound file changes in this record**.
+
+**Not authorized.** A second upload or any second operation under E; a rebuild or another build number; App Review submission (G4), public release (G5), external testers, public links; any change of the source, the version, the workflow, the gate, the bound tools or the ledger by this record. The assignment of the build to the internal group (G3) is recorded in section 6 as reported by the CTO.
 
 ## 5. Facts confirmed by the operator before signing (IOS_RELEASE.md section 6)
 
+**Provenance of the answers below.** *Coordinator-reported (2026-11-19)*: the release coordinator read Apple's Developer and App Store
+Connect web pages directly; the values are not verified through the App Store Connect API, and no screenshot, account address or
+other account detail is stored here. *Repository-verified*: read from the approved source or the repository. *Noah-reported*: given
+earlier by the intended operator and not verified. None of these entries decides a D or X row, authorizes a gate, or records the
+operator's acceptance of the role.
+
 | # | Fact | Answer |
 |---|---|---|
-| 1 | Team, enrollment type, Team ID | TBD |
-| 2 | App Store Connect record: name, SKU, bundle ID, status | TBD |
-| 3 | Live version and highest build ever uploaded | TBD |
-| 4 | App ID registration and capabilities | TBD |
-| 5 | Operator's role and access | TBD |
-| 6 | Distribution certificate: SHA-256 fingerprint, expiry, creator, key holder | TBD |
-| 7 | Signing route (A automatic / B manual) | TBD |
-| 8 | Agreements accepted | TBD |
-| 9 | Export compliance and privacy answers given | TBD |
-| 10 | Push and privacy-manifest decisions known | TBD |
-| 11 | Mac, Xcode, SDK, Flutter, CocoaPods versions; test devices and iOS versions | TBD |
-| 12 | Zero-value production test account approved by | TBD |
+| 1 | Team, enrollment type, Team ID | Organization "Cadena Bitcoin S.A. de C.V.", enrollment type Organization, Team ID `D65458CPDP` (**coordinator-reported, 2026-11-19**). The Team ID equals `DEVELOPMENT_TEAM` in `ios/Runner.xcodeproj` (repository-verified). The team the operator signs in as on the operator's Mac is **not yet confirmed** (a G2 matter). For G2S the workflow's V3 reads `TeamIdentifier` from the signed app and stops on any team other than `D65458CPDP` |
+| 2 | App Store Connect record: name, SKU, bundle ID, status | App "Cadena Bitcoin", SKU `com.app.cadenabitcoin`, Apple App ID `6753348211`, bundle ID `com.app.cadenabitcoin` (equals the repository's production bundle ID), iOS version record `1.0.4` in status `Prepare for Submission` (**coordinator-reported, 2026-11-19**). Nothing has been submitted for review |
+| 3 | Live version and highest build ever uploaded | Highest build seen in the App Store Connect builds list: version `1.0.3`, build `1000034`, uploaded 2026-07-30; no build `1000035` or higher was in the inspected list (**coordinator-reported, 2026-11-19, not API-verified**; consistent with Noah's earlier report). The stop condition "highest build 1000035 or more" is not triggered on this evidence. Not stated: whether the inspected list covered expired and never-released builds. Live iOS version: TBD (not stated) **Re-confirmed by the CTO directly in App Store Connect, reported 2026-11-23:** the latest existing iOS build is `1000034`, build `1000035` has not been found; the application record (Apple App ID `6753348211`) and the internal group "Cadena Internal Testing" exist. |
+| 4 | App ID registration and capabilities | Push Notifications is enabled on the registered App ID (Noah; **coordinator-reported, 2026-11-19**). No manually managed provisioning profile is visible in the portal (coordinator-reported; Xcode-managed profiles are not shown there). **A registered capability is not evidence that the application implements push**: the app declares the `remote-notification` background mode and has no entitlements file and no `aps-environment` (repository-verified; D6) |
+| 5 | Operator's role and access | The Apple Developer organization has Admin accounts for the coordinator and for the intended operator; the coordinator reports that the operator's Apple-side privileges suffice for the planned workflow (**coordinator-reported, 2026-11-19**; account addresses are deliberately not recorded). **Still unverified:** the operator's acceptance of the role (section 2) and the operator's Xcode sign-in and signing capability on the Mac. Neither is needed for G2S (D3) |
+| 6 | Distribution certificate: SHA-256 fingerprint, expiry, creator, key holder | An Apple **cloud-managed** Distribution certificate is listed, valid until 2027-07-09, created under the organization (no individual named); an Apple Development certificate is also listed, valid until 2027-07-09, its management type not stated (**coordinator-reported, 2026-11-19**). There is no local Apple Distribution certificate and no private key on any Mac (**Noah, not verified**). No certificate or profile was created for this inspection. **Cloud-managed signing has not been demonstrated by a signing operation for 1.0.4.** Fingerprint: **not known before signing**; collected from the signed IPA with `verify_ipa.py certificate` and recorded in section 7 by the coordinator before upload. The portal's expiry is a listing; the signing certificate's own expiry is read from the IPA (IOS_RELEASE.md section 9, V3, V4) |
+| 7 | Signing route (A automatic / B manual) | A: automatic signing with Apple's cloud-managed Distribution certificate through a team API key; **decided for G2S by D7 on 2026-11-20** (section 4) |
+| 8 | Agreements accepted | Free Apps Agreement **Active**, through 2027-09-09; Digital Services Act compliance **Active**; Paid Apps Agreement **New** (not accepted), which the coordinator reads as not required for the intended internal TestFlight distribution; no outstanding agreement blocker was identified (**coordinator-reported, 2026-11-19**). Program License Agreement accepted (**Noah, not verified**; not part of the 2026-11-19 inspection). **Open:** IOS_RELEASE.md section 6 item 8 stops on "any" pending agreement; whether a Paid Apps Agreement in status New counts is for the coordinator to decide before G2 |
+| 9 | Export compliance and privacy answers given | **Reported completed by the CTO in App Store Connect for build 1000035 (2026-11-24; the answers are not recorded here, X1).** Before the upload they were not given, as the CTO's comment `7105691953` provided. |
+| 10 | Push and privacy-manifest decisions known | Push: D6 (no `aps-environment` in 1.0.4), decided 2026-11-20. Privacy manifest: X2, risk accepted by the CTO on 2026-11-23 (comment `7105691953`); Apple's response is recorded verbatim in section 7. |
+| 11 | Mac, Xcode, SDK, Flutter, CocoaPods versions; test devices and iOS versions | Hosted macOS runner with Xcode 26.3 (17C529), the toolchain pinned by the workflow and recorded by its evidence (D13: none other); Flutter 3.35.3 (repository baseline). Test devices: the physical iPhones of the two internal testers (coordinator-reported 2026-11-19; models and iOS versions not recorded). |
+| 12 | Zero-value production test account approved by | The CTO (`CadenaWizard`), by comment `7105691953` of 2026-11-23 (D2). |
+
+**Internal TestFlight configuration (coordinator-reported, 2026-11-19; not a numbered item).** An internal group "Cadena Internal
+Testing" exists (renamed from a generic name) with two internal testers, who have installed the application on physical iPhones before;
+tester feedback is enabled and automatic distribution is configured **for Xcode builds**. Automatic distribution for Xcode builds does not
+establish how a build uploaded with Transporter is assigned, so the group's behavior for such an upload is unverified and should be
+checked before G2. **Nothing has been uploaded, assigned or distributed**; assignment to testers is G3 (section 6), pending. Tester
+identities are not recorded here and the section 7 row for the tester group stays TBD until after an upload.
 
 ## 6. Authorization gates (IOS_RELEASE.md section 1)
 
+G1, the signing-only G2S Authorizations A to D (all withdrawn, consumed) and **G2S Authorization E** (ONE hosted sign-verify-and-upload operation, current, not yet executed; section 4.6) have been decided; **no authorization is current**: Authorization E was executed once (run `45221165334`) and is consumed and withdrawn (section 4.6). Nothing in sections 1 to 4 substitutes for a row below, and G1 implies no other row; G2S implies no upload and none of G2 to G5. The policy basis is section 4, D11 and D12.
+
 | Gate | Decision | By | Date | Reference |
 |---|---|---|---|---|
-| G1 source | TBD | TBD | TBD | TBD |
-| G2 production signing and upload to App Store Connect | TBD | TBD | TBD | TBD |
-| G3 assignment to named internal testers | TBD | TBD | TBD | TBD |
-| G4 submission to App Review (needs the 12-hour evidence, IOS_RELEASE.md section 11) | **not given** | | | |
-| G5 public release | **not given** | | | |
+| G1 source (commit only) | **AUTHORIZED** | CTO and release coordinator, GitHub account `CadenaWizard` | 2026-11-12 | https://github.com/CadenaBitcoin/signer_app/issues/71#issuecomment-6833584989 |
+| **G2S Authorization A** hosted signing and verification only: the CTO's written authorization of ONE GitHub-hosted signing-and-verification operation; **no upload, no distribution; not G2** (section 4.2) | **WITHDRAWN: authorization CONSUMED by run `44800943301`** (historically: authorized, conditional, one operation; it reached Apple credential use and failed at the export; no signed IPA, no upload; section 4.2, "Second attempt"). **Authorization A authorizes no further signing operation, and never will again**: it is permanently consumed. **Authorization B**, in the next row, was authorized independently after A (it is not an extension or reactivation of A) and **has itself since been consumed and withdrawn**. **Neither authorization permits further signing**; a further operation needs a new, separate CTO authorization and a new reviewed record pull request (**Authorization C**, below, was such a later authorization and has itself since been consumed and withdrawn) | CTO, GitHub account `CadenaWizard` (authorization and update); withdrawn by the reviewed PR #118 | 2026-11-20 | https://github.com/CadenaBitcoin/signer_app/issues/71#issuecomment-7038341975 (original authorization, historical); corrected workflow, historical: https://github.com/CadenaBitcoin/signer_app/issues/71#issuecomment-7046097307 |
+| **G2S Authorization B** hosted signing and verification only, with the dedicated App Manager-role key of D15: the CTO's written authorization of ONE **new** GitHub-hosted signing-and-verification operation; **no upload, no distribution; not G2; a separate authorization, independent of Authorization A (which stays consumed and withdrawn), not an extension or reactivation of it** (section 4.3) | **WITHDRAWN: authorization CONSUMED by run `44821325087`** (historically: authorized, conditional, one operation; it reached Apple credential use and failed at the export; no signed IPA, no upload; section 4.3, "Execution of Authorization B"). **Authorization B authorizes no further signing operation**; a further one needs a separate, new CTO authorization (**Authorization C**, in the next row, was such a later authorization and has itself since been consumed and withdrawn) | CTO, GitHub account `CadenaWizard` (authorization); withdrawn by the reviewed PR #120 | 2026-11-20 | https://github.com/CadenaBitcoin/signer_app/issues/71#issuecomment-7050074107 |
+| **G2S Authorization C** hosted signing and verification only, with the dedicated Admin-role key of D16: the CTO's written authorization of ONE **new** GitHub-hosted signing-and-verification operation; **no upload, no distribution; not G2; a separate authorization, independent of Authorizations A and B (which stay consumed and withdrawn), not an extension or reactivation of either** (section 4.4) | **WITHDRAWN: authorization CONSUMED by run `44834801248`** (historically: authorized, conditional, one operation; it reached Apple credential use, **Apple signing succeeded**, and the workflow failed at the V7/V8 verification; the signed IPA was not retained; no upload; section 4.4, "Execution of Authorization C"). **Authorization C authorizes no further signing operation, and neither do A or B**: all three are consumed and withdrawn, and a further operation needs a new, separate CTO authorization and a new reviewed record pull request | CTO, GitHub account `CadenaWizard` (authorization); withdrawn by PR #122 | 2026-11-20 | https://github.com/CadenaBitcoin/signer_app/issues/71#issuecomment-7052148143 |
+| **G2S Authorization D** hosted signing and verification only, with the Admin-role key under D17: the CTO's written authorization of ONE **new** operation, run primarily to acquire V8 and Distribution DER evidence; **no upload, no distribution; not G2; a separate authorization, independent of Authorizations A, B and C (which stay consumed and withdrawn)** (section 4.5) | **WITHDRAWN: authorization CONSUMED by run `45148346007`** (historically: authorized, conditional, one execution; it reached Apple credential use, **Apple signing succeeded**, the DER checks passed, and the workflow failed at the V7/V8 verification on the strict `Info.plist` byte comparison only; the signed IPA was not retained; no upload; section 4.5, "Execution of Authorization D"). **Authorization D authorizes no further signing operation, and neither do A, B or C**: all four are consumed and withdrawn, and a further operation needs a new, separate CTO authorization and a new reviewed record pull request | CTO, GitHub account `CadenaWizard` (authorization); withdrawn by the reviewed record pull request that merges section 4.5 | 2026-11-23 | https://github.com/CadenaBitcoin/signer_app/issues/71#issuecomment-7094820406 |
+| G2 production signing and upload to App Store Connect: the CTO's written authorization of this manual operation, after the prerequisites of section 4.1 (not an exception to the authorization policy). **Not given by G2S Authorizations A to D**; Authorization E (this row) builds and signs its own archive and uploads it | **CONSUMED: Authorization E (ONE operation `sign-verify-and-upload`) executed by run `45221165334`: signed, verified and UPLOADED build 1000035; WITHDRAWN** (section 4.6) | CTO, GitHub account `CadenaWizard` | 2026-11-23 | https://github.com/CadenaBitcoin/signer_app/issues/71#issuecomment-7105691953 |
+| G3 assignment to named internal testers (the CTO) | **DONE per the CTO's report of 2026-11-24 (not verified by this record):** the build is in the internal group "Cadena Internal Testing" with status TESTING, after the compliance declarations (comment `7105691953` authorized this assignment, conditionally); a manual operation in App Store Connect | CTO, GitHub account `CadenaWizard` | 2026-11-23 | https://github.com/CadenaBitcoin/signer_app/issues/71#issuecomment-7105691953 |
+| G4 submission to App Review (the CTO, a separate manual operation; needs the acceptance evidence of IOS_RELEASE.md section 11, which has no minimum duration) | **NOT AUTHORIZED** (not given) | | | |
+| G5 public release (the CTO, separately from G4) | **NOT AUTHORIZED** (not given) | | | |
+
+### 6.1 G2S authorization lines (read by the workflow's authorization gate)
+
+**Current state: these eleven lines are the lines of Authorization E, now `WITHDRAWN`** (section 4.6; the CTO's decision https://github.com/CadenaBitcoin/signer_app/issues/71#issuecomment-7105691953): `G2S-STATUS` is `WITHDRAWN` (run `45221165334` consumed the operation), `G2S-OPERATION` and `G2S-AUTHORIZATION` still name what was authorized (`sign-verify-and-upload`, comment `7105691953`) and `G2S-WORKFLOW-BLOB`, `G2S-GATE-BLOB` and `G2S-TOOL-BLOBS` keep the values of `development` at `edc640b760a48091187129eaa4c3146a6398de8b` / `630b3c98c1b93367f3447a6008bf0d1b0cc76fa6` (unchanged by this record), **kept as the record of what was authorized; while the status is `WITHDRAWN` (and the record status is not `G2 AUTHORIZED`) the gate refuses and these lines authorize nothing. No authorization is current.** The values of Authorization E (workflow `03d4bf70...`, gate `fe841d2d...`, `ipa_inspect.py` `20b7efc9...`, `verify_ipa.py` `f2886397...`) are bound to that revision; they were the blobs of the run. The paragraphs below describe Authorizations A to D and the gate's limits and are history. For the upload operation the gate additionally required the status `G2 AUTHORIZED` (section 0), which this record's pull request no longer carries, and D1, D2, D4 and D5 decided.
+
+These eleven lines are read by `tool/check_signing_authorization.sh` (IOS_HOSTED_SIGNING.md section 5). Each must stay exactly once, at the start of its
+own line, with no other text on it, **outside** code blocks and comments; the gate also requires the decided rows of section 4, the status line of section 0,
+the `APPROVED_SHA` row of section 3.1, and that the workflow revision is the current tip of `development`. They authorize **one** signing-and-verification operation and **never an upload**. **These lines are the lines of Authorization D, now `WITHDRAWN`** (section 4.5): `G2S-STATUS` is `WITHDRAWN` (run `45148346007` consumed the operation) and
+`G2S-AUTHORIZATION` still names the CTO's decision of Authorization D (comment `7094820406`), **kept as the record of what was authorized; while the status is `WITHDRAWN` the gate refuses and these lines authorize nothing. No G2S authorization is current.** **Authorization C is consumed and withdrawn** (run `44834801248`; comment `7052148143`) and its lines no longer stand in this record. **Authorizations A and B are consumed and stay so**: A's lines carried `G2S-AUTHORIZATION: https://github.com/CadenaBitcoin/signer_app/issues/71#issuecomment-7038341975` and, after run
+`44800943301`, `G2S-STATUS: WITHDRAWN` (PR #118); B's carried `G2S-AUTHORIZATION: https://github.com/CadenaBitcoin/signer_app/issues/71#issuecomment-7050074107` and, after run `44821325087`, `G2S-STATUS: WITHDRAWN` (PR #120); C's carried `G2S-AUTHORIZATION: https://github.com/CadenaBitcoin/signer_app/issues/71#issuecomment-7052148143` and, after run `44834801248`, `G2S-STATUS: WITHDRAWN` (PR #122); D's carried `G2S-AUTHORIZATION: https://github.com/CadenaBitcoin/signer_app/issues/71#issuecomment-7094820406` and, after run `45148346007`, `G2S-STATUS: WITHDRAWN` (the pull request that merges section 4.5); that history is kept in sections 4.2 to 4.5
+and in this file's Git history. Of the other lines, the approved source, version, bundle ID, team ID, gate blob, three tool blobs and the native-library hash keep the values of the consumed Authorization C as **historical evidence**; **three blob values were refreshed for Authorization D** (below) and no longer equal those of Authorizations A to C.
+
+**Hash refresh (for Authorization D).** On 2026-11-23, against `development` at `ee0c00ba9cafffbede5f06c7ad53a25dca84a871` (the merge of PR #130), the three obsolete values were recalculated with `bash tool/check_signing_authorization.sh --print-expected --tools-root .` and, independently, with `git hash-object` and `git rev-parse <commit>:<path>` (the three agree). The files themselves are unchanged by this record.
+
+| Line | Value of Authorizations A to C (history) | Value of `ee0c00b...` (recorded below) |
+|---|---|---|
+| `G2S-WORKFLOW-BLOB` | `60945f9aeabc6c0a3dbeaee5de541879b641fd2c` | `63efad944ee3d5389a0ea8c4f349e9f18b2f4a3c` |
+| `tool/ipa_inspect.py` in `G2S-TOOL-BLOBS` | `af7ced4341873dcff0113c4c417c0cce697938f6` | `1c5d06b4fbf5ba2fb5dc8da721760120e1b0d7c3` |
+| `tool/verify_ipa.py` in `G2S-TOOL-BLOBS` | `6ee2b9d74c31321904e2c042aa2bc82fc402ab35` | `15848065bfa3484884a0884b402733b8e8b2a229` |
+
+Unchanged and recalculated equal: `G2S-GATE-BLOB` `3807ee8a1b8caf4ce5f22a6f2540c0658aba90b6`, `tool/build_manifest.py` `6e6c153e...`, `tool/validate_handover_archive.py` `ef4ce2c6...`, `tool/verify_artifact.sh` `99074f4b...`. These values are bound to that revision; if a bound file changes before execution they must be recalculated.
+**`G2S-AUTHORIZATION` still names the CTO's decision of Authorization D, comment `7094820406`, kept only as part of the withdrawn state** (https://github.com/CadenaBitcoin/signer_app/issues/71#issuecomment-7094820406), read from GitHub on 2026-11-23: author `CadenaWizard`, created 2026-11-23T07:54:00Z, never edited; Issue #71 open. It authorizes nothing now: the gate refuses while the status is `WITHDRAWN`, whatever the URL says, and the comment must not be reused for another run.
+
+**What the gate does and does not do with these lines.** The gate checks that `G2S-AUTHORIZATION` has the required format, a link to a comment on Issue #71 (`…/issues/71#issuecomment-<digits>`), and appears exactly once. It does **not**
+retrieve or validate that comment (its existence, author, date or content). It does **not** verify the API key ID or the key's role: the workflow reads three secrets by name and the gate never sees them. It does **not** enforce the operation
+count: there is no run counter, and the gate accepts the lines for as long as they stay in the record. The gate therefore **cannot distinguish Authorization D from Authorizations A, B and C**, and it cannot tell a first run from a later one. That distinction is
+maintained **outside** the gate: by this release record (the ledgers of sections 4.2 to 4.5), by the CTO's written decisions (comments `7038341975` and `7046097307` for A, `7050074107` for B, `7052148143` for C, `7094820406` for D), by human review of the record pull request and of each
+deployment approval, and by the controlled registration of the credential (the CTO loads exactly the key of D17, after confirming its validity, only after the merge and an independent validation of the gate against the final tip). No technical enforcement is claimed.
+
+The workflow does **not** enforce the one-operation limit (no counter): section 4.2, "One operation", lists the operational
+controls, which apply to Authorization D unchanged (section 4.5). After the attempt of Authorization C the three credentials were removed from the environment and its lines were withdrawn by PR #122. After the execution of Authorization D (run `45148346007`) the three credentials were removed and these lines are withdrawn by the reviewed pull request that sets the first line
+to `G2S-STATUS: WITHDRAWN` (the one that merges section 4.5); they must not be edited back to authorize another run without a new CTO decision and a new reviewed record pull request (section 4.2, control 2).
+
+G2S-STATUS: WITHDRAWN
+
+G2S-OPERATION: sign-verify-and-upload
+
+G2S-APPROVED-SHA: 42d358a4e7bcbf85b92aa992ec6439214dbd4405
+
+G2S-VERSION: 1.0.4+1000035
+
+G2S-BUNDLE-ID: com.app.cadenabitcoin
+
+G2S-TEAM-ID: D65458CPDP
+
+G2S-WORKFLOW-BLOB: 03d4bf70c909c840f45ee5e57518db5ca053150d
+
+G2S-GATE-BLOB: fe841d2d5eb5b533551f28608e294ca3165f1ac0
+
+G2S-TOOL-BLOBS: tool/build_manifest.py=6e6c153e4accb9b03dcac13964a840272fa76d82,tool/ipa_inspect.py=20b7efc972d55b40a23276c5ed29a0e4b281269b,tool/validate_handover_archive.py=ef4ce2c686e2ae7c3eacb61d078764f8c5b71c3d,tool/verify_artifact.sh=99074f4b03e7db9a69cb1cfd03ee2b867e8dfd4a,tool/verify_ipa.py=f2886397f5d99581433381969e80d926831098ac
+
+G2S-DLC-WALLET-SHA256: 9a2d1d98ee4cf7aa608a161cff3d57aa380fec227876ab9c4b2b93f3f381fc13
+
+G2S-AUTHORIZATION: https://github.com/CadenaBitcoin/signer_app/issues/71#issuecomment-7105691953
+
+Requirement before any G4 request: the acceptance criteria of IOS_RELEASE.md section 11 are met and evidenced on physical devices
+installed through TestFlight. **There is no mandatory time window** (CTO decision of 2026-11-17). A TestFlight upload is not App
+Review and not a release.
 
 ## 7. Results (filled from the operator's evidence; hashes and text only)
 
 | | |
 |---|---|
-| IPA SHA-256 and size | TBD |
-| Verification V1 to V9 | TBD |
+| G2S Authorization A attempt history: run `44738600156` FAILED before Apple credential use (corrected by PR #116); the operation was **not consumed**; no signing, no upload (section 4.2) | Recorded in section 4.2 |
+| G2S Authorization A attempt history: run `44800943301` FAILED at the Xcode export (exit 70, cloud signing permission error; no certificate, no profile) after Apple credential use; the operation of Authorization A is **CONSUMED** and Authorization A is **WITHDRAWN** (PR #118); no signed IPA, no upload; credentials removed (section 4.2, "Second attempt") | Recorded in section 4.2 |
+| G2S Authorization A run (hosted signing and verification): run ID and conclusion; evidence artifact `ios-hosted-signing-evidence_<run>-<attempt>` and its `SHA256SUMS` value; the first-run signing-certificate SHA-256 (D8, circular until recorded) | Run `44800943301`, **FAILED** (export exit 70), evidence artifact `ios-hosted-signing-evidence_44800943301-1`, `SHA256SUMS.txt` SHA-256 `65af5138443c72a04a62341ff3046e1d1c56181392bb1db62c453d55833ab415`; No signing certificate was obtained or recorded from this attempt, so the D8 hash is still unrecorded |
+| G2S Authorization B attempt history: run `44821325087` FAILED at the Xcode export (exit 70, `Cloud signing permission error` 16, `No signing certificate "iOS Distribution" found` 15, `No profiles for 'com.app.cadenabitcoin' were found` 1) after Apple credential use, with the App Manager-role key of D15; the operation of Authorization B is **CONSUMED** and Authorization B is **WITHDRAWN**; no signed IPA, no upload; credentials removed. It is a separate operation from Authorization A's; the two matched (evidence, not proof of a cause) | Recorded in section 4.3 |
+| G2S Authorization B run (hosted signing and verification, App Manager key of D15): run ID and conclusion; evidence artifact `ios-hosted-signing-evidence_<run>-<attempt>` and its `SHA256SUMS` value; the first-run signing-certificate SHA-256 (D8), if any | Run `44821325087`, **FAILED** (export exit 70), evidence artifact `ios-hosted-signing-evidence_44821325087-1`, `SHA256SUMS.txt` SHA-256 `156893e442945a8a71383b162f0241b1f3d0cd3b40f728cb108eb83c45e93058`; No signing certificate was obtained or recorded from this attempt, so the D8 hash is still unrecorded |
+| G2S Authorization C attempt history: run `44834801248` reached Apple credential use with the Admin-role key of D16; **Apple signing SUCCEEDED** (`xcodebuild -exportArchive` exit 0; signed IPA SHA-256 `4999d0fb8da454ed1d7063a9ad2d9dd8feda4dcc942ea028e32c4fa7b856b1cc`, 22,693,541 bytes) and the workflow then **FAILED at V7/V8** (29 checks passed, 21 failed, 1 warning; unresolved); V1 to V6 passed, V9 not executed; the IPA was **not retained**, not uploaded, not distributed; credentials removed. The operation of Authorization C is **CONSUMED** and Authorization C is **WITHDRAWN**. It is a separate operation from Authorizations A and B; A and B stopped at the export (section 4.4) | Recorded in section 4.4 |
+| G2S Authorization C run (hosted signing and verification, Admin key of D16): run ID and conclusion; evidence artifact `ios-hosted-signing-evidence_<run>-<attempt>` and its `SHA256SUMS` value; the first-run signing-certificate SHA-256 (D8), if any | Run `44834801248`, **FAILED** (at V7/V8; Apple signing succeeded), evidence artifact `ios-hosted-signing-evidence_44834801248-1`, `SHA256SUMS.txt` SHA-256 `393c412e0f7f6c5cda8a508505520e9a658af6ed1e4a389e2681ec948fb9bb69`; signing certificate SHA-256 `7ee3f6ce78eea83748e198102f6ab66527c626296baaea437c3a90db81ef418e` (**DISCOVERED, not approved**; see below) |
+| G2S Authorization D run (hosted signing and verification, Admin key of D17): run ID and conclusion; evidence artifact `ios-hosted-signing-evidence_<run>-<attempt>` and its `SHA256SUMS` value; the Phase 7C evidence files (`v8-capture/`) | Run `45148346007`, **FAILED** (at V7/V8; Apple signing succeeded; the only verification failure is the strict `Info.plist` byte comparison), evidence artifact `ios-hosted-signing-evidence_45148346007-1`, `SHA256SUMS.txt` SHA-256 `b500065a202aac39a0922a8b9532efb2983e552d52da54ac075c7473b6c680b4` (all 35 entries verified); the Phase 7C evidence files were captured (section 4.5) |
+| **G2S Authorization E run** (hosted sign-verify-and-upload, Admin key of D18): run ID and conclusion; evidence artifact `ios-hosted-signing-evidence_<run>-<attempt>` and its `SHA256SUMS` value; the upload result (`upload-result.txt`: `uploaded=yes/no`, validation and upload exit codes); the IPA SHA-256 uploaded; Apple's processing result, any Apple warning or refusal (X2), the export-compliance answers and the G3 assignment (each recorded verbatim by the pull request that records the outcome) | Run `45221165334`, **SUCCEEDED** (https://github.com/CadenaBitcoin/signer_app/actions/runs/45221165334): IPA SHA-256 `6a9a5d3e4c5d904152271b50b65d39482c8ecc2801dca3376682998cc21c14cd` (22,693,539 bytes); validation and upload exit 0; `uploaded=yes`; Delivery UUID `7f891ccb-147b-4371-b377-ac14e8bc6dee`; evidence artifact `ios-hosted-signing-evidence_45221165334-1`, `SHA256SUMS.txt` SHA-256 `6b2254ee57c6e192cd643c7cc54dcd4c1fd15b5157dfa0e8858db853b1c2ea2a`. Apple's two warnings (90725, 90068) are in section 4.6; export compliance and the group assignment are CTO-reported (section 4.6 and section 6). Nothing else is recorded |
+| IPA SHA-256 and size | Neither run `44800943301` (Authorization A) nor run `44821325087` (Authorization B) produced a signed IPA. Run `44834801248` (Authorization C) **produced** one: SHA-256 `4999d0fb8da454ed1d7063a9ad2d9dd8feda4dcc942ea028e32c4fa7b856b1cc`, 22,693,541 bytes (from `export-result.txt`); it was **not retained** (D9), not uploaded and not distributed, and cannot be re-examined. Run `45148346007` (Authorization D) produced one too: SHA-256 `22ec01cd620a8123681f3876f6d9548f1a8b4ca305038348652d46bd095e8c42`, 22,693,541 bytes (the same size, a different digest), also **not retained**, not uploaded, not distributed. TBD for any later operation |
+| Signing certificate collected from the IPA (`certificate` output, `codesign`/`openssl` cross-check); SHA-256 **recorded by the coordinator before upload**; embedded profile name, type and expiry | From the signed IPA of run `44834801248` (D8 discovery): SHA-256 `7ee3f6ce78eea83748e198102f6ab66527c626296baaea437c3a90db81ef418e`, SHA-1 `cd121c430bfeb3c650d3de75a6bb2bdd04a5d6f3`, serial `6E0B1FC31A51B362A9FC9378161167D6`, valid 2026-07-09 to 2027-07-09, `Apple Distribution: Cadena Bitcoin S.A. de C.V. (D65458CPDP)`, type Cloud Managed Apple Distribution; profile "iOS Team Store Provisioning Profile: com.app.cadenabitcoin", app-store, expires 2027-07-09. **DISCOVERED (circular), not an approved pin;** chain and revocation not verified (section 4.4); the coordinator's recording and approval are still open. The fingerprint has been recorded as evidence. Independent verification and approval as a signing-identity pin remain outstanding. Run `45148346007` (Authorization D) read the **same** certificate (SHA-256 `7ee3f6ce78eea83748e198102f6ab66527c626296baaea437c3a90db81ef418e`); its verifier pin check used the value discovered in that run (`pin_source=DISCOVERED`) and is circular, and no pin was decided. |
+| Archive baseline (`archive-app.sha256`) and `DistributionSummary.plist` | Run `44834801248`: `archive-app.sha256` (95 files) SHA-256 `9d70b8979081caf86a02ab6848b6f29c9dce9d7eefa9a7f82203daec2b7cac6a`; `DistributionSummary.txt` (the export's summary, as text) SHA-256 `e024d58b86fb4779cdfc6e535d94b8e31cbeddf80bba576bb24e271e30d8ed96`. V8's comparison against this baseline **failed on `Info.plist`** (unresolved, section 4.4). Run `45148346007`: `archive-app.sha256` (95 files) SHA-256 `12a4732de0cad2978cce39b992d4e440732ebbcb2862113429257937cb9fd51e`; `DistributionSummary.txt` SHA-256 `4d300567ed6c9bc19aa0ae2a4c29edcbcf064b01309b36b5200be1d29bf4e890`; V8 again **failed on `Info.plist` only**, and that file differs in serialization only (section 4.5) |
+| Verification V1 to V9 | Run `44834801248`: V1 to V6 **PASSED**; **V7 and V8 FAILED** (the verifier: 29 passed, 21 failed, 1 warning; **unresolved findings**, section 4.4); V9 **not executed**. Run `45148346007` (Authorization D): V1 to V6 **PASSED**; the DER entitlements checks **PASSED**; V7 reported 56 passed, 1 failed, 3 warnings, the single failure being the strict V8 byte comparison of `Info.plist` (typed content identical, serialization differs; **disposition not decided**, section 4.5); V9 and the IPA digest re-check **not executed**. No verification result in this record is an acceptance of the IPA; for any later operation: TBD |
+| Required-reason import scan (preflight build and `$APP`) and manifests found | TBD |
 | Symbol inspection (a) to (c); the nine exported names (expected to include `_create_deterministic_nonce_c`: the library is not rebuilt) | TBD |
 | Upload time, tool, App Store Connect messages (verbatim) | TBD |
 | Processed build as shown in App Store Connect | TBD |
 | Tester group and testers (roles or names) | TBD |
-| 12-hour session log summary: total hours, devices, iOS versions, overnight interval | TBD |
+| Session log summary (a record, not a minimum): devices, iOS versions, activity | TBD |
 | Tests T1 to T10 | TBD |
 | Crashes; device-log secret check hit counts | TBD |
 | Retention (IOS_RELEASE.md section 12): `SHA256SUMS` value, storage kind, custodian role, access list, transfers | TBD |

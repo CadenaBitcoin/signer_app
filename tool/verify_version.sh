@@ -295,6 +295,119 @@ if [ -d .github ]; then
   fi
 fi
 
+# ---- 5. Launcher icons (Issue #139) --------------------------------------------------
+# The flavor is the only selector of the launcher icon, on both platforms, so the icon always
+# follows the environment. Android: a source set per flavor (src/<flavor>/res/mipmap-*/ic_launcher.jpg)
+# and NO icon in src/main, so a flavor without its own icon fails the build instead of falling
+# back to the other one. iOS: one asset set per flavor, named by ASSETCATALOG_COMPILER_APPICON_NAME
+# in ios/Flutter/Flavor-<flavor>.xcconfig (the project must not set it: a target setting would
+# override the xcconfig, which is why the six configurations do not carry it). The built artifacts
+# are checked against the same files by tool/verify_artifact.sh. The icons are generated from two
+# masters in assets/branding/ by tool/generate_app_icons.py. Replacing an icon:
+# docs/BUILD_CONFIGURATION.md, Launcher icons.
+icon_problems="$(python3 -I - <<'PY'
+import hashlib, json, os, re, struct
+
+def read(p):
+    with open(p, "rb") as f:
+        return f.read()
+
+def dims(data):
+    """(format, width, height, png_color_type) of a PNG or JPEG, from its header."""
+    if data[:8] == b"\x89PNG\r\n\x1a\n":
+        w, h = struct.unpack(">II", data[16:24])
+        return "png", w, h, data[25]
+    if data[:3] == b"\xff\xd8\xff":
+        i = 2
+        while i + 9 < len(data):
+            if data[i] != 0xFF:
+                i += 1
+                continue
+            m = data[i + 1]
+            if m in (0xD8, 0x01) or 0xD0 <= m <= 0xD7:
+                i += 2
+                continue
+            n = struct.unpack(">H", data[i + 2:i + 4])[0]
+            if 0xC0 <= m <= 0xCF and m not in (0xC4, 0xC8, 0xCC):
+                h, w = struct.unpack(">HH", data[i + 5:i + 9])
+                return "jpeg", w, h, None
+            i += 2 + n
+    return None, 0, 0, None
+
+problems = []
+def need(ok, msg):
+    if not ok:
+        problems.append(msg)
+
+# --- the two masters every icon is generated from (tool/generate_app_icons.py)
+for flavor in ("production", "staging"):
+    p = "assets/branding/app-icon-%s.png" % flavor
+    if not os.path.isfile(p):
+        problems.append("the %s icon master is missing: %s" % (flavor, p))
+        continue
+    fmt, w, h, _ = dims(read(p))
+    need(fmt == "png" and (w, h) == (1024, 1024), "%s must be a 1024x1024 PNG (found %s %dx%d)" % (p, fmt, w, h))
+
+# --- Android
+ANDROID = {"mdpi": 48, "hdpi": 72, "xhdpi": 96, "xxhdpi": 144, "xxxhdpi": 192}
+for dpi, px in ANDROID.items():
+    files = {}
+    for flavor in ("production", "staging"):
+        p = "android/app/src/%s/res/mipmap-%s/ic_launcher.jpg" % (flavor, dpi)
+        if not os.path.isfile(p):
+            problems.append("Android %s launcher icon is missing: %s" % (flavor, p))
+            continue
+        files[flavor] = read(p)
+        fmt, w, h, _ = dims(files[flavor])
+        need(fmt == "jpeg" and (w, h) == (px, px), "%s must be a %dx%d JPEG (found %s %dx%d)" % (p, px, px, fmt, w, h))
+    if len(files) == 2:
+        need(files["production"] != files["staging"], "Android %s: the staging and production launcher icons are identical" % dpi)
+shared = [os.path.join(d, f) for d, _, fs in os.walk("android/app/src/main/res") for f in fs if f.startswith("ic_launcher")] if os.path.isdir("android/app/src/main/res") else []
+need(not shared, "a launcher icon in src/main would be a fallback for a flavor without its own: %s" % ", ".join(sorted(shared)))
+manifest = read("android/app/src/main/AndroidManifest.xml").decode()
+need('android:icon="@mipmap/ic_launcher"' in manifest, "AndroidManifest.xml: android:icon must be @mipmap/ic_launcher (the flavor's resource)")
+
+# --- iOS
+sets = {"production": "AppIcon", "staging": "AppIcon-Staging"}
+pbx = read("ios/Runner.xcodeproj/project.pbxproj").decode()
+need("ASSETCATALOG_COMPILER_APPICON_NAME" not in pbx, "project.pbxproj sets ASSETCATALOG_COMPILER_APPICON_NAME; it would override the flavor's icon set")
+imgs = {}
+for flavor, icon in sets.items():
+    xc = read("ios/Flutter/Flavor-%s.xcconfig" % flavor).decode()
+    got = re.findall(r"^ASSETCATALOG_COMPILER_APPICON_NAME = (\S+)$", xc, re.M)
+    need(got == [icon], "ios/Flutter/Flavor-%s.xcconfig: ASSETCATALOG_COMPILER_APPICON_NAME must be set once, to %s (found %s)" % (flavor, icon, got))
+    d = "ios/Runner/Assets.xcassets/%s.appiconset" % icon
+    try:
+        entries = json.loads(read(d + "/Contents.json"))["images"]
+    except Exception as e:
+        problems.append("%s/Contents.json is not readable: %s" % (d, e))
+        continue
+    need(len(entries) >= 11 and any(e.get("idiom") == "ios-marketing" for e in entries), "%s: Contents.json lacks the iPhone sizes or the 1024 marketing icon" % d)
+    imgs[flavor] = {}
+    for e in entries:
+        p = "%s/%s" % (d, e.get("filename", ""))
+        if not os.path.isfile(p):
+            problems.append("%s: %s is listed in Contents.json but missing" % (d, e.get("filename")))
+            continue
+        data = read(p)
+        imgs[flavor][e["filename"]] = data
+        fmt, w, h, ctype = dims(data)
+        px = int(e["expected-size"])
+        need((w, h) == (px, px), "%s is %dx%d, Contents.json expects %dx%d" % (p, w, h, px, px))
+        need(fmt == "png" and ctype in (0, 2), "%s must be a PNG without an alpha channel (iOS rejects a transparent icon)" % p)
+if len(imgs) == 2:
+    same = sorted(n for n in imgs["staging"] if n in imgs["production"] and imgs["staging"][n] == imgs["production"][n])
+    need(not same, "iOS: staging and production icon files are identical: %s" % ", ".join(same))
+for p in problems:
+    print(p)
+PY
+)"
+if [ -z "$icon_problems" ]; then
+  pass "launcher icons: each flavor has its own Android and iOS icon set, selected by the flavor alone (no src/main fallback, no project-level override); staging differs from production"
+else
+  fail "launcher icons (Issue #139):"; echo "$icon_problems" | sed 's/^/        /'
+fi
+
 echo
 echo "Product version : $name"
 echo "Build number    : $build"

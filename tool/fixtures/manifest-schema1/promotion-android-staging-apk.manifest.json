@@ -1,0 +1,75 @@
+{
+  "schema": "cadena-build-manifest/1",
+  "variant": "android-staging-apk",
+  "platform": "android",
+  "kind": "apk",
+  "environment": "staging",
+  "classification": "compile-validation",
+  "source": {
+    "commit": "7b63c9791fccc8f9711ed853e2294967899be972",
+    "ref": "staging",
+    "ref_type": "branch",
+    "event": "push",
+    "release_id": null
+  },
+  "ci": {
+    "repository": "CadenaBitcoin/signer_app",
+    "workflow": "Build variants (compile validation)",
+    "run_id": "39237471969",
+    "run_attempt": 1,
+    "run_url": "https://github.com/CadenaBitcoin/signer_app/actions/runs/39237471969",
+    "build_id": "39237471969.1:android-staging-apk"
+  },
+  "version": {
+    "pubspec": "1.0.3+1000034",
+    "name": "1.0.3",
+    "pubspec_build": 1000034,
+    "platform_version_name": "1.0.3",
+    "platform_build_number": 1000034
+  },
+  "application": {
+    "id": "com.cadenabitcoin.mobile.signer.staging",
+    "display_name": "Cadena Signer STAGING"
+  },
+  "configuration": {
+    "file": "config/build/staging.json",
+    "sha256": "564b3a1d7cbe9dadde6a8fa5ef3b338d79d7226100a032b1dcf3d79ad4f7b9b6",
+    "build_command": "flutter build apk --release --flavor staging --dart-define-from-file=config/build/staging.json"
+  },
+  "toolchain": {
+    "android_build_tools": "36.0.0",
+    "dart": "3.9.2",
+    "flutter": "Flutter 3.35.3 \u2022 channel stable",
+    "java": "openjdk version \"17.0.10\"",
+    "runner_image": "ubuntu24 20260101.1"
+  },
+  "native_libs": {
+    "libdlcplazacryptlib.so/arm64-v8a": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+  },
+  "artifact": {
+    "file": "app-staging-release.apk",
+    "canonical_name": "cadena-signer-staging-1.0.3+1000034-android-apk-7b63c97-run39237471969.1.apk",
+    "sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    "digest_kind": "file",
+    "digest_basis": "sha256 of the raw file",
+    "size": "100"
+  },
+  "signing": {
+    "status": "debug",
+    "signer_dn": "C=US, O=Android, CN=Android Debug",
+    "signer_cert_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+  },
+  "distribution": {
+    "distributable": false,
+    "binary_retained": false
+  },
+  "verification": {
+    "environment_check": "staging-url-present-other-absent",
+    "environment_check_snapshots": "3"
+  },
+  "release_gate": {
+    "status": "not-applicable",
+    "published_floor": null
+  },
+  "known_issues": []
+}

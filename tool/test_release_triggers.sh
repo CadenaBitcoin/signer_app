@@ -31,6 +31,10 @@ bad() { failed=$((failed + 1)); echo "FAIL $1"; [ -z "${2:-}" ] || echo "     $2
 tmp="$(mktemp -d)"
 trap 'rm -rf "$tmp"' EXIT
 
+# t NAME COMMAND...  : passes when the command succeeds
+t() { local name="$1"; shift; if "$@"; then ok "$name"; else bad "$name"; fi; }
+eq() { [ "$1" = "$2" ]; }                       # eq ACTUAL EXPECTED
+
 STAGING="android-staging-apk ios-staging"
 PRODUCTION="android-production-apk android-production-aab ios-production"
 ALL="android-staging-apk ios-staging android-production-apk android-production-aab ios-production"
@@ -61,11 +65,45 @@ plan_rejected() {
 # push ARGS: EVENT REF VARIANT PARENTS CREATED
 plan_ok "push to staging (merge commit) -> the 2 staging builds" "$STAGING" push refs/heads/staging "" 2 false
 plan_ok "push to production (merge commit) -> the 3 production builds" "$PRODUCTION" push refs/heads/production "" 2 false
+# manual ARGS: EVENT REF VARIANT PARENTS CREATED RELATION (the relation of the run's commit to development)
 for v in $ALL; do
-  plan_ok "manual $v -> only $v" "$v" workflow_dispatch refs/heads/issue/68-x "$v"
+  plan_ok "manual $v -> only $v" "$v" workflow_dispatch refs/heads/development "$v" "" "" identical
 done
-plan_ok "manual all -> all five" "$ALL" workflow_dispatch refs/heads/development all
-plan_ok "manual selection does not depend on the ref" "ios-staging" workflow_dispatch refs/tags/v1 ios-staging
+plan_ok "manual all -> all five" "$ALL" workflow_dispatch refs/heads/development all "" "" identical
+plan_ok "a manual run without a staging variant does not depend on the ref" "ios-production" workflow_dispatch refs/tags/v1 ios-production
+plan_ok "a manual production run of a commit that is not on development is still allowed (it delivers nothing)" "android-production-aab" workflow_dispatch refs/heads/issue/68-x android-production-aab "" "" ahead
+
+# Manual staging runs (the pipeline that is to be signed and delivered): only the workflow on
+# development, only while its commit is the CURRENT TIP of development (an older commit, or the re-run
+# of an old run, would run old build-control scripts). Every other combination is refused.
+for rel in behind ahead diverged unknown ""; do
+  plan_rejected "manual staging with relation '$rel' to development (not the tip) is refused" workflow_dispatch refs/heads/development ios-staging "" "" "$rel"
+  plan_rejected "manual all with relation '$rel' to development (not the tip) is refused" workflow_dispatch refs/heads/development all "" "" "$rel"
+done
+plan_rejected "manual staging from a feature branch's workflow is refused" workflow_dispatch refs/heads/issue/68-x android-staging-apk "" "" identical
+plan_rejected "manual staging from a tag's workflow is refused" workflow_dispatch refs/tags/v1 ios-staging "" "" identical
+for b in main staging production development-old origin/development; do
+  plan_rejected "manual staging from the workflow of refs/heads/$b is refused (only refs/heads/development)" workflow_dispatch "refs/heads/$b" android-staging-apk "" "" identical
+done
+plan_rejected "manual staging from a bare branch name is not a ref" workflow_dispatch development android-staging-apk "" "" identical
+plan_rejected "manual all (it contains staging) from a feature branch is refused" workflow_dispatch refs/heads/issue/68-x all "" "" identical
+plan_rejected "a push cannot carry a source relation" push refs/heads/staging "" 2 false identical
+# The provenance of the run is decided here and nowhere else.
+plan_field() { "$plan" "$@" 2>/dev/null | sed -n "s/^$FIELD=//p"; }
+FIELD=origin;       t "a promotion is origin 'automatic'" eq "$(plan_field push refs/heads/staging "" 2 false)" "automatic"
+FIELD=name_prefix;  t "a promotion has no artifact name prefix" eq "$(plan_field push refs/heads/staging "" 2 false)" ""
+FIELD=on_development; t "a promotion has no on_development value" eq "$(plan_field push refs/heads/staging "" 2 false)" ""
+FIELD=origin;       t "a manual run is origin 'MANUALLY GENERATED'" eq "$(plan_field workflow_dispatch refs/heads/development all "" "" identical)" "MANUALLY GENERATED"
+FIELD=name_prefix;  t "a manual run prefixes every artifact name with MANUALLY_GENERATED_" eq "$(plan_field workflow_dispatch refs/heads/development all "" "" identical)" "MANUALLY_GENERATED_"
+FIELD=on_development; t "a manual run of the tip of development says on_development=true" eq "$(plan_field workflow_dispatch refs/heads/development ios-staging "" "" identical)" "true"
+FIELD=on_development; t "a manual production run of an older development commit says on_development=true" eq "$(plan_field workflow_dispatch refs/heads/x ios-production "" "" behind)" "true"
+FIELD=on_development; t "a manual production run of another commit says on_development=false" eq "$(plan_field workflow_dispatch refs/heads/x ios-production "" "" ahead)" "false"
+FIELD=origin;       t "a manual production run is MANUALLY GENERATED whatever the commit" eq "$(plan_field workflow_dispatch refs/heads/x ios-production "" "" ahead)" "MANUALLY GENERATED"
+# A manual staging run selects exactly the same staging variants, with the same configuration and flavor
+# (the matrix item), as the promotion does: one catalogue, no second definition.
+t "manual staging items equal the promotion's staging items" eq \
+  "$("$plan" workflow_dispatch refs/heads/development all "" "" identical | sed -n 's/^\(android\|ios\)_matrix=//p' | grep -o '{"variant":"[a-z-]*staging[a-z-]*"[^}]*}' | sort)" \
+  "$("$plan" push refs/heads/staging "" 2 false | sed -n 's/^\(android\|ios\)_matrix=//p' | grep -o '{"variant":"[a-z-]*staging[a-z-]*"[^}]*}' | sort)"
 
 plan_rejected "push to development starts nothing" push refs/heads/development "" 2 false
 plan_rejected "push to a feature branch starts nothing" push refs/heads/issue/68-release-branch-triggers "" 2 false
@@ -88,7 +126,7 @@ plan_rejected "pull_request closed on production is unsupported" pull_request re
 plan_rejected "pull_request with a selection is unsupported" pull_request refs/heads/staging ios-staging
 plan_rejected "an unknown event with a selection is unsupported" repository_dispatch refs/heads/staging all
 plan_rejected "schedule is unsupported" schedule refs/heads/staging "" 2 false
-plan_rejected "manual run without a selection" workflow_dispatch refs/heads/staging ""
+plan_rejected "manual run without a selection" workflow_dispatch refs/heads/development "" "" "" identical
 plan_rejected "manual run with an unknown variant" workflow_dispatch refs/heads/staging android-stagin-apk
 plan_rejected "manual group name staging is not a variant" workflow_dispatch refs/heads/staging staging
 plan_rejected "manual group name production is not a variant" workflow_dispatch refs/heads/staging production
@@ -108,7 +146,7 @@ out="$("$plan" push refs/heads/staging "" 2 false)"
 if [ "$(printf '%s\n' "$out" | grep -o '"variant":' | wc -l)" -eq 2 ]; then ok "staging matrices hold exactly 2 items"; else bad "staging matrices hold exactly 2 items" "$out"; fi
 out="$("$plan" push refs/heads/production "" 2 false)"
 if [ "$(printf '%s\n' "$out" | grep -o '"variant":' | wc -l)" -eq 3 ]; then ok "production matrices hold exactly 3 items"; else bad "production matrices hold exactly 3 items" "$out"; fi
-out="$("$plan" workflow_dispatch refs/heads/x ios-production)"
+out="$("$plan" workflow_dispatch refs/heads/x ios-production "" "" ahead)"
 if [ "$(printf '%s\n' "$out" | sed -n 's/^has_android=//p')" = false ] && [ "$(printf '%s\n' "$out" | sed -n 's/^has_ios=//p')" = true ]; then
   ok "manual ios-production has no Android job"
 else
@@ -239,9 +277,6 @@ on_block="$(block "$wf" '^on:' '^[a-z]')"
 push_block="$(printf '%s\n' "$on_block" | awk '/^  push:/ { f = 1; next } f && /^  [a-z_]+:/ { exit } f')"
 job() { block <(sed -n '/^jobs:/,$p' "$wf") "^  $1:\$" '^  [a-z_]+:$'; }
 
-# t NAME COMMAND...  : passes when the command succeeds
-t() { local name="$1"; shift; if "$@"; then ok "$name"; else bad "$name"; fi; }
-eq() { [ "$1" = "$2" ]; }                       # eq ACTUAL EXPECTED
 # here-strings, not pipes: `grep -q` exits at the first match and a pipe would then fail
 # under pipefail (SIGPIPE) depending on the size of the text
 has() { grep -qF -- "$2" <<<"$1"; }   # has TEXT FIXED-STRING
@@ -286,8 +321,107 @@ jplan="$(job plan)"
 t "the plan step does not pipe its output (the default shell has no pipefail)" lacks "$jplan" '| tee'
 t "the plan step gets the creation flag from the event" has "$jplan" 'CREATED: ${{ github.event.created }}'
 t "the plan step reads the parents with tool/commit_parents.sh" has "$jplan" 'parents="$(tool/commit_parents.sh "$GITHUB_SHA")"'
-t "the planner is called with the parent count and the creation flag" has "$jplan" 'tool/plan_build_variants.sh "$EVENT_NAME" "$REF" "$INPUT_VARIANT" "$parents" "$CREATED"'
+t "the planner is called with the parent count, the creation flag and the source relation" has "$jplan" 'tool/plan_build_variants.sh "$EVENT_NAME" "$REF" "$INPUT_VARIANT" "$parents" "$CREATED" "$RELATION"'
 t "the concurrency group of a push contains its commit" hasre "$(cat "$wf")" '^  group: .*github\.sha'
+
+# --- 5. retained artifacts (Stage 2, docs/RETAINED_ARTIFACTS.md) ---------------------------------
+gate_retain="        if: \${{ needs.plan.outputs.retain == 'true' }}"
+ja="$(job android)"; ji="$(job ios)"
+t "manual runs offer retain (boolean, default false) and a public-key recipient (string)" bash -c "grep -q '^      retain:' <<<\"\$1\" && grep -q '^        type: boolean' <<<\"\$1\" && grep -q '^      recipient:' <<<\"\$1\"" _ "$on_block"
+t "the plan job installs the pinned age and runs the retained-artifact tests, which may not skip it" has "$jplan" 'CADENA_REQUIRE_AGE: "1"'
+t "the plan job runs tool/test_retained_artifacts.sh" has "$jplan" 'run: tool/test_retained_artifacts.sh'
+t "the plan job decides retention with tool/retain_artifact.py plan" has "$jplan" 'tool/retain_artifact.py plan --event "$EVENT_NAME"'
+t "the plan exposes the retention decision and the recipients to the jobs" has "$jplan" 'recipients: ${{ steps.retention.outputs.recipients }}'
+t "android: every retention step is gated by the plan's retention decision (3)" eq "$(grep -cF "$gate_retain" <<<"$ja")" 3
+t "ios: every retention step is gated by the plan's retention decision (4: archive build, age, pack, upload)" eq "$(grep -cF "$gate_retain" <<<"$ji")" 4
+t "ios: the ordinary build step runs only when the run does not retain (the archive replaces it)" has "$ji" "        if: \${{ needs.plan.outputs.retain != 'true' }}"
+t "verdict: the retained checks are gated by the plan's retention decision (2)" eq "$(grep -cF "$gate_retain" <<<"$vj")" 2
+for j in android ios; do
+  jt="$(job $j)"
+  t "$j: age is installed only by tool/install_age.sh" has "$jt" 'run: tool/install_age.sh'
+  t "$j: the artifact is packed (encrypted) before anything is uploaded as retained" bash -c 'a="${1%%tool/retain_artifact.py pack*}"; b="${1%%Upload the retained*}"; [ "${#a}" -lt "${#b}" ]' _ "$jt"
+  t "$j: the retained upload is the retained/ directory only" eq "$(grep -cE '^          path: retained/$' <<<"$jt")" 1
+  t "$j: retention packs into retained/" has "$jt" '--out retained --retention-days "$RETENTION_DAYS"'
+done
+t "ios: the archive is unsigned (flutter build ipa --no-codesign) and no export is requested" bash -c 'grep -q "flutter build ipa --release --no-codesign --flavor" <<<"$1" && ! grep -qE "export-options-plist|--export-method|exportArchive" <<<"$1"' _ "$ji"
+t "ios: when retaining, the application that is verified and recorded is the one inside the archive" bash -c 'grep -q "app=\"\$ARCHIVE_PATH/Products/Applications/Runner.app\"" <<<"$1" && grep -q "build_command=\${BUILD_COMMAND:-" <<<"$1"' _ "$ji"
+t "ios: the archive is packed from the same path the evidence describes (no second archive step after the evidence)" eq "$(grep -c 'flutter build ipa .*| tee ' <<<"$ji")" 1
+t "no job downloads age or installs it by another route" lacksre "$(cat "$wf")" '(brew install age|apt(-get)? install age|go install .*age|FiloSottile/age)'
+t "the verdict downloads the retained artifacts of this attempt and verifies each bundle against the verified evidence" bash -c 'grep -q "pattern: \${{ needs.plan.outputs.name_prefix }}retained_\*_a\${{ github.run_attempt }}" <<<"$1" && grep -q "tool/check_verdict.sh retained retained" <<<"$1" && grep -q "retain_artifact.py verify \"retained/\${ARTIFACT_PREFIX}retained_\${v}_a\${RUN_ATTEMPT}\" --repo . --against evidence" <<<"$1"' _ "$vj"
+t "no workflow step selects release signing (CADENA_SIGNING) or exports an IPA" lacksre "$(cat "$wf")" '(CADENA_SIGNING|exportArchive|--export-options-plist)'
+
+# --- 6. manual runs: one pipeline, two ways to start it (docs/RELEASE_TRIGGERS.md) ----------------
+whole="$(cat "$wf")"
+t "a manual run takes no commit input: it builds the commit of the workflow itself (no source_sha)" bash -c '! grep -q "source_sha" <<<"$1"' _ "$whole"
+t "no job selects a commit of its own: no checkout has a ref (the scripts that run are the workflow's own commit's)" bash -c '! grep -A3 "uses: actions/checkout@" <<<"$1" | grep -q "ref:"' _ "$whole"
+t "there are six checkouts" eq "$(grep -c 'uses: actions/checkout@' <<<"$whole")" 6
+t "no job reads a commit from anywhere but GITHUB_SHA (no CADENA_SOURCE_SHA)" lacks "$whole" 'CADENA_SOURCE_SHA'
+t "the evidence records the commit of the run (GITHUB_SHA)" eq "$(grep -c 'echo "commit=$GITHUB_SHA"' <<<"$whole")" 2
+# One build implementation: the build commands exist once, in the jobs both triggers run.
+t "there is exactly one Android build command" eq "$(grep -c 'run: flutter build "$FLUTTER_COMMAND" --release --flavor "$BUILD_ENV" --dart-define-from-file="$BUILD_CONFIG_FILE"' <<<"$whole")" 1
+t "the Android and iOS jobs read no workflow input and no event: both triggers run them identically" bash -c '! grep -qE "inputs\.|github\.event" <<<"$1$2"' _ "$ja" "$ji"
+t "the configuration file of every build comes from the planned environment only" eq "$(grep -c 'BUILD_CONFIG_FILE: config/build/${{ matrix.env }}.json' <<<"$ja$ji")" 2
+t "no job reads or sets a signing mode, a version or a build number" lacksre "$whole" '(CADENA_SIGNING|--build-number|--build-name|BUILD_NUMBER|versionCode=)'
+# The marker on every deliverable name and in the run summary.
+t "every evidence and retained artifact name carries the planned prefix (4)" eq "$(grep -cE 'name: \$\{\{ needs.plan.outputs.name_prefix \}\}(build-evidence|retained)_' <<<"$whole")" 4
+t "no uploaded evidence or retained artifact name lacks the prefix" bash -c '! grep -E "name: (build-evidence|retained)_" <<<"$1"' _ "$whole"
+t "the run summary says MANUALLY GENERATED for a manual run (plan and verdict)" bash -c '[ "$(grep -c "MANUALLY GENERATED" <<<"$1")" -ge 4 ]' _ "$(grep -v '^[[:space:]]*#' "$workflow")"
+t "the plan hands the origin, the on_development fact and the name prefix to the jobs" bash -c 'grep -q "origin: \${{ steps.plan.outputs.origin }}" <<<"$1" && grep -q "on_development: \${{ steps.plan.outputs.on_development }}" <<<"$1" && grep -q "name_prefix: \${{ steps.plan.outputs.name_prefix }}" <<<"$1"' _ "$jplan"
+t "the build jobs pass the on_development fact to the manifest" eq "$(grep -c 'CADENA_COMMIT_ON_DEVELOPMENT: ${{ needs.plan.outputs.on_development }}' <<<"$ja$ji")" 2
+t "the relation of the run's commit to development is asked of GitHub with read access only (compare API, GITHUB_TOKEN)" bash -c 'grep -q "gh api \"repos/\$REPO/compare/development...\$GITHUB_SHA\"" <<<"$1" && grep -q "GH_TOKEN: \${{ github.token }}" <<<"$1"' _ "$jplan"
+t "the relation step runs for manual runs only" has "$jplan" "        if: \${{ github.event_name == 'workflow_dispatch' }}"
+t "the verdict names the manual origin in its summary" has "$vj" '[ "$ORIGIN" != "MANUALLY GENERATED" ]'
+
+# --- 7. the installable staging APK: android-ci-validation.yml (docs/ANDROID_CI.md) --------------------
+# The downloadable, debug-signed, labelled staging APK of a staging merge is made by this workflow. A manual run of it is the
+# way to get that APK from the current tip of development, so it carries the same marking and the same source rule
+# (decided by tool/plan_build_variants.sh, not by a second copy of the rule). Nothing may change for a promotion.
+acv="$root/.github/workflows/android-ci-validation.yml"
+acw="$tmp/acv.yml"; grep -v '^[[:space:]]*#' "$acv" >"$acw"
+acon="$(block "$acw" '^on:' '^[a-z]')"
+t "android-ci-validation: triggers are still exactly push and workflow_dispatch" eq "$(printf '%s\n' "$acon" | sed -n 's/^  \([a-z_]*\):.*/\1/p' | tr '\n' ' ')" "push workflow_dispatch "
+t "android-ci-validation: a push still builds only staging" has "$acon" "    branches: [staging]"
+t "android-ci-validation: permissions are exactly contents: read, no secret" bash -c '[ "$(grep -A1 "^permissions:" "$1" | tr -d "\n")" = "permissions:  contents: read" ] && ! grep -q "secrets\." "$1"' _ "$acw"
+t "android-ci-validation: it still builds the staging flavor with the staging configuration" bash -c 'grep -q "BUILD_CONFIG_FILE: config/build/staging.json" "$1" && grep -q "BUILD_FLAVOR: staging" "$1" && grep -q "run: flutter build apk --debug --flavor \"\$BUILD_FLAVOR\" --dart-define-from-file=\"\$BUILD_CONFIG_FILE\"" "$1"' _ "$acw"
+t "android-ci-validation: the existing verification still runs on the built APK" has "$(cat "$acw")" 'tool/verify_artifact.sh apk "$BUILD_FLAVOR" "$apk" --signing debug --debug-build'
+t "android-ci-validation: the APK is uploaded as before (the prepared name, 14 days)" bash -c 'grep -q "name: \${{ steps.prep.outputs.name }}" "$1" && grep -q "retention-days: 14" "$1"' _ "$acw"
+t "android-ci-validation: no signing mode, no version or build number is read or set" lacksre "$(cat "$acw")" '(CADENA_SIGNING|--build-number|--build-name|BUILD_NUMBER|versionCode=)'
+t "android-ci-validation: the manual-run step is for manual runs only" has "$(cat "$acw")" "        if: \${{ github.event_name == 'workflow_dispatch' }}"
+t "android-ci-validation: the manual rule is the planner's (staging APK variant, the workflow ref, the compare relation)" has "$(cat "$acw")" 'tool/plan_build_variants.sh workflow_dispatch "$GITHUB_REF" android-staging-apk "" "" "$relation"'
+t "android-ci-validation: the relation of the commit to development is asked of GitHub with read access only" bash -c 'grep -q "gh api \"repos/\$REPO/compare/development...\$GITHUB_SHA\"" "$1" && grep -q "GH_TOKEN: \${{ github.token }}" "$1"' _ "$acw"
+t "android-ci-validation: the manual rule runs BEFORE anything is built (a refused run builds nothing)" bash -c 'a="${1%%Manual run - MANUALLY GENERATED*}"; b="${1%%run: flutter build apk --debug*}"; [ "${#a}" -lt "${#b}" ]' _ "$(cat "$acw")"
+t "android-ci-validation: the artifact name gets the planned prefix" has "$(cat "$acw")" 'name="${NAME_PREFIX}CI-VALIDATION-NOT-APPROVED-FOR-PUBLIC-DISTRIBUTION_cadena-signer_v'
+# Run the REAL "Prepare labelled artifact" script, for a promotion and for a manual run.
+prep_script() { awk '/^      - name: Prepare labelled artifact/ { f = 1; next } f && /^      - name:/ { exit } f' "$acv" | sed -n '/^        run: |$/,$p' | sed '1d; s/^          //'; }
+prep_run() { # DIR NAME_PREFIX ORIGIN
+  local d="$1"; rm -rf "$d"; mkdir -p "$d/rt" "$d/build/app/outputs/flutter-apk"
+  printf 'name: x\nversion: 1.0.4+1000035\n' >"$d/pubspec.yaml"
+  printf 'APP_ENV=staging\nNETWORK_ENVIRONMENT=signet\nUSE_TESTNET=true\nAPI_BASE_URL=https://staging.purabitcoin.com/app\n' >"$d/rt/resolved-build-config.txt"
+  printf 'application_id=com.cadenabitcoin.mobile.signer.staging\ndisplay_name=Cadena Signer STAGING\n' >"$d/rt/apk-evidence.txt"
+  printf 'apk-bytes' >"$d/build/app/outputs/flutter-apk/app-staging-debug.apk"
+  prep_script >"$d/prep.sh"
+  (cd "$d" && env RUNNER_TEMP="$d/rt" BUILD_FLAVOR=staging BUILD_CONFIG_FILE=config/build/staging.json \
+     GITHUB_SHA=0123456789abcdef0123456789abcdef01234567 GITHUB_REF_NAME=development GITHUB_SERVER_URL=https://github.com GITHUB_REPOSITORY=CadenaBitcoin/signer_app \
+     GITHUB_RUN_ID=999 GITHUB_RUN_NUMBER=7 GITHUB_RUN_ATTEMPT=1 GITHUB_STEP_SUMMARY="$d/summary.md" GITHUB_OUTPUT="$d/out.txt" NAME_PREFIX="$2" ORIGIN="$3" bash -e prep.sh >"$d/log.txt" 2>&1)
+}
+PUSH_NAME="CI-VALIDATION-NOT-APPROVED-FOR-PUBLIC-DISTRIBUTION_cadena-signer_v1.0.4+1000035_staging_0123456_run7-1"
+if prep_run "$tmp/acv_push" "" ""; then
+  t "android-ci-validation: a promotion's artifact name is unchanged (no prefix)" eq "$(sed -n 's/^name=//p' "$tmp/acv_push/out.txt")" "$PUSH_NAME"
+  t "android-ci-validation: a promotion's APK file is named as before" test -f "$tmp/acv_push/ci-artifact/${PUSH_NAME}_debug.apk"
+  t "android-ci-validation: a promotion's notice and summary carry no manual marker" bash -c '! grep -rqi "MANUALLY" "$1/ci-artifact" "$1/summary.md" "$1/log.txt"' _ "$tmp/acv_push"
+  t "android-ci-validation: the notice records the full source commit SHA" bash -c 'grep -q "^Commit SHA  : 0123456789abcdef0123456789abcdef01234567" "$1/ci-artifact/CI-VALIDATION-NOTICE.txt"' _ "$tmp/acv_push"
+else bad "android-ci-validation: the prepare step failed for a promotion" "$(tail -n 5 "$tmp/acv_push/log.txt")"; fi
+if prep_run "$tmp/acv_man" "MANUALLY_GENERATED_" "MANUALLY GENERATED"; then
+  t "android-ci-validation: a manual run's artifact name starts with MANUALLY_GENERATED_ and keeps the rest" eq "$(sed -n 's/^name=//p' "$tmp/acv_man/out.txt")" "MANUALLY_GENERATED_$PUSH_NAME"
+  t "android-ci-validation: a manual run's APK file carries the marker" test -f "$tmp/acv_man/ci-artifact/MANUALLY_GENERATED_${PUSH_NAME}_debug.apk"
+  t "android-ci-validation: a manual run's notice says MANUALLY GENERATED first and records the full commit SHA" bash -c 'head -n1 "$1/ci-artifact/CI-VALIDATION-NOTICE.txt" | grep -q "^MANUALLY GENERATED" && grep -q "^Commit SHA  : 0123456789abcdef0123456789abcdef01234567" "$1/ci-artifact/CI-VALIDATION-NOTICE.txt"' _ "$tmp/acv_man"
+  t "android-ci-validation: a manual run's summary starts with MANUALLY GENERATED and the source commit" bash -c 'head -n1 "$1/summary.md" | grep -q "^## MANUALLY GENERATED" && grep -q "0123456789abcdef0123456789abcdef01234567" "$1/summary.md"' _ "$tmp/acv_man"
+  t "android-ci-validation: the manual run keeps the staging identity, configuration and the not-for-distribution label" bash -c 'grep -q "com.cadenabitcoin.mobile.signer.staging" "$1/ci-artifact/CI-VALIDATION-NOTICE.txt" && grep -q "STAGING backend configuration (Signet)" "$1/ci-artifact/CI-VALIDATION-NOTICE.txt" && grep -q "NOT APPROVED FOR PUBLIC DISTRIBUTION" "$1/ci-artifact/CI-VALIDATION-NOTICE.txt"' _ "$tmp/acv_man"
+else bad "android-ci-validation: the prepare step failed for a manual run" "$(tail -n 5 "$tmp/acv_man/log.txt")"; fi
+# the planner call of that workflow, for the APK variant alone
+plan_ok "manual android-staging-apk from development at the tip -> only that variant" "android-staging-apk" workflow_dispatch refs/heads/development android-staging-apk "" "" identical
+plan_rejected "manual android-staging-apk of an older development commit is refused" workflow_dispatch refs/heads/development android-staging-apk "" "" behind
+plan_rejected "manual android-staging-apk from a feature branch is refused" workflow_dispatch refs/heads/issue/57-x android-staging-apk "" "" identical
 
 echo
 echo "$pass passed, $failed failed"

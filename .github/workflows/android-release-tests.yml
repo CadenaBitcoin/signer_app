@@ -13,6 +13,9 @@
 #     request (docs/RELEASE_TRIGGERS.md). This workflow only tests, with `pull_request` (never
 #     `pull_request_target`, so code of a fork cannot reach a secret, and there is none).
 #
+# The job `ios-signing-security` is separate and independent of the Android jobs: it runs the security tests of the iOS hosted
+# signing workflow (Issue #71, docs/IOS_HOSTED_SIGNING.md) on every pull request, with no secret and no Apple contact.
+#
 # No path filter: the jobs take seconds to a few minutes, and a filter would leave a required check
 # "skipped" on pull requests that touch other files. See docs/ANDROID_RELEASE.md section 7.
 
@@ -88,3 +91,66 @@ jobs:
       # no identity; every other fail-closed rule still holds. Each case is a Gradle --dry-run.
       - name: Test the release signing rules with a disposable keystore
         run: tool/test_android_gradle_signing.sh
+
+  # iOS signing security (Issue #71): the authorization gate, the archive validator, and the hosted signing workflow's static rules,
+  # BEHAVIOUR (its real steps run with synthetic credentials and stubs) and dangerous-edit MUTATIONS. Independent of the jobs above.
+  # On a pull request, actions/checkout takes the pull request MERGED into its base branch, so these tests judge the actual change.
+  # Nothing here builds, signs, contacts Apple or reads a secret. The one dependency, PyYAML, is pinned to an exact version,
+  # installed from wheels only, every file hash-checked (tool/requirements-signing-tests.txt), in a throwaway virtual environment.
+  ios-signing-security:
+    name: iOS signing security tests (gate, archive validator, workflow behaviour and mutations)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout exact commit (the pull request merged into its base)
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+
+      - name: Install PyYAML (exact version, wheels only, hash-checked, throwaway virtual environment)
+        run: |
+          python3 -m venv "$RUNNER_TEMP/signing-tests-venv"
+          "$RUNNER_TEMP/signing-tests-venv/bin/python" -m pip install --disable-pip-version-check --require-hashes --only-binary=:all: -r tool/requirements-signing-tests.txt
+          echo "$RUNNER_TEMP/signing-tests-venv/bin" >> "$GITHUB_PATH"
+
+      - name: Check that the pinned dependency is the one in use
+        run: python3 -c 'import sys, yaml; assert yaml.__version__ == "6.0.3", yaml.__version__; print("PyYAML", yaml.__version__, sys.executable)'
+
+      - name: Test the signing authorization gate (G2S lines, bound blobs, decided rows, dlc_wallet hash, current tip)
+        run: tool/test_check_signing_authorization.sh
+
+      - name: Test the hosted signing workflow, static rules
+        run: tool/test_ios_hosted_signing.sh
+
+      - name: Test the hosted signing workflow behaviour, the archive validator and the dangerous-edit mutations
+        run: tool/test_ios_hosted_signing_behavior.sh
+
+      # The automatic iOS STAGING delivery (Issues #54, #71): its authorization gate against real throwaway git remotes, and the workflow's static rules, including
+      # that every step holding a secret or judging the IPA is the same text as the production workflow's and that the production workflow is untouched.
+      - name: Test the staging authorization gate (record lines, bound blobs, live development record, merge-commit source, staging identity)
+        run: tool/test_check_staging_authorization.sh
+
+      - name: Test the staging delivery workflow, static rules, parity with the production workflow, and the Android staging APK delivery
+        run: tool/test_ios_staging_delivery.sh
+
+      # The credential-free preflight of the staging archive (Issues #54, #71): no secret, no signing, no upload, and the same archive steps as the delivery's build job.
+      - name: Test the staging archive preflight (workflow shape, equivalence with the delivery build, comparison behaviour)
+        run: tool/test_ios_staging_preflight.sh
+
+      # The IPA verifier (tool/verify_ipa.py, tool/ipa_inspect.py) is the tool that judges a signed IPA; its tests run here, on every pull
+      # request, with synthetic IPAs and the real Apple cloud-signing CMS and embedded Info.plist fixtures of tool/fixtures/. Credential-free,
+      # no network. The script SKIPS (exit 0) when openssl lacks the `cms` command, which must never pass silently in CI.
+      - name: Test the IPA verification tooling (synthetic IPAs, real Apple cloud-signing CMS fixtures, embedded Info.plist seals)
+        run: |
+          openssl cms -help >/dev/null 2>&1 || { echo "::error::openssl with the cms command is required; tool/test_verify_ipa.sh would be skipped"; exit 1; }
+          tool/test_verify_ipa.sh
+
+      # The DER entitlements diagnostics of Issue #71, Phase 2 (a workflow template under docs/ and, only while it is temporarily activated, the workflow of the same code, a probe script and a probe
+      # tool): their static rules, and the script's flow against stub macOS commands. Nothing is run on macOS and nothing is started on GitHub.
+      - name: Test the DER entitlements diagnostics (template and temporary workflow, both states; credential-free, ad hoc, disposable program only)
+        run: tool/test_ios_der_diagnostics.sh
+
+      # The offline fixture extractor of Issue #71, Phase 3 preparation: rebuilds the three synthetic fixtures from a SAVED job log and
+      # rejects anything inconsistent. It reads files on the runner only: no network, no execution of what it extracts, no upload.
+      - name: Test the offline DER fixture extractor (standard library only; writes only into a new directory)
+        run: tool/test_extract_probe_fixtures.sh

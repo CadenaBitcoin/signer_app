@@ -10,6 +10,12 @@
 > listed in [section 10](#10-what-exists-today). *Decided* marks requirements
 > fixed by the project owners on 2026-10-12; *Proposed* marks mechanisms that
 > are not decided; open points are in [section 11](#11-open-decisions).
+>
+> **Revised for CTO review (Issue #54, CTO decisions of 2026-11-17, V1 to V6).** Principles 3 and 9, section 2.3 (authorization
+> architecture), section 2.4 (failure, retry and recovery) and 7.3 (version advancement) replace the earlier rules that production
+> signing and delivery need a second, independent human and that publication is a separate authorization. **The authorized merge into
+> a protected release branch is the single human authorization boundary.** The policy states the intended architecture; what is
+> implemented and what is not is stated in section 2.3 ("Verified implementation state") and section 10.
 
 Branch roles, merge authority and issue handling stay in
 [GOVERNANCE.md](../GOVERNANCE.md) and are not repeated. Signing and credentials:
@@ -27,11 +33,12 @@ Branch roles, merge authority and issue handling stay in
    IDs, different backends, different Bitcoin networks, different signing and
    deployment contexts, independently installable side by side on one device
    ([section 5](#5-application-identity)).
-3. **Two protected release branches, one pipeline each.** A merge into `staging`
-   builds and signs the two staging artifacts; a merge into `production` builds
-   and signs the three production artifacts. A merge triggers **builds**, never an
-   uncontrolled public release; publication is a separate authorization
-   ([section 2](#2-release-branches-and-triggers)).
+3. **Two protected release branches, one pipeline each; the target branch is the
+   authorization.** An authorized merge into `staging` is authorization to execute the
+   complete staging pipeline (two artifacts); an authorized merge into `production`
+   is authorization to execute the complete production pipeline (three artifacts).
+   There is no further manual authorization after the merge
+   ([section 2.3](#23-authorization-architecture-decided-by-the-cto-2026-11-17)).
 4. **Explicit, fail-closed configuration.** Backend, network and identity are
    chosen explicitly and checked. A missing, inconsistent or unsuitable
    configuration fails the build; staging never falls back to production
@@ -49,12 +56,18 @@ Branch roles, merge authority and issue handling stay in
    upgrade guarantee; internal testers only; never presented as production.
 8. **Traceability.** A signed artifact is attributable to an approved Git
    revision and carries the release record of [section 9](#9-release-record).
-9. **Independent approval of production.** Production signing and production delivery
-   need approval by a person who did not prepare, merge or trigger the run. Several
-   accounts controlled by one individual count as one person. Until a second
-   independent human is designated, production signing is not authorized
-   ([RELEASE_SIGNING_ARCHITECTURE.md](RELEASE_SIGNING_ARCHITECTURE.md) section 6,
-   [IOS_SIGNING.md](IOS_SIGNING.md) section 6).
+9. **The authorized merge is the single human authorization boundary.** The release
+   authority is exercised by one act: merging a reviewed pull request into a protected
+   release branch. The established GitHub workflow is `sziller` (development and pull-request
+   preparation) and `CadenaWizard` (CTO-controlled review and merge authorization). **Both
+   accounts belong to the same person.** GitHub does not let an author approve their own pull
+   request, which is why there are two accounts. This policy neither requires nor pretends that
+   they are independent human reviewers, and no document, release record, workflow or status
+   check may describe them as such. What replaces a second human is **automated and
+   mandatory** in the intended architecture: protected branches, signed commits, required checks,
+   verification that stops delivery on failure, strict provenance and auditable records. Which of
+   these is active today is stated in
+   [section 2.3](#23-authorization-architecture-decided-by-the-cto-2026-11-17) ("Verified implementation state").
 
 ## 2. Release branches and triggers
 
@@ -69,9 +82,9 @@ issue branch → development → staging → production
 |---|---|---|
 | Exists | Yes, protected | **No** (verified 2026-10-12) |
 | Receives | Pull request from `development` | Pull request from `staging` |
-| Merge triggers | Staging pipeline: build and sign 2 artifacts | Production pipeline: build and sign 3 artifacts |
+| Merge triggers | The complete staging pipeline (2.3): version advance, build, verify, sign, deliver, record; 2 artifacts | The complete production pipeline (2.3): build, verify, sign, deliver, record; 3 artifacts |
 | Build configuration | Staging (backend, Signet) | Production (backend, mainnet) |
-| Distribution | iOS: restricted TestFlight (mandatory). Android: internal only, never public (section 8) | Not by the merge. Separately authorized publication |
+| Distribution | iOS: restricted TestFlight (mandatory). Android: internal only, never public (section 8) | The production pipeline's configured non-public upload, authorized by the merge; no automatic App Review submission or public publication (2.3); Apple's and Google's review and acceptance still apply |
 | Protected environments | Staging signing/deployment context | Production signing/deployment context |
 
 ### 2.1 Creating `production` (Decided: required; branch created, Issue #68)
@@ -96,8 +109,9 @@ one-time exception approved by the owner (Issue #68).
      promotion only);
    - required status checks once available (version validation, configuration
      validation, CI validation);
-   - Proposed: two approvals, and creation of release tags `v*` restricted to the
-     release workflow identity.
+   - Proposed: creation of release tags `v*` restricted to the release workflow
+     identity. One approval from `CadenaBitcoin/Maintainers` is the authorization;
+     a second approval is not required and would not be independent (principle 9).
 3. Protected environments for the production signing context exist and accept
    deployments from `production` only
    ([RELEASE_SIGNING_ARCHITECTURE.md](RELEASE_SIGNING_ARCHITECTURE.md)).
@@ -107,15 +121,152 @@ one-time exception approved by the owner (Issue #68).
 ### 2.2 Promotion procedure
 
 1. Work reaches `development` by pull request (`Implements #N`).
-2. `development → staging` by pull request. The merge builds and signs the
-   staging artifacts. Testers verify them.
+2. `development → staging` by pull request. The merge executes the complete staging
+   pipeline (2.3), including delivery to the configured internal testing
+   destinations. Testers verify the artifacts.
 3. `staging → production` by pull request containing only commits already on
-   `staging`. The merge builds and signs the production artifacts from the same
-   source with the production configuration. The environment differences are the
+   `staging`. The merge executes the complete production pipeline (2.3) from the
+   same source with the production configuration. The environment differences are the
    configuration and identity inputs, not diverging source
    (`GOVERNANCE.md` section 3).
-4. Publication of any production artifact needs a separate, explicit
-   authorization by the release authority (section 8).
+4. The merge authorizes the production pipeline's configured delivery operations (upload to
+   non-public destinations); no separate approval follows it (2.3). Automatic App Review
+   submission and public publication are outside that scope; the configuration changes only by a
+   reviewed pull request.
+
+### 2.3 Authorization architecture (Decided by the CTO, 2026-11-17)
+
+**The target branch is the authorization.** An authorized merge into `staging` or `production`
+is authorization to execute that branch's complete pipeline. After the merge there is **no
+additional manual step**: no approval prompt, no required reviewer on a signing or delivery
+environment, no manual release-intent flag, no change classification and **no file-path
+filter**. Every merge, including a documentation-only one, runs its branch's pipeline.
+(`development` is not a release branch: a merge into it builds nothing.)
+
+**Every successful merge into `staging`** must:
+
+1. carry the build-version advancement, validated **before** the merge and never written after it (7.3);
+2. trigger the staging CI/CD pipeline;
+3. build the Android staging APK and the iOS staging (TestFlight) artifact;
+4. retain the built artifacts and verify them;
+5. sign them and verify the signed artifacts again;
+6. deliver them to their configured internal testing destinations;
+7. record the deployment evidence (section 9).
+
+**Every successful merge into `production`** must:
+
+1. trigger the production CI/CD pipeline;
+2. build the production Android APK, the production Android AAB and the iOS App Store distribution IPA;
+3. retain the built artifacts and verify them;
+4. sign them and verify the signed artifacts again;
+5. deliver the applicable artifacts to the configured production delivery destinations (below);
+6. record the deployment evidence (section 9).
+
+**Scope of the automated production delivery (CTO decision, 2026-11-17).** The configured delivery
+is the upload of the verified, signed artifacts to their configured **non-public** destinations
+(for example App Store Connect for the IPA and the Play Console for the AAB). **Automatic
+submission to App Review and any public publication or release are outside the configured
+automated scope** and may be incorporated later only by an explicit architectural extension of
+this policy, through a reviewed pull request. Leaving them out is not an approval step and adds
+none: nothing human follows the merge. Apple's and Google's own review and acceptance remain the
+stores' requirements, and a store's refusal is a failed delivery, not a question of
+authorization. The exact destinations are decided with the implementation (open decision 16).
+
+Versioning follows section 7 and [RELEASE_VERSIONING.md](RELEASE_VERSIONING.md) and keeps both
+platforms compatible.
+
+**The single human boundary.** The merge, by the CTO-controlled account after the required
+review, is the one human authorization (principle 9). Automated security and integrity checks
+are mandatory, and **a verification failure stops delivery**: nothing further is delivered and
+the stop point is recorded. What happens next depends on the kind of failure (2.4).
+
+**Technical invariants** (preserved; each is the replacement for what a second human would
+have done):
+
+| Invariant | Where it is specified |
+|---|---|
+| Protected release branches: pull request, approval from `CadenaBitcoin/Maintainers`, no force push, no deletion, no bypass actor | `GOVERNANCE.md` section 6, [RELEASE_TRIGGERS.md](RELEASE_TRIGGERS.md) |
+| Signed commits and required CI checks on the release branches, including the version check | Implementation requirement, not active (below) |
+| Verified, retained build artifacts, encrypted to public keys, never public | [RETAINED_ARTIFACTS.md](RETAINED_ARTIFACTS.md), section 3.2 |
+| **No recompilation during signing**: signing acts on the verified retained artifact (Android) or the exported archive (iOS) | [RETAINED_ARTIFACTS.md](RETAINED_ARTIFACTS.md), [IOS_RELEASE.md](IOS_RELEASE.md) sections 8, 9 (V8) |
+| Isolated signing credentials: protected environments deployable from their one branch, secrets at environment level only, no access from forks or pull requests, build and sign in separate jobs | [RELEASE_SIGNING_ARCHITECTURE.md](RELEASE_SIGNING_ARCHITECTURE.md) |
+| Strict artifact provenance: source commit, build manifest, artifact SHA-256, configuration hash, toolchain | [RELEASE_VERSIONING.md](RELEASE_VERSIONING.md), section 9 |
+| Automated post-signing verification that stops delivery on failure | `tool/verify_ipa.py`, `tool/verify_android_release.py`, `tool/verify_artifact.sh`, `tool/build_manifest.py` |
+| Auditable delivery records, including every retry attempt | Sections 2.4 and 9 |
+| Failure-safe deployment: fail closed, no partial delivery presented as success | This section and 2.4 |
+
+**Signing credential custody (CTO decision, 2026-11-17).** Secure custody, backup and recovery of
+the signing credentials Cadena controls are preserved, for **business continuity and recovery
+from credential loss**. Custodians are **not release authorizers**, and no second-person approval
+is required for routine signing or deployment. Three kinds of credential are kept apart
+([RELEASE_SIGNING_ARCHITECTURE.md](RELEASE_SIGNING_ARCHITECTURE.md) section 7): (1) credentials
+Cadena itself controls (Android upload and app-signing keys, an App Store Connect API key);
+(2) Apple **cloud-managed** signing certificates, whose private key Apple holds and which Cadena
+cannot back up; (3) working copies of credentials stored in protected CI/CD environments. This
+policy creates and transfers none of them.
+
+**Verified implementation state (checked 2026-11-17, GitHub API and repository).** The policy above
+is the intended architecture. These are **not** active, and nothing in this amendment activates
+them:
+
+| Control | State today |
+|---|---|
+| Protected release branches | **Active** on `development`, `staging` and `production`: pull request with a `Maintainers` review required, deletion and force push blocked, bypass lists empty in the API response |
+| Mandatory signed-commit enforcement | **Not active**: no `required_signatures` rule on any branch; signed commits are a development practice |
+| Required CI status checks | **Not active**: no `required_status_checks` rule on any branch |
+| Version-advancement check (7.3) | **Not implemented** |
+| Artifact-retention recipients | **Not configured**: `config/release/artifact_recipients.txt` names no key |
+| Protected signing environments | **None**: the repository has no GitHub environment |
+| Automated signing credentials | **None**: no workflow uses a secret or an environment; the Android upload key is held by the CFO and used locally |
+| Automated signing and automated store delivery | **Not implemented** |
+| Retry handling (2.4) | **Not implemented** |
+| What a release-branch merge does today | Compile-only `build-variants` plus the validation workflows: no signing, no upload |
+
+These are the implementation requirements of issue #54 ([RELEASE_IMPLEMENTATION_PLAN.md](RELEASE_IMPLEMENTATION_PLAN.md)).
+A pipeline step is switched on only when what it relies on exists, and this amendment activates
+no incomplete signing or upload workflow. Until then a merge authorizes only what the workflows
+actually do.
+
+**Manual operations before automation exist.** Where a delivery step is not yet automated, a
+person performs it by hand. That is an **operational exception to the future automation**, not
+an exception to this authorization policy. Because no pipeline run exists to carry the merge's
+authorization, such an operation needs the CTO's explicit, written authorization of that specific
+operation, made through the same boundary. It does not need, and no document may require, a
+second human. The first is iOS 1.0.4 ([IOS_RELEASE.md](IOS_RELEASE.md)). A manual operation may be carried out by a manually started workflow in a
+protected environment (iOS 1.0.4, G2S: [IOS_HOSTED_SIGNING.md](IOS_HOSTED_SIGNING.md)); it still needs the CTO's written authorization of that specific operation, it is
+not a merge-authorized pipeline (a merge authorizes only what the workflows actually do), and the environment's reviewer approval confirms a deployment, never
+replaces that authorization.
+
+### 2.4 Failure, retry and recovery (architectural requirement; not implemented)
+
+Two kinds of failure are kept apart.
+
+**Application or artifact failure.** A defective application, a failed verification (including a
+failed post-signing verification) or an invalid artifact is corrected through the approved
+source-control workflow: a fix on `development`, then the normal pull requests. The corrected
+release receives a new version and build number (7.3); the failed number stays consumed.
+
+**Infrastructure or delivery failure.** A transient failure (a lost runner, a network or store
+outage, an interrupted upload, a rate limit) after a verified artifact exists must **not**
+require a recompilation or a new version. The eventual pipeline retries, in a controlled way,
+**the same previously retained and verified artifact**. It must:
+
+1. act on the retained artifact identified by its SHA-256 and manifest, and verify it again
+   before every attempt;
+2. be idempotent: check the destination before each upload and never upload a second copy, or a
+   different artifact under the same version and build number;
+3. repeat only the configured non-public delivery operations, so a retry can never publish;
+4. preserve provenance: the manifest and digest are those of the first attempt;
+5. record **every** attempt (attempt number, time, operation, destination, artifact digest, result,
+   reason);
+6. be bounded: after the configured limit it stops, records the failure and leaves the next step
+   to a person.
+
+A failure **before** a verified artifact is retained (the build infrastructure itself) is repaired
+by running the same commit again: a new CI execution of the same commit and the same version,
+as [RELEASE_VERSIONING.md](RELEASE_VERSIONING.md) already says. An artifact that then fails its
+verification is an artifact failure, above. Run attempts are already identified as
+`<run id>.<attempt>`.
 
 ## 3. The five signed artifacts
 
@@ -157,9 +308,14 @@ Target state (**Decided**). None of these exists yet.
 
 Rules common to all five:
 
-- **A pipeline output is a signed build artifact, not a release.** Uploading to
-  the website, Google Play or the App Store, and submitting for review, are
-  separate authorized acts.
+- **A pipeline output is a signed build artifact.** It goes only to the delivery
+  operations the branch's pipeline is configured for, authorized by the merge
+  (section 2.3). The *Distribution* row above names where each artifact eventually
+  goes; the automated delivery ends at non-public upload, and public publication
+  (the website, a Play production release, an App Store release) and submission to
+  App Review are outside it until an explicit architectural extension (2.3). A
+  manual upload, before the pipeline can do it, needs the CTO's written
+  authorization of that operation (2.3).
 - The APK and the AAB of one production release share `versionName`,
   `versionCode`, application ID and update family. The official APK is the
   universal APK (`--split-per-abi` changes the `versionCode`).
@@ -169,9 +325,11 @@ Rules common to all five:
   repository is public, and the artifacts and logs of its workflow runs are
   readable by any GitHub account (the CI documents already note this). A signed
   artifact is therefore never left as an ordinary Actions artifact, a GitHub
-  Release or a pull request attachment before its distribution is authorized
+  Release or a pull request attachment, whatever its delivery configuration
   (section 8.2). Digests and the release record, which contain no binary, may be
-  public.
+  public. An artifact kept **encrypted to the custodians' public keys**
+  ([RETAINED_ARTIFACTS.md](RETAINED_ARTIFACTS.md), Stage 2) is ciphertext and is not retrievable
+  in this sense; a readable artifact is still never uploaded.
 - Successful compilation is not signing and signing is not distribution. The CI
   validation builds (section 4) are none of the five.
 
@@ -183,7 +341,7 @@ Rules common to all five:
 | Trigger | Push to `staging`, or manual | Merge into `staging` | Merge into `production` | The builder |
 | Output | Android: **debug-signed** APK. iOS: **unsigned** `Runner.app` | 2 signed artifacts | 3 signed artifacts | Builder's choice |
 | Signing | Ephemeral debug key / none | Cadena, staging context | Cadena, production context | Builder's own keys |
-| Distributable | **Never** | Restricted only: iOS via TestFlight (mandatory), Android internal and non-public | After separate authorization | Builder's responsibility |
+| Distributable | **Never** | Restricted only: iOS via TestFlight (mandatory), Android internal and non-public | Through the pipeline's configured delivery, authorized by the merge (2.3) | Builder's responsibility |
 | Official | No | Candidate | Yes, once published | No |
 
 - Validation builds stay as they are until a deliberate, approved transition
@@ -344,9 +502,37 @@ investigation report and approval before any code changes.
   numbers, and updates the validation deliberately instead of bypassing it.
 - The AAB and the APK of one production release share `versionName` and
   `versionCode`.
-- Where the build number comes from for each merge is open (decision 4). **Proposed
-  baseline:** raised in `pubspec.yaml` by the promotion pull request and checked
-  for uniqueness by the pipeline, so it is visible in the approved Git revision.
+- **Version advancement (Decided, CTO 2026-11-17, option A).** Every successful merge into
+  `staging` carries a build-number advance, **whatever the merge contains; a documentation-only
+  merge is not exempt**. The advance is a **reviewed edit of `pubspec.yaml` that is part of the
+  pull request** (practically, a reviewed commit on `development` that the promotion carries:
+  `development` builds nothing, so numbers there are not consumed). The `-rc.N` identifier
+  advances with it (7.4).
+- **Validated before the merge, never rewritten after it.** A **required status check**
+  (implementation requirement, not active; 2.3) runs on every pull request into a release
+  branch, with no path filter, and fails the pull request unless the version is correct: the
+  existing rules of 7.5 hold; the build number is **strictly above every number already
+  consumed** (the highest at any commit reachable from the target branch and in the
+  published-versions ledger); it is within Android's range; it is the same on both platforms
+  (below); the identifier agrees with 7.4. No workflow writes, overrides or derives the version
+  after the merge (`tool/verify_version.sh` and the existing tests already forbid it).
+- **Consumed numbers are never reused; skipped numbers are acceptable.** A number is consumed
+  when a commit carrying it reaches a release branch or a store has seen it. A failed or
+  withdrawn candidate keeps its number. A retry of a delivery of the same artifact (2.4) is the
+  same build, not a reuse.
+- **Traceable.** The version is in the approved Git revision, in the artifact manifest and in
+  the built artifact, and the existing checks compare the three
+  ([RELEASE_VERSIONING.md](RELEASE_VERSIONING.md)).
+- **Production is consistent with the established rules.** A merge into `production` promotes
+  the `staging` source (equal tree, [RELEASE_VERSIONING.md](RELEASE_VERSIONING.md)), so it
+  carries the version already validated on `staging`; nothing is added in the promotion. The
+  production gate (`tool/build_manifest.py gate --channel production`) still requires the number
+  to be above the published floor of the platform and the Android ID to be the published one.
+  Staging and production share one number sequence because they share one source.
+- **Hotfixes** use the same path: a pull request with an advance. Gaps are acceptable, so no
+  waiting or renumbering is needed.
+- Android and iOS numbers are the same today; a platform-specific number remains permitted by
+  this policy but is not built (above).
 
 ### 7.4 Identifiers and tags
 
@@ -356,7 +542,7 @@ investigation report and approval before any code changes.
   rebuild needing a new commit or a new build number is the next `-rc.N`.
 - The identifier is the signed annotated Git tag name, created under controlled
   authority (decision 5). No tag exists today.
-- **Proposed source of `N`:** a `RELEASE_IDENTIFIER` entry in the staging
+- **Proposed source of `N` (it advances in the pull request, like the build number, 7.3):** a `RELEASE_IDENTIFIER` entry in the staging
   configuration, changed by the promotion pull request, so the identifier is part
   of the approved revision and does not depend on counting existing tags. The
   pipeline fails if the tag already exists.
@@ -394,25 +580,38 @@ allowed to pass `--build-name`. Designed next steps:
 Out of scope for the checker: `ios/Flutter/AppFrameworkInfo.plist` (embedded
 `App.framework`), the `RunnerTests` target and the plugin's own `version: 0.1.0`.
 
+### 7.6 Future capabilities (not implemented; not part of the governance change)
+
+Recorded so that later work starts from the existing rules, not decided or built here:
+
+- **Version information on the application's dashboard.** The CTO intends to display the version
+  in the dashboard. It is an application feature (a separate issue, outside wallet, authentication
+  and signing code), and would read the version that 7.2 already embeds.
+- **Development-only Android APKs without staging promotion.** The CTO intends to support them
+  eventually. They would be a distinct kind of build (section 4), never official, never
+  distributed publicly (8.2), and would need their own design for application identity, signing,
+  retention and access. They do not change 2.3 or 7.3: a release branch merge still runs its
+  pipeline and carries its version advance.
+
 ## 8. Distribution models
 
 | | Staging (internal) | Production (public) |
 |---|---|---|
 | Backend / network | Staging backend, Bitcoin **Signet**; coins have no value | Production backend, Bitcoin **mainnet** |
 | Application | Separate "Cadena Signer STAGING" apps | "Cadena Signer" apps |
-| Audience | Authorized testers named by the release authority | The public |
+| Audience | Internal testers named by the CTO | The public |
 | iOS | **Restricted TestFlight** of the staging App Store Connect record (mandatory, 8.1); no public link, no open beta, never submitted for review | App Store, via the production App Store Connect record |
 | Android | Signed APK, internal testing only; **never public**; mechanism undecided (8.2, decision 7) | APK on Cadena's website; AAB on Google Play |
 | Support | **None**: no stability, compatibility, upgrade or data guarantee; may be reset or withdrawn | Updates within the official update family; support as defined in `SECURITY.md` once it exists |
-| Publication | The merge into `staging` is the authorization to build; tester access is controlled | Needs **separate authorization** by the release authority, per channel |
+| Publication | The merge into `staging` is the authorization to build, sign and deliver to the configured internal destinations; tester access is controlled | The merge into `production` is the authorization of the configured delivery operations, per channel (2.3): non-public upload only; automatic App Review submission and public publication are outside the configured scope until an architectural extension; Apple's and Google's review and acceptance still apply |
 
 - Staging builds are never presented as production and never enter a production
   channel; the separate application identity makes that structural rather than
   procedural.
 - Testers use disposable test accounts; nobody tests staging with a wallet that
   holds value (`CLAUDE.md` section 5).
-- Authorization to publish records who approved what: version, identifier,
-  commit, channel (section 9).
+- The record of a delivery shows what was authorized: version, identifier,
+  commit, the merge and its pull request, channel (section 9).
 
 ### 8.1 Restricted iOS staging distribution through TestFlight (mandatory)
 
@@ -431,14 +630,14 @@ milestone is not complete without it. Acceptance means at least:
 
 **Decided (Issue #71):** the first delivery target is **internal-only TestFlight** (members of
 the Cadena App Store Connect team; no external group, public link or Beta App Review).
-Assigning a processed build to internal testers needs **explicit approval** at first;
-automatic distribution may be considered after the pipeline is verified. Controlled signed
+Under the merge-authorized policy (2.3) the pipeline delivers to the configured internal group on
+every `staging` merge; before a pipeline exists, a manual assignment to internal testers is an
+operation the CTO authorizes in writing (the iOS 1.0.4 procedure). Controlled signed
 testing is also how the minimum-iOS runtime requirement of [IOS_CI.md](IOS_CI.md) is
 established. Details and status: [IOS_SIGNING.md](IOS_SIGNING.md).
 
-*Open (implementation decision):* whether the TestFlight **upload** itself needs an
-additional approval, or runs automatically after the merge. Either way the build
-is delivered through TestFlight only, and tester access stays restricted.
+*Resolved by 2.3:* the TestFlight **upload** needs no additional approval; the merge
+authorizes it. The build is delivered through TestFlight only, and tester access stays restricted.
 
 ### 8.2 Signed Android staging APKs are not public
 
@@ -479,7 +678,8 @@ Every pipeline build has a record attached to its artifacts:
 | Signing identity | Certificate SHA-256 fingerprint (public) per artifact; never key material |
 | Distribution channel | Intended and actual channel |
 | Artifact digests | SHA-256 of each artifact |
-| Build run and approvers | Workflow run URL; who approved signing and publication |
+| Build run and authorization | Workflow run URL; the merge commit, its pull request and the merging account (the authorization of section 2.3) |
+| Verification and delivery outcome | The result of each automated check; each delivery operation executed and its result; on failure, the step at which delivery stopped |
 
 The Git SHA and this record, not the displayed version, prove two artifacts
 contain the same application logic (`GOVERNANCE.md` section 3). A signed artifact
@@ -492,6 +692,7 @@ without a record, or from a commit that was not approved, is not official.
 | `development`, `staging` | Exist, protected |
 | `production` | Exists, protected (created at the adopted baseline `7b63c97`, Issue #68); compile-only builds only |
 | Android CI validation (debug-signed APK), iOS CI validation (unsigned `Runner.app`) | Working; unchanged; **not** among the five artifacts |
+| Retained build artifacts (Stage 2, issue #54): verified Android APK/AAB and unsigned iOS `.xcarchive`, kept **encrypted** to public keys, with checksums, manifests and evidence | Implemented for review ([RETAINED_ARTIFACTS.md](RETAINED_ARTIFACTS.md)); retention on promotions is off until `config/release/artifact_recipients.txt` lists a key |
 | Signing credentials, protected release environments, release workflows | **None** |
 | Tags, GitHub Releases | None |
 | Separate staging application ID / bundle ID / App Store Connect record | Android: the `staging` flavor builds `com.cadenabitcoin.mobile.signer.staging` (not registered in Google Play); iOS: the `staging` flavor builds `com.app.cadenabitcoin.staging` (not registered with Apple). No App Store Connect record |
@@ -499,17 +700,19 @@ without a record, or from a commit that was not approved, is not official.
 | iOS toolchain | Xcode 26.3 on `macos-15` with an iOS 26 SDK, pinned by Issue #70 (accepted hosted runs: [IOS_CI.md](IOS_CI.md#verification-status); compile and link only). App Store Connect uploads have required Xcode 26 and the iOS 26 SDK since 2026-04-28 ([Apple](https://developer.apple.com/news/upcoming-requirements/)) |
 | iOS signing, provisioning, App Store Connect integration, TestFlight delivery | **Not implemented** (Issue #71). Readiness record, questionnaire and operating-procedure skeleton: [IOS_SIGNING.md](IOS_SIGNING.md), [APPLE_ACCOUNT_QUESTIONNAIRE.md](APPLE_ACCOUNT_QUESTIONNAIRE.md) |
 | `tool/verify_version.sh` | Exists (this issue), read-only |
+| Merge-authorized pipelines (section 2.3) | **Not implemented.** Only compile-only workflows run on a release-branch merge; the activation preconditions of 2.3 are not met |
 
 ## 11. Open decisions
 
-1. **Release maintainers and signing custodians** are unnamed
-   (`GOVERNANCE.md` section 1). Two of each at least.
+1. **Signing custodians** (continuity of credentials and recovery, not authorization) are
+   unnamed (`GOVERNANCE.md` section 1). At least two, so that no credential has one holder.
+   The release authority is defined by principle 9 and needs no further naming.
 2. **Existing production signing lineage** (Android key, Apple team and
    certificates, Play and App Store Connect accounts) is undocumented and must be
    inventoried before anything is generated.
 3. **Android app-signing model** (signing architecture section 3).
-4. **Build-number source** per merge (7.3), and whether platform numbers are ever
-   assigned by the pipeline.
+4. **Resolved (7.3, option A):** the build number is advanced in the reviewed pull request and
+   validated before the merge; the pipeline never assigns it.
 5. **Tags:** who creates them and with what identity (7.4).
 6. **Staging identifier source** (`RELEASE_IDENTIFIER` in the staging
    configuration, 7.4) and its in-app presentation.
@@ -517,10 +720,8 @@ without a record, or from a commit that was not approved, is not official.
    public (8.2). The mechanism itself is open.
 8. **Production display name** ("Cadena Signer" in the target; "Cadena Bitcoin"
    today).
-9. **Approvals:** whether the staging environment needs a reviewer beyond the
-   merge itself; whether the TestFlight upload needs an additional approval (the
-   restricted TestFlight delivery itself is mandatory, 8.1); and how production
-   signing and publication approvals are split.
+9. **Approvals: resolved (2.3).** The merge is the authorization for both pipelines; no
+   environment reviewer, no extra TestFlight approval, no separate publication approval.
 10. **Independent builds and branding:** whether forks must change name and ID.
 11. **Support policy:** `SECURITY.md` still defers it; it should state that only
     the latest official release is supported.
@@ -533,9 +734,16 @@ without a record, or from a commit that was not approved, is not official.
     TestFlight delivery of 8.1, to authorized testers) is not blocked by it. The Rust library is not
     replaced or modified without separate authorization. Green compile and link runs do not satisfy
     this.
-13. **A second, independent approver** for production signing and delivery (principle 9),
-    and the named release authority and signing custodians. Open until designated.
+13. **Second, independent approver: withdrawn.** Principle 9 no longer requires one
+    (CTO decision, 2026-11-17).
 14. **Apple account facts** that decide the iOS pipeline: account ownership, the exact live
     bundle ID and highest build number, App ID registration, existing certificates and
     profiles, available API permissions, capabilities, export compliance. Collected with
     [APPLE_ACCOUNT_QUESTIONNAIRE.md](APPLE_ACCOUNT_QUESTIONNAIRE.md).
+15. **Resolved (7.3, option A, CTO 2026-11-17):** the version advance is made in the reviewed
+    pull request and validated before the merge; no workflow writes it.
+16. **Exact non-public delivery destinations of the production pipeline (2.3).** The scope is
+    decided: upload only, no automatic App Review submission or public publication. Still open:
+    the destination of each artifact (for example the App Store Connect and TestFlight state, the
+    Play track or draft, and where the production APK is placed, since placing it on the website
+    would be public publication and is outside the automated scope).

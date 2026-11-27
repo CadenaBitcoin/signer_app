@@ -4,7 +4,7 @@
 # workflow). It selects; it builds nothing. The build jobs exist once, in the workflow, and
 # receive their matrix from this plan, so there is no second copy of any build.
 #
-#   tool/plan_build_variants.sh EVENT REF [VARIANT [PARENTS [CREATED]]]
+#   tool/plan_build_variants.sh EVENT REF [VARIANT [PARENTS [CREATED [RELATION]]]]
 #
 #   EVENT    GitHub event name: workflow_dispatch | push
 #   REF      the full ref (github.ref), e.g. refs/heads/staging. Only a push is decided by it.
@@ -15,15 +15,28 @@
 #            so a push needs exactly 2.
 #   CREATED  github.event.created of the push: `true` when the push created the branch.
 #            Creating a branch is not a promotion, so a push needs `false`.
+#   RELATION a manual run only: how the commit of the run relates to `development`, as GitHub's
+#            compare API reports it for `development...<commit>` (status): `identical` = the
+#            commit IS the tip of development; `behind` = an older commit of development;
+#            anything else (`ahead`, `diverged`, `unknown`, empty) = not on development.
 #
 # Supported triggers, and nothing else (anything else exits 2 and runs nothing):
 #   push to refs/heads/staging     -> the 2 staging builds
 #   push to refs/heads/production  -> the 3 production builds
-#   workflow_dispatch              -> `all` (5) or exactly one variant
+#   workflow_dispatch              -> `all` (5) or exactly one variant. Always MANUALLY GENERATED.
+#                                     A selection that contains a STAGING variant is refused unless
+#                                     the workflow runs from refs/heads/development AND the commit
+#                                     built is the CURRENT TIP of development (relation `identical`).
+#                                     The staging build is the one that is to be signed and delivered,
+#                                     so only reviewed code may enter it, and the scripts that run
+#                                     must be the current ones: an older commit, or the re-run of an
+#                                     old run, is refused.
 # There is deliberately no mapping for development, issue branches, tags or pull requests.
 #
 # Output keys: selection, variants (space separated), count, has_android, has_ios,
-# android_matrix, ios_matrix (JSON for `matrix: fromJSON(...)`).
+# android_matrix, ios_matrix (JSON for `matrix: fromJSON(...)`), and the provenance of the run:
+# origin (`automatic` | `MANUALLY GENERATED`), on_development (`true`|`false`, empty for a push)
+# and name_prefix (`MANUALLY_GENERATED_` or empty; goes in front of every artifact name).
 #
 # The variant identifiers are the single naming of a variant everywhere: the selector, the
 # job name, the evidence file name (evidence/<variant>.txt).
@@ -43,6 +56,7 @@ ref="${2:-}"
 input="${3:-}"
 parents="${4:-}"
 created="${5:-}"
+relation="${6:-}"
 [ -n "$event" ] || die "usage: $0 EVENT REF [VARIANT [PARENTS [CREATED]]]"
 
 is_variant_id() {
@@ -66,8 +80,15 @@ case "$event" in
     selection="$input"
     [ -n "$selection" ] || die "a manual run needs a variant"
     [ "$selection" = all ] || is_variant_id "$selection" || die "'$selection' is not a variant (valid: all or a variant identifier)"
+    origin="MANUALLY GENERATED"
+    name_prefix="MANUALLY_GENERATED_"
+    case "$relation" in identical | behind) on_development=true ;; *) on_development=false ;; esac
     ;;
   push)
+    origin="automatic"
+    name_prefix=""
+    on_development=""
+    [ -z "$relation" ] || die "a push cannot carry a source relation ('$relation')"
     [ -z "$input" ] || die "a push cannot carry a variant selection ('$input')"
     case "$ref" in
       refs/heads/staging)
@@ -94,6 +115,7 @@ esac
 
 # --- selection -> variants -----------------------------------------------------------------
 variants=""
+has_staging=false
 android_items=""
 ios_items=""
 while read -r id platform env kind sub; do
@@ -102,6 +124,7 @@ while read -r id platform env kind sub; do
     *) continue ;;
   esac
   variants="${variants:+$variants }$id"
+  [ "$env" != staging ] || has_staging=true
   if [ "$platform" = android ]; then
     item="{\"variant\":\"$id\",\"env\":\"$env\",\"kind\":\"$kind\",\"flutter_command\":\"$sub\"}"
     android_items="${android_items:+$android_items,}$item"
@@ -118,6 +141,13 @@ EOF
 
 count=0
 for _ in $variants; do count=$((count + 1)); done
+
+# A manual run that contains a staging variant: only the workflow on development, only a commit
+# of development. (Production-only manual runs stay free, as before: they deliver nothing.)
+if [ "$event" = workflow_dispatch ] && [ "$has_staging" = true ]; then
+  [ "$ref" = refs/heads/development ] || die "a manual run with a staging variant must run the workflow from refs/heads/development, not '$ref'"
+  [ "$relation" = identical ] || die "a manual run with a staging variant must build the current tip of development (relation of this commit to development: '${relation:-unknown}'); an older commit would run old build-control scripts"
+fi
 
 # A push must select exactly the variants of its own environment, and exactly the expected
 # number of them, whatever the catalogue says.
@@ -139,3 +169,6 @@ echo "has_android=$([ -n "$android_items" ] && echo true || echo false)"
 echo "has_ios=$([ -n "$ios_items" ] && echo true || echo false)"
 echo "android_matrix={\"include\":[$android_items]}"
 echo "ios_matrix={\"include\":[$ios_items]}"
+echo "origin=$origin"
+echo "on_development=$on_development"
+echo "name_prefix=$name_prefix"

@@ -107,7 +107,10 @@ def d_value(v):
     if isinstance(v, bool):
         return der(0x01, b"\xff" if v else b"\x00")
     if isinstance(v, int):
-        return der(0x02, v.to_bytes(max(1, (v.bit_length() + 8) // 8), "big", signed=True))
+        n = 1  # the SHORTEST two's complement encoding, as Apple writes it (-128 is 0x80, 128 is 0x0080)
+        while not -(1 << (8 * n - 1)) <= v < (1 << (8 * n - 1)):
+            n += 1
+        return der(0x02, v.to_bytes(n, "big", signed=True))
     if isinstance(v, str):
         return der(0x0C, v.encode())
     if isinstance(v, list):
@@ -118,11 +121,17 @@ def d_value(v):
 
 
 def d_dict(d):
-    return d_set(*[d_seq(der(0x0C, k.encode()), d_value(v)) for k, v in sorted(d.items())])
+    # The layout of Apple's own `codesign --generate-entitlement-der`, as observed in Issue #71 (Authorization D1): the
+    # dictionary is [CONTEXT 16] constructed (0xb0), NOT a SET, holding one SEQUENCE { UTF8String key, value } per entry,
+    # ordered by the bytes of the key; a nested dictionary is the same [CONTEXT 16] element.
+    return der(0xB0, b"".join(d_seq(der(0x0C, k.encode()), d_value(v)) for k, v in sorted(d.items(), key=lambda kv: kv[0].encode())))
 
 
-def der_entitlements_blob(ents):
-    body = der(0x70, d_int(b"\x01") + d_dict(ents))
+def der_entitlements_blob(ents, version=b"\x01"):
+    # This synthetic writer follows the layout observed on genuine Apple output (see d_dict). The independent proof is not
+    # this function but the seven Apple-written blobs committed under tool/fixtures/apple_der_entitlements_d1_run44956044650.txt (see
+    # tool/test_verify_ipa.sh): they were never produced by this file. `version` exists for the negative test.
+    body = der(0x70, d_int(version) + d_dict(ents))
     return struct.pack(">II", I.CSMAGIC_DER_ENTITLEMENTS, 8 + len(body)) + body
 
 
@@ -152,7 +161,23 @@ def cms_for_codedirectory(cd0, cdhashes, leaf_pem, key, chain_pems):
     """A CMS SignedData over CodeDirectory `cd0` with Apple's cdhashes attribute, signed with `key`."""
     leaf = pem_to_der(leaf_pem)
     cert = I.parse_certificate(leaf)
-    plist = plistlib.dumps({"cdhashes": list(cdhashes)}, fmt=plistlib.FMT_XML)
+    hashes = list(cdhashes)
+    if "cdhashes-omit-first" in MUT:
+        hashes = hashes[1:]
+    if "cdhashes-short" in MUT:
+        hashes = [h[:19] for h in hashes]
+    plist = plistlib.dumps({"cdhashes": hashes}, fmt=plistlib.FMT_XML)
+    if "cdhashes-plist-binary" in MUT:
+        plist = plistlib.dumps({"cdhashes": hashes}, fmt=plistlib.FMT_BINARY)
+    elif "cdhashes-plist-xmldecl" not in MUT:
+        # Apple's cloud-managed signing service writes the XML list WITHOUT the `<?xml ...?>` declaration, starting
+        # with `<!DOCTYPE plist` (the 16 real responses of run 44834801248); that is the default here. The older form
+        # with the declaration stays testable (`cdhashes-plist-xmldecl`), as does the binary form.
+        plist = plist.split(b"?>\n", 1)[1]
+    if "cdhashes-plist-garbage" in MUT:
+        plist = b"this is not a property list"
+    if "cdhashes-plist-empty-list" in MUT:
+        plist = plistlib.dumps({"cdhashes": []}, fmt=plistlib.FMT_XML).split(b"?>\n", 1)[1]
     attrs = [
         d_seq(d_oid("1.2.840.113549.1.9.3"), d_set(d_oid(OID_DATA))),
         d_seq(d_oid("1.2.840.113549.1.9.4"), d_set(d_octet(hashlib.sha256(cd0).digest()))),
@@ -238,16 +263,32 @@ def pseudo(seed, n):
     return out[:n]
 
 
-def make_macho(seed, filetype=2, text_len=0x3C00, minos=14 << 16, cpu=0x0100000C):
-    """A tiny but structurally valid arm64 Mach-O with __TEXT, __LINKEDIT and a build version."""
-    sect = (b"__text".ljust(16, b"\0") + b"__TEXT".ljust(16, b"\0") + struct.pack("<QQIIIIIIII", 0x100000400, text_len, 0x400, 2, 0, 0, 0x80000400, 0, 0, 0))
-    text = struct.pack("<II16sQQQQiiII", 0x19, 72 + 80, b"__TEXT".ljust(16, b"\0"), 0x100000000, 0x4000, 0, 0x4000, 5, 5, 1, 0) + sect
+EMBEDDED_INFO_PLIST = (b'<?xml version="1.0" encoding="UTF-8"?>\n<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">\n'
+                       b'<plist version="1.0">\n<dict>\n\t<key>CFBundleIdentifier</key>\n\t<string>org.example.runtime.embedded</string>\n'
+                       b'\t<key>CFBundleName</key>\n\t<string>embedded</string>\n\t<key>CFBundleVersion</key>\n\t<string>1</string>\n</dict>\n</plist>\n')
+
+
+def make_macho(seed, filetype=2, text_len=0x3C00, minos=14 << 16, cpu=0x0100000C, info_plist=None):
+    """A tiny but structurally valid arm64 Mach-O with __TEXT, __LINKEDIT and a build version.
+
+    With `info_plist` (bytes) the __TEXT segment carries a second section, `__info_plist`, with those bytes, laid out
+    like the Apple-signed Swift runtime library of the real archive (the section sits inside __TEXT, after __text)."""
+    pad = ((len(info_plist) + 15) & ~15) if info_plist is not None else 0
+    main_len = text_len - pad
+    sect = (b"__text".ljust(16, b"\0") + b"__TEXT".ljust(16, b"\0") + struct.pack("<QQIIIIIIII", 0x100000400, main_len, 0x400, 2, 0, 0, 0x80000400, 0, 0, 0))
+    if info_plist is not None:
+        sect += (b"__info_plist".ljust(16, b"\0") + b"__TEXT".ljust(16, b"\0")
+                 + struct.pack("<QQIIIIIIII", 0x100000400 + main_len, len(info_plist), 0x400 + main_len, 0, 0, 0, 0, 0, 0, 0))
+    text = struct.pack("<II16sQQQQiiII", 0x19, 72 + 80 * (2 if info_plist is not None else 1), b"__TEXT".ljust(16, b"\0"), 0x100000000, 0x4000, 0, 0x4000, 5, 5,
+                       2 if info_plist is not None else 1, 0) + sect
     link = struct.pack("<II16sQQQQiiII", 0x19, 72, b"__LINKEDIT".ljust(16, b"\0"), 0x100004000, 0x4000, 0x4000, 0x100, 1, 1, 0, 0)
     build = struct.pack("<IIIIII", 0x32, 24, 2, minos, 26 << 16 | 2 << 8, 0)
     cmds = text + link + build
     header = struct.pack("<IIIIIIII", 0xFEEDFACF, cpu, 0, filetype, 3, len(cmds), 0x200085, 0)
     body = header + cmds
-    body = body.ljust(0x400, b"\0") + pseudo(seed + "t", text_len)
+    body = body.ljust(0x400, b"\0") + pseudo(seed + "t", main_len)
+    if info_plist is not None:
+        body += info_plist.ljust(pad, b"\0")
     body = body.ljust(0x4000, b"\0") + pseudo(seed + "l", 0x100)
     return body
 
@@ -334,17 +375,52 @@ def sign_slice(sl, ident, team, specials, ents_xml, dual, adhoc, certs, main):
     text_limit = 0x4000
     flags = I.CS_ADHOC if adhoc else 0
     sp = dict(specials)
+    embedded = I.embedded_info_plist(sl, m)
+    if embedded is not None and 1 not in sp and "embedded-info-unsealed" not in MUT:
+        sp[1] = embedded + b"\0" if "embedded-info-slot-wrong" in MUT else embedded
     req = struct.pack(">III", I.CSMAGIC_REQUIREMENTS, 12, 0)
     sp[2] = req
     ents_blob = der_blob = None
     if ents_xml is not None:
-        ents_blob = struct.pack(">II", I.CSMAGIC_ENTITLEMENTS, 8 + len(ents_xml)) + ents_xml
+        blob_xml = ents_xml
+        if "ents-xml-malformed" in MUT:  # slot 5 holds a MALFORMED XML property list that names distinctive strings (the DER blob stays the real one)
+            blob_xml = b'<?xml version="1.0"?><plist version="1.0"><dict><key>SECRETENTKEY</key><SECRETENTELEMENT/></dict></plist>'
+        ents_blob = struct.pack(">II", I.CSMAGIC_ENTITLEMENTS, 8 + len(blob_xml)) + blob_xml
         sp[5] = ents_blob
         if "no-der" not in MUT:
             ents = plistlib.loads(ents_xml)
             if "der-differs" in MUT:
                 ents = dict(ents, **{"get-task-allow": True})
-            der_blob = der_entitlements_blob(ents)
+            if "der-type-differs" in MUT:
+                # same VALUE, different TYPE: the first BOOLEAN of the XML entitlements becomes an INTEGER (False -> 0, True -> 1)
+                # in the DER form. Python's == calls these equal; the kernel does not.
+                first = next(k for k, v in ents.items() if isinstance(v, bool))
+                ents = dict(ents, **{first: int(ents[first])})
+            der_blob = der_entitlements_blob(ents, b"\x02" if "der-version2" in MUT else b"\x01")
+            if "der-set-layout" in MUT:
+                # the OBSOLETE layout this repository assumed before genuine Apple evidence (a SET instead of [CONTEXT 16])
+                inner = I.parse_der(d_dict(ents)).value
+                body = der(0x70, d_int(b"\x01") + der(0x31, inner))
+                der_blob = struct.pack(">II", I.CSMAGIC_DER_ENTITLEMENTS, 8 + len(body)) + body
+            # Phase 6C-B: blobs that are NOT canonical DER, in ONE respect each, for the end-to-end tests (each must be refused as unreadable
+            # while every other check still runs). Each patches the well-formed blob built above; the XML entitlements are untouched.
+            if "der-bool01" in MUT:  # a BOOLEAN FALSE written as 01 (BER reads that as TRUE)
+                at = der_blob.find(b"\x01\x01\x00")
+                assert at > 8, "no BOOLEAN FALSE to patch"
+                der_blob = der_blob[:at] + b"\x01\x01\x01" + der_blob[at + 3:]
+            if "der-root-extra" in MUT or "der-indefinite" in MUT or "der-deep" in MUT:
+                root = I.parse_der(der_blob[8:])
+                inner = der_blob[8:][root.vstart:root.vend]
+                if "der-root-extra" in MUT:  # a third element in the root (a hidden entitlement for a reader that looks past the dictionary)
+                    body = der(0x70, inner + der(5, b""))
+                elif "der-indefinite" in MUT:  # the root with an indefinite length (BER, not DER)
+                    body = bytes([0x70, 0x80]) + inner + b"\0\0"
+                else:  # an entitlement nested far deeper than any real one (dictionaries inside dictionaries)
+                    deepv = der(1, b"\xff")
+                    for _ in range(300):
+                        deepv = der(0xB0, der(0x30, der(0x0C, b"a") + deepv))
+                    body = der(0x70, d_int(b"\x01") + der(0xB0, I.parse_der(d_dict(ents)).value + der(0x30, der(0x0C, b"zzz") + deepv)))
+                der_blob = struct.pack(">II", I.CSMAGIC_DER_ENTITLEMENTS, 8 + len(body)) + body
             sp[7] = der_blob
     blobs = {}
     algs = ["sha1", "sha256"] if dual else ["sha256"]
@@ -384,22 +460,29 @@ def sign_slice(sl, ident, team, specials, ents_xml, dual, adhoc, certs, main):
     return out
 
 
-def sign_macho_file(path, ident, team, specials, ents_xml, dual, adhoc, certs, main):
+def fat_from(cpus, slices):
+    """A fat (universal) Mach-O holding the given slices, each at a 16 KiB boundary (alignment 2**14)."""
+    off, recs, placed = 0x4000, b"", []
+    for cpu, sl in zip(cpus, slices):
+        recs += struct.pack(">iIIII", cpu, 0, off, len(sl), 14)
+        placed.append((off, sl))
+        off = (off + len(sl) + 0x3FFF) & ~0x3FFF
+    out = bytearray(struct.pack(">II", I.FAT_MAGIC, len(slices)) + recs)
+    for o, sl in placed:
+        out = out.ljust(o, b"\0")
+        out += sl
+    return bytes(out)
+
+
+def sign_macho_file(path, ident, team, specials, ents_xml, dual, adhoc, certs, main, later_slice_ents_xml=None):
+    """Sign every slice. `later_slice_ents_xml` (tests only) replaces the entitlements of every slice after the first."""
     with open(path, "rb") as f:
         data = f.read()
     sls = I.macho_slices(data)
-    signed = [sign_slice(data[o:o + s], ident, team, specials, ents_xml, dual, adhoc, certs, main) for _c, o, s in sls]
+    signed = [sign_slice(data[o:o + s], ident, team, specials, ents_xml if i == 0 or later_slice_ents_xml is None else later_slice_ents_xml,
+                         dual, adhoc, certs, main) for i, (_c, o, s) in enumerate(sls)]
     if struct.unpack(">I", data[:4])[0] in (I.FAT_MAGIC, I.FAT_MAGIC_64):
-        off, recs, placed = 0x4000, b"", []
-        for (cpu, _o, _s), sl in zip(sls, signed):
-            recs += struct.pack(">iIIII", cpu, 0, off, len(sl), 14)
-            placed.append((off, sl))
-            off = (off + len(sl) + 0x3FFF) & ~0x3FFF
-        out = bytearray(struct.pack(">II", I.FAT_MAGIC, len(sls)) + recs)
-        for o, sl in placed:
-            out = out.ljust(o, b"\0")
-            out += sl
-        new = bytes(out)
+        new = fat_from([cpu for cpu, _o, _s in sls], signed)
     else:
         new = signed[0]
     with open(path, "wb") as f:
@@ -470,6 +553,8 @@ def make_unsigned_app(directory, env, seed="1", version=None):
         f.write('{"assets": []}\n')
     with open(os.path.join(app, "Frameworks", "libswift_Synthetic.dylib"), "wb") as f:
         f.write(make_macho("dylib" + seed, filetype=6))
+    with open(os.path.join(app, "Frameworks", "libswift_Embedded.dylib"), "wb") as f:  # carries its own __TEXT,__info_plist
+        f.write(make_macho("embedded" + seed, filetype=6, info_plist=EMBEDDED_INFO_PLIST))
     with open(os.path.join(app, "Base.lproj", "Main.storyboardc"), "wb") as f:
         f.write(b"compiled-storyboard-placeholder")
     print("synthetic unsigned app: %s (%s, %s)" % (app, env, app_id))
@@ -514,6 +599,28 @@ def sign_app(app_in, out_ipa, certdir, team, mutations):
         info["CFBundleShortVersionString"] = "9.9.9"
         with open(os.path.join(app, "Info.plist"), "wb") as f:
             plistlib.dump(info, f)
+    # Phase 7C: what an export could do to the app's top-level Info.plist, BEFORE signing (so the signature seals the changed file and the
+    # archive's original stays what the unsigned build had). Each is ONE kind of difference, for the evidence-capture tests.
+    if mut & {"info-reorder", "info-samelen", "info-addkey", "info-rmkey", "info-type", "info-xml", "info-secret"}:
+        with open(os.path.join(app, "Info.plist"), "rb") as f:
+            info = plistlib.load(f)
+        fmt = plistlib.FMT_BINARY
+        if "info-reorder" in mut:  # the same content, the keys written in the REVERSE order: a binary re-serialisation of the same length
+            info = dict(reversed(list(info.items())))
+        if "info-samelen" in mut:  # a value replaced by another of the same length: the file keeps its size
+            info["CFBundleName"] = "".join(chr(ord(c) ^ 1) if c.isalpha() else c for c in info["CFBundleName"])
+        if "info-addkey" in mut:
+            info["ZZAddedByExport"] = "x"
+        if "info-rmkey" in mut:
+            del info["CFBundleSupportedPlatforms"]
+        if "info-type" in mut:  # integer 1 becomes boolean true
+            info["UIDeviceFamily"] = [True]
+        if "info-xml" in mut:
+            fmt = plistlib.FMT_XML
+        if "info-secret" in mut:  # a JWT-shaped string in a value: content that must never be kept as evidence
+            info["ZZNote"] = "eyJhbGciOiJFUzI1NiJ9.eyJpc3MiOiJmYWtlIn0.c2lnbmF0dXJl"
+        with open(os.path.join(app, "Info.plist"), "wb") as f:
+            plistlib.dump(info, f, fmt=fmt, sort_keys="info-reorder" not in mut)
     c = lambda n: os.path.join(certdir, n)
     MUT_VICTIM[0] = c("leaf.crt")
     leaf_name = "leaf2" if ("other-team-cert" in mut or "spoof-signer" in mut) else "leaf"
@@ -557,7 +664,8 @@ def sign_app(app_in, out_ipa, certdir, team, mutations):
             sign_macho_file(os.path.join(full, exe), "org.example." + exe.lower(), nteam, {1: info_b, 3: res_b}, None, dual,
                             False, nested_certs, False)
         elif fw.endswith(".dylib"):
-            sign_macho_file(full, fw[:-len(".dylib")], team, {}, None, dual, False, certs, False)
+            dylib_specials = {1: b"orphan seal"} if ("slot1-orphan" in mut and fw == "libswift_Synthetic.dylib") else {}
+            sign_macho_file(full, fw[:-len(".dylib")], team, dylib_specials, None, dual, False, certs, False)
     # the profile
     exp = datetime.datetime(2027, 6, 1)
     if "expired-profile" in mut:
@@ -613,13 +721,27 @@ def sign_app(app_in, out_ipa, certdir, team, mutations):
         ents["com.apple.developer.associated-domains"] = ["applinks:example.org"]
     if "aps-development" in mut:
         ents["aps-environment"] = "development"
+    if "no-push" in mut:  # the App ID has Push enabled (the profile lists it) but the app does not claim it
+        del ents["aps-environment"]
     ents_xml = plistlib.dumps(ents, fmt=plistlib.FMT_XML)
     with open(os.path.join(app, "Info.plist"), "rb") as f:
         info_b = f.read()
     with open(os.path.join(app, "_CodeSignature", "CodeResources"), "rb") as f:
         res_b = f.read()
+    later = None
+    if "fat-main" in mut or "fat-slice-type" in mut or "fat-slice-value" in mut:
+        # a universal executable of TWO arm64 slices (the verifier requires arm64, so this is the only fat shape it can accept)
+        with open(os.path.join(app, "Runner"), "rb") as f:
+            one = f.read()
+        with open(os.path.join(app, "Runner"), "wb") as f:
+            f.write(fat_from([0x0100000C, 0x0100000C], [one, one]))
+        if "fat-slice-type" in mut:  # the second slice declares the same value with ANOTHER TYPE: <integer>0</integer> for <false/>
+            first = next(k for k, v in ents.items() if isinstance(v, bool))
+            later = plistlib.dumps(dict(ents, **{first: int(ents[first])}), fmt=plistlib.FMT_XML)
+        if "fat-slice-value" in mut:  # the second slice differs in value
+            later = plistlib.dumps(dict(ents, **{"beta-reports-active": not ents["beta-reports-active"]}), fmt=plistlib.FMT_XML)
     sign_macho_file(os.path.join(app, "Runner"), bundle_id, team if "wrong-cd-team" not in mut else "OTHER12345",
-                    {1: info_b, 3: res_b}, None if "no-entitlements" in mut else ents_xml, dual, adhoc_main, certs, True)
+                    {1: info_b, 3: res_b}, None if "no-entitlements" in mut else ents_xml, dual, adhoc_main, certs, True, later)
     # tampering AFTER signing
     if "tamper-exe" in mut:
         p = os.path.join(app, "Runner")
@@ -628,6 +750,15 @@ def sign_app(app_in, out_ipa, certdir, team, mutations):
             b = f.read(1)
             f.seek(0x1000)
             f.write(bytes([b[0] ^ 0xFF]))
+    if "tamper-embedded-info" in mut:  # one byte of the embedded __TEXT,__info_plist section, after signing
+        p = os.path.join(app, "Frameworks", "libswift_Embedded.dylib")
+        with open(p, "rb") as f:
+            blob = bytearray(f.read())
+        at = blob.find(EMBEDDED_INFO_PLIST)
+        assert at > 0 and blob.count(EMBEDDED_INFO_PLIST) == 1
+        blob[at + 200] ^= 0x01
+        with open(p, "wb") as f:
+            f.write(bytes(blob))
     if "tamper-resource" in mut:
         with open(os.path.join(app, "Frameworks", "App.framework", "flutter_assets", "AssetManifest.json"), "a") as f:
             f.write("tampered\n")
@@ -635,6 +766,11 @@ def sign_app(app_in, out_ipa, certdir, team, mutations):
         info["CFBundleDisplayName"] = info["CFBundleDisplayName"] + " X"
         with open(os.path.join(app, "Info.plist"), "wb") as f:
             plistlib.dump(info, f)
+    if "tamper-info-reserialize" in mut:  # AFTER signing: the SAME content (keys, values, types) in another serialization. V8 accepts that; the slot-1 seal must NOT
+        with open(os.path.join(app, "Info.plist"), "rb") as f:
+            same = plistlib.load(f)
+        with open(os.path.join(app, "Info.plist"), "wb") as f:
+            plistlib.dump(dict(reversed(list(same.items()))), f, fmt=plistlib.FMT_BINARY, sort_keys=False)
     if "add-file" in mut:
         with open(os.path.join(app, "injected.dylib"), "wb") as f:
             f.write(b"payload")
@@ -665,6 +801,12 @@ def sign_app(app_in, out_ipa, certdir, team, mutations):
     if "garbage-info-plist" in mut:
         with open(os.path.join(app, "Info.plist"), "wb") as f:
             f.write(b"\x00garbage, not a plist\xff")
+    if "array-info-plist" in mut:  # AFTER signing: a well-formed property list whose root is an array, not a dictionary
+        with open(os.path.join(app, "Info.plist"), "wb") as f:
+            plistlib.dump(["not", "a", "dictionary"], f)
+    if "malformed-xml-info-plist" in mut:  # AFTER signing: malformed XML that names distinctive strings (an unexpected element), for the message-confidentiality tests
+        with open(os.path.join(app, "Info.plist"), "wb") as f:
+            f.write(b'<?xml version="1.0"?><plist version="1.0"><dict><key>k</key><SECRETINFOELEM>v</SECRETINFOELEM></dict></plist>')
     if "truncated-profile" in mut:
         pp = os.path.join(app, "embedded.mobileprovision")
         with open(pp, "r+b") as f:

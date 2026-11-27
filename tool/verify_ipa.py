@@ -2,6 +2,7 @@
 """Independent verification of a signed iOS IPA, before anything is uploaded.
 
   tool/verify_ipa.py verify ENV IPA --team-id TEAM [options]
+  tool/verify_ipa.py certificate RUNNER_APP_OR_IPA [--pem FILE] [--team-id TEAM] [--trust-anchors PEM]
   tool/verify_ipa.py structure RUNNER_APP_OR_IPA
   tool/verify_ipa.py compare UNSIGNED_RUNNER_APP SIGNED_RUNNER_APP_OR_IPA
   tool/verify_ipa.py analyze-unsigned RUNNER_APP_DIR
@@ -67,6 +68,14 @@ NOT_VERIFIED = [
 ]
 
 
+def emit(text, file=None):
+    """Every line this tool writes goes through here. The text may contain things from the IPA being judged (member names,
+    property list keys, certificate fields, exception texts): control characters are written as escapes and an absurdly long
+    line is cut, so a hostile IPA cannot end a line early, start one with a GitHub workflow command (`::`) or send a
+    terminal escape sequence. The checks themselves never see the escaped text."""
+    print(I.escape_text(text, limit=I.MAX_LINE_CHARS), file=file if file is not None else sys.stdout)
+
+
 class Report(object):
     def __init__(self):
         self.failed = 0
@@ -76,29 +85,32 @@ class Report(object):
 
     def ok(self, text):
         self.passed += 1
-        print("  PASS  " + text)
+        emit("  PASS  " + text)
 
     def fail(self, text):
         self.failed += 1
-        print("  FAIL  " + text)
+        emit("  FAIL  " + text)
 
     def warn(self, text):
         self.warned += 1
-        print("  WARN  " + text)
+        emit("  WARN  " + text)
 
     def info(self, text):
-        print("  INFO  " + text)
+        emit("  INFO  " + text)
 
     def check(self, cond, ok_text, bad_text):
         (self.ok if cond else self.fail)(ok_text if cond else bad_text)
         return bool(cond)
 
     def ev(self, key, value):
-        self.evidence.append((key, "" if value is None else str(value)))
+        # An evidence record is ONE `key=value` line. The key is encoded so that it can hold no `=`, no space and no line break
+        # and two different identifiers never share a key; the value has its control characters and its backslashes escaped, so
+        # that the escaping is reversible. Fixed keys and ordinary values are unchanged.
+        self.evidence.append((I.evidence_key(key), "" if value is None else I.escape_text(value, backslash=True, limit=I.MAX_LINE_CHARS)))
 
 
 def die(text, code=2):
-    print("verify_ipa: %s" % text, file=sys.stderr)
+    emit("verify_ipa: %s" % text, file=sys.stderr)
     sys.exit(code)
 
 
@@ -222,6 +234,34 @@ def entitlement_allowed(key, value, granted):
     return have == value
 
 
+def contained(rep, what, fn, *args):
+    """Run an OBSERVATIONAL diagnostic. Whatever it does, the verification outcome is unchanged: an exception inside it is
+    reported as "diagnostics unavailable" and nothing else (no counter, no verdict, no earlier finding is touched; the checks that
+    already ran have already reported). KeyboardInterrupt and SystemExit are not caught."""
+    try:
+        fn(*args)
+    except Exception as e:
+        try:
+            rep.info("%s: diagnostics unavailable (%s)" % (what, type(e).__name__))
+        except Exception:
+            pass
+
+
+def describe_der_failure(rep, tag, diag):
+    """The DER entitlements of one executable could not be read: report what the blob looks like (bounded). STRUCTURE only: its
+    size and SHA-256, its header and an ASN.1 outline of classes, tags and lengths; never the bytes and never string content of
+    a real IPA (the probe prints those for disposable synthetic input only). INFO lines only: the failure itself was already
+    reported and stays a failure."""
+    if "error" in diag:
+        rep.info("%s: the DER entitlements blob could not be described (%s)" % (tag, diag["error"]))
+        return
+    rep.info("%s: the DER entitlements blob is %d byte(s), sha256 %s; %s" % (tag, diag["length"], diag["sha256"], diag["header"]))
+    for line in diag["outline"]:
+        rep.info("%s: DER outline: %s" % (tag, line))
+    if not diag.get("raw"):
+        rep.info("%s: the bytes of a real IPA's DER blob are not printed" % tag)
+
+
 def check_code_signature(rep, label, path, bundle_dir, bundle_id, team_id, expect_identifier, is_main):
     """Verify one Mach-O file's signature. Returns {"signer": cert|None, "ents": dict|None, "ok": bool}."""
     result = {"signer": None, "ents": None, "ok": True, "cdhash": None, "cms_certs": None}
@@ -240,6 +280,8 @@ def check_code_signature(rep, label, path, bundle_dir, bundle_id, team_id, expec
         for p in s["problems"]:
             rep.fail("%s: %s" % (tag, p))
             result["ok"] = False
+        if s.get("der_diag"):
+            contained(rep, "%s: DER diagnostic" % tag, describe_der_failure, rep, tag, s["der_diag"])
         if s["cpu"] != I.CPU_ARM64:
             rep.fail("%s is not built for arm64 (cpu type 0x%x)" % (tag, s["cpu"]))
             result["ok"] = False
@@ -251,6 +293,13 @@ def check_code_signature(rep, label, path, bundle_dir, bundle_id, team_id, expec
             result["ok"] = False
             rep.fail("%s has no readable CodeDirectory" % tag)
             continue
+        embedded, embedded_err = None, None
+        try:
+            embedded = I.embedded_info_plist(s["data"], s["macho"])
+        except I.MachOError as e:
+            embedded_err = str(e)
+            result["ok"] = False
+            rep.fail("%s: %s" % (tag, embedded_err))
         names = [cd["hash_name"] for _k, cd in s["cds"]]
         if "sha256" not in names:
             result["ok"] = False
@@ -291,15 +340,48 @@ def check_code_signature(rep, label, path, bundle_dir, bundle_id, team_id, expec
                     result["ok"] = False
                     rep.fail("%s: %s was changed after signing" % (tag, what))
             info = os.path.join(bundle_dir, "Info.plist") if bundle_dir else None
-            slot_check(I.SLOT_INFO, info if info and os.path.isfile(info) else None, "Info.plist")
+            if info and os.path.isfile(info):
+                slot_check(I.SLOT_INFO, info, "Info.plist")
+            elif embedded_err is None:
+                # No Info.plist file: Apple's codesign seals the Mach-O's own `__TEXT,__info_plist` section in slot 1
+                # when it has one (and nothing, a zero hash, when it has none). Either way the slot must agree with
+                # what is actually there: a section whose hash differs, a section that is not sealed, and a seal with
+                # neither a file nor a section are all refused by slot_check.
+                slot_check(I.SLOT_INFO, embedded, "Info.plist" if embedded is None else "the embedded Info.plist section")
             res = os.path.join(bundle_dir, "_CodeSignature", "CodeResources") if bundle_dir else None
             slot_check(I.SLOT_RESOURCES, res if res and os.path.isfile(res) else None, "CodeResources")
             slot_check(I.SLOT_REQUIREMENTS, s["requirements_blob"], "the code requirements")
             slot_check(I.SLOT_ENTITLEMENTS, s["entitlements_blob"], "the entitlements")
             slot_check(I.SLOT_DER_ENTITLEMENTS, s["der_entitlements_blob"], "the DER entitlements")
+        # ---- what does not depend on the CMS signature: entitlements and the recorded cdhash ----
+        # (If the CMS stage below fails, these still run on the data that is present: a failure of one check must not
+        # hide the others. Entitlements read from a signature whose CMS did not verify are for diagnosis only, and the
+        # run fails anyway: every CMS failure sets result["ok"] = False.)
+        if s["entitlements"] is not None:
+            # Equal in value AND type, all the way down: Python's == treats True as 1 and 1 as 1.0, and a DER BOOLEAN that
+            # the XML declares as an INTEGER (or the reverse) is a real difference for the kernel.
+            if s["der_entitlements"] is not None and not I.plist_equal_strict(s["der_entitlements"], s["entitlements"]):
+                result["ok"] = False
+                rep.fail("%s: the DER entitlements (enforced by the kernel) differ from the XML entitlements" % tag)
+            if result["ents"] is None:
+                result["ents"] = s["entitlements"]
+            elif not I.plist_equal_strict(result["ents"], s["entitlements"]):
+                # every slice of a universal executable must carry the same entitlements, in value AND type (the same reason as above)
+                result["ok"] = False
+                rep.fail("%s: the entitlements differ between architecture slices" % tag)
+        elif s["der_entitlements"] is not None:
+            result["ok"] = False
+            rep.fail("%s has DER entitlements but no XML entitlements" % tag)
+        if result["cdhash"] is None and s["cds"]:
+            result["cdhash"] = I.cd_hash(s["cds"][0][1], s["cds"][0][1]["hash_name"]).hex()
+
+        # ---- the CMS signature, and the checks that need it ----
+        cms = bound = None
+        bound_read = False
         if s["cms"] is None:
             result["ok"] = False
             rep.fail("%s has no CMS signature (no signing identity)" % tag)
+            rep.warn("%s: NOT CHECKED, there is no CMS signature: its validity, the signer, the digest algorithm and the CodeDirectory binding" % tag)
             continue
         verified = I.cms_verify(s["cms"], detached=s["slots"].get(I.SLOT_CODEDIRECTORY))
         if not verified["ok"]:
@@ -307,25 +389,35 @@ def check_code_signature(rep, label, path, bundle_dir, bundle_id, team_id, expec
             rep.fail("%s CMS signature is not valid: %s" % (tag, verified["why"]))
         try:
             cms = I.parse_cms(s["cms"])
-            bound = I.cms_cdhashes(s["cms"])
         except (I.Asn1Error, IndexError, ValueError, KeyError) as e:
             result["ok"] = False
             rep.fail("%s CMS signature is unreadable: %s" % (tag, e))
+            rep.warn("%s: NOT CHECKED, the CMS structure is unreadable: the signer, the digest algorithm and the signer's consistency across slices" % tag)
+        try:
+            bound = I.cms_cdhashes(s["cms"])
+            bound_read = True
+        except (I.Asn1Error, IndexError, ValueError, KeyError) as e:
+            result["ok"] = False
+            rep.fail("%s CMS cdhashes attribute is unreadable: %s" % (tag, e))
+            rep.warn("%s: NOT CHECKED, the cdhashes attribute is unreadable: that each CodeDirectory is bound by the signature" % tag)
+        if cms is not None:
+            if verified["ok"] and verified["signer_sha256"] != cms["signer"]["sha256"]:
+                result["ok"] = False
+                rep.fail("%s: the signer certificate read from the signature is not the one that verified it" % tag)
+            if cms["digest_oid"] not in I.OID_SHA256_FAMILY:
+                result["ok"] = False
+                rep.fail("%s CMS signature uses a digest weaker than SHA-256 (%s)" % (tag, cms["digest_oid"]))
+        if bound_read:
+            if bound is None:
+                result["ok"] = False
+                rep.fail("%s CMS signature does not bind the cdhashes" % tag)
+            else:
+                for key, cd in s["cds"]:
+                    if I.cd_hash(cd, cd["hash_name"]) not in bound:
+                        result["ok"] = False
+                        rep.fail("%s CodeDirectory 0x%x is not bound by the signature (it was replaced)" % (tag, key))
+        if cms is None:
             continue
-        if verified["ok"] and verified["signer_sha256"] != cms["signer"]["sha256"]:
-            result["ok"] = False
-            rep.fail("%s: the signer certificate read from the signature is not the one that verified it" % tag)
-        if cms["digest_oid"] not in I.OID_SHA256_FAMILY:
-            result["ok"] = False
-            rep.fail("%s CMS signature uses a digest weaker than SHA-256 (%s)" % (tag, cms["digest_oid"]))
-        if bound is None:
-            result["ok"] = False
-            rep.fail("%s CMS signature does not bind the cdhashes" % tag)
-        else:
-            for key, cd in s["cds"]:
-                if I.cd_hash(cd, cd["hash_name"]) not in bound:
-                    result["ok"] = False
-                    rep.fail("%s CodeDirectory 0x%x is not bound by the signature (it was replaced)" % (tag, key))
         signer = cms["signer"]
         if result["cms_certs"] is None:
             result["cms_certs"] = cms["certs"]
@@ -338,20 +430,6 @@ def check_code_signature(rep, label, path, bundle_dir, bundle_id, team_id, expec
         elif signer["sha256"] != first_signer["sha256"]:
             result["ok"] = False
             rep.fail("%s is signed by a different certificate than the other architecture slice" % tag)
-        if s["entitlements"] is not None:
-            if s["der_entitlements"] is not None and s["der_entitlements"] != s["entitlements"]:
-                result["ok"] = False
-                rep.fail("%s: the DER entitlements (enforced by the kernel) differ from the XML entitlements" % tag)
-            if result["ents"] is None:
-                result["ents"] = s["entitlements"]
-            elif result["ents"] != s["entitlements"]:
-                result["ok"] = False
-                rep.fail("%s: the entitlements differ between architecture slices" % tag)
-        elif s["der_entitlements"] is not None:
-            result["ok"] = False
-            rep.fail("%s has DER entitlements but no XML entitlements" % tag)
-        if result["cdhash"] is None and s["cds"]:
-            result["cdhash"] = I.cd_hash(s["cds"][0][1], s["cds"][0][1]["hash_name"]).hex()
     result["signer"] = first_signer
     if result["ok"]:
         rep.ok("%s: signature intact (page hashes, special slots, CMS, bound cdhashes)" % label)
@@ -384,7 +462,7 @@ def verify(args):
     _raw, want_version, want_build = BM.load_pubspec(repo)
     team = args.team_id
 
-    print("verify_ipa: %s (%s)" % (os.path.basename(args.ipa), env))
+    emit("verify_ipa: %s (%s)" % (os.path.basename(args.ipa), env))
     if not os.path.isfile(args.ipa):
         die("%s is not a file" % args.ipa)
     ipa_sha = sha256_path(args.ipa)
@@ -413,10 +491,11 @@ def verify(args):
         try:
             with open(plist_path, "rb") as f:
                 info = plistlib.load(f)
-            if not isinstance(info, dict):
-                raise ValueError("not a dictionary")
         except Exception as e:  # any malformed plist is a failure, never a crash and never a pass
-            rep.fail("Info.plist is unreadable: %s" % e)
+            rep.fail("Info.plist is unreadable: %s" % I.plist_failure_text(e))  # never the parser's own text
+            return finish(rep, args)
+        if not isinstance(info, dict):
+            rep.fail("Info.plist is unreadable: it is not a dictionary")
             return finish(rep, args)
         bundle_id = info.get("CFBundleIdentifier", "")
         exe_name = info.get("CFBundleExecutable", "")
@@ -573,6 +652,11 @@ def verify(args):
                       "entitlement com.apple.developer.team-identifier is '%s', expected %s" % (ents.get("com.apple.developer.team-identifier"), team))
             rep.check(not ents.get("get-task-allow"), "get-task-allow is absent or false (not debuggable)",
                       "get-task-allow is true (a development entitlement)")
+            for key in args.forbid_entitlement:
+                rep.check(key not in ents, "entitlement %s is absent, as required" % key,
+                          "entitlement %s is present (%r) but the release record requires it to be absent" % (key, ents.get(key)))
+            for key in sorted(ents):
+                rep.ev("entitlement." + key, repr(ents[key]))
             if "aps-environment" in ents:
                 rep.check(ents["aps-environment"] == "production", "aps-environment is production",
                           "aps-environment is '%s', an App Store build needs production" % ents["aps-environment"])
@@ -656,8 +740,9 @@ def provenance(rep, args, app_dir, env, bundle_id, info, ipa_sha, tmp):
     manifest = None
     if args.manifest:
         manifest = BM.read_json(args.manifest)
-        if manifest.get("schema") != BM.SCHEMA:
-            rep.fail("%s is not a %s manifest" % (args.manifest, BM.SCHEMA))
+        # The unsigned build job may have run an older commit's tools (schema 1); every field read below exists in both schemas.
+        if manifest.get("schema") not in BM.ACCEPTED_SCHEMAS:
+            rep.fail("%s is not a %s manifest" % (args.manifest, " or ".join(BM.ACCEPTED_SCHEMAS)))
             manifest = None
     if manifest is not None:
         rep.check(manifest.get("environment") == env, "build manifest environment is %s" % env,
@@ -691,7 +776,97 @@ def provenance(rep, args, app_dir, env, bundle_id, info, ipa_sha, tmp):
         rep.warn("no --unsigned-app: whether the IPA is the built code plus signatures only was not checked")
 
 
+MAX_PLIST_REPORTS = 3
+MAX_PLIST_REPORT_LINES = 40
+
+
+def describe_plist_differences(rep, differing):
+    """For each property list that differs between the unsigned build and the IPA, say HOW it differs: keys added, removed or
+    changed (with the value types and sizes), and whether the content is equal in value and type (a difference of serialization
+    only). Diagnostics only: the comparison has already failed on these files and stays failed; nothing here excuses a
+    difference. A value is shown only for an approved low-risk key (tool/ipa_inspect.py PLIST_DISPLAY_KEYS); for every other
+    key only the path, the kind of change, the type and a size are given. A file larger than the cap is not read at all
+    beyond the cap, and one that cannot be described is reported as such; a failure here never touches the verdict."""
+    for rel, a, b in differing[:MAX_PLIST_REPORTS]:
+        contained(rep, "%s: description of the difference" % rel, describe_one_plist, rep, rel, a, b)
+    if len(differing) > MAX_PLIST_REPORTS:
+        rep.info("%d further property list(s) differ and are not described" % (len(differing) - MAX_PLIST_REPORTS))
+
+
+def describe_one_plist(rep, rel, a, b):
+    try:
+        old = I.read_capped(a, I.MAX_PLIST_DIFF_BYTES)
+        new = I.read_capped(b, I.MAX_PLIST_DIFF_BYTES)
+    except OSError as e:
+        rep.info("%s: cannot be read for a description of the difference: %s" % (rel, type(e).__name__))
+        return
+    key = "plist_difference_" + rel
+    if old is None or new is None:
+        rep.info("%s differs from the unsigned build; a file is larger than %d bytes and is not described" % (rel, I.MAX_PLIST_DIFF_BYTES))
+        rep.ev(key, "not_described_too_large")
+        return
+    d = I.plist_difference(old, new)
+    head = "%s differs from the unsigned build: %d byte(s) -> %d byte(s)" % (rel, len(old), len(new))
+    if not d["readable"]:
+        rep.info("%s; not readable as a property list (%s)" % (head, d["error"]))
+        rep.ev(key, "unreadable")
+        return
+    verdict = ("same content in value and type, different serialization only (%s -> %s)" % (d["old_format"], d["new_format"])
+               if d["serialization_only"] else
+               "DIFFERENT CONTENT: %d added, %d removed, %d changed (%s -> %s)" % (d["counts"]["added"], d["counts"]["removed"], d["counts"]["changed"], d["old_format"], d["new_format"]))
+    rep.info("%s; %s" % (head, verdict))
+    lines = []
+    for kind, items in (("added", d["added"]), ("removed", d["removed"]), ("changed", d["changed"])):
+        for path, what, old_v, new_v in items:
+            label = " [identity, version, platform or privilege key]" if I.plist_sensitive(path) else ""
+            shown = I.escape_text(path, backslash=True, limit=I.PLIST_PATH_LIMIT)
+            if kind == "added":
+                lines.append("+ %s (%s) = %s%s" % (shown, what, new_v, label))
+            elif kind == "removed":
+                lines.append("- %s (%s) was %s%s" % (shown, what, old_v, label))
+            else:
+                lines.append("~ %s (%s): %s -> %s%s" % (shown, what, old_v, new_v, label))
+    for line in lines[:MAX_PLIST_REPORT_LINES]:
+        rep.info("%s: %s" % (rel, line))
+    total = d["counts"]["added"] + d["counts"]["removed"] + d["counts"]["changed"]
+    shown = min(len(lines), MAX_PLIST_REPORT_LINES)
+    incomplete = shown < total
+    if incomplete:
+        # the totals above are exact; the listing is not complete
+        rep.info("%s: LISTING INCOMPLETE: %d of %d differences listed" % (rel, shown, total))
+    # the counts are exact totals; only the listing is cut, which is said apart from them
+    rep.ev(key, "serialization_only" if d["serialization_only"] else
+           "added=%d removed=%d changed=%d%s" % (d["counts"]["added"], d["counts"]["removed"], d["counts"]["changed"],
+                                                 " listing_incomplete=1" if incomplete else ""))
+
+
+def info_plist_reserialization(a, b):
+    """The two top-level Info.plist FILES (unsigned, signed) -> ((digest, digest, length, length) or None, why). Reads at most the cap
+    plus one byte of each; anything unreadable, larger, or refused by ipa_inspect.info_plist_reserialized_only is a refusal."""
+    try:
+        old = I.read_capped(a, I.INFO_PLIST_RESERIALIZE_MAX_BYTES)
+        new = I.read_capped(b, I.INFO_PLIST_RESERIALIZE_MAX_BYTES)
+        if old is None or new is None:
+            return None, "a file is larger than %d bytes" % I.INFO_PLIST_RESERIALIZE_MAX_BYTES
+        ok, why = I.info_plist_reserialized_only(old, new)
+        if not ok:
+            return None, why
+        return (hashlib.sha256(old).hexdigest(), hashlib.sha256(new).hexdigest(), len(old), len(new)), ""
+    except Exception as e:  # a VERDICT path, unlike the diagnostics: whatever goes wrong is a refusal (KeyboardInterrupt is not caught)
+        return None, "the files could not be compared (%s)" % type(e).__name__
+
+
 def same_code_check(rep, unsigned, signed):
+    """V8: is `signed` the unsigned build plus signatures only? Every file is compared byte for byte (Mach-O files with the signature
+    excluded), with ONE exception: the app's TOP-LEVEL Info.plist, which may differ in serialization only (see
+    ipa_inspect.info_plist_reserialized_only for the exact rule and its residual risks; nested and framework Info.plist files, every
+    other property list and every other resource stay byte-strict).
+
+    For that one file V8 therefore settles SEMANTIC equality (content and types), not bytewise immutability: bytes the content does not reach may differ.
+
+    THIS FUNCTION AUTHENTICATES NO SIGNATURE. That the signed Info.plist is the file Apple's signature seals (the CodeDirectory's slot-1
+    seal, and the CMS signature over that CodeDirectory) is checked by `verify` (check_code_signature), never here. The `compare` command, which
+    calls this function alone, says so on every invocation."""
     def added_ok(r):
         # signing adds the profile at the top and one CodeResources seal per bundle; nothing else
         if r in ("embedded.mobileprovision", "_CodeSignature/CodeResources"):
@@ -702,6 +877,8 @@ def same_code_check(rep, unsigned, signed):
     missing = sorted(uf - sf)
     extra = sorted(r for r in sf - uf if not added_ok(r))
     changed, same_macho, same_plain = [], 0, 0
+    reserialized, refused_reserialization = None, None  # the top-level Info.plist: (unsigned digest, signed digest, lengths) / why not
+    differing_plists = []  # (relative path, unsigned file, signed file): described below, never excused
     for rel in sorted(uf & sf):
         a, b = os.path.join(unsigned, rel), os.path.join(signed, rel)
         if os.path.islink(a) or os.path.islink(b):
@@ -718,24 +895,46 @@ def same_code_check(rep, unsigned, signed):
             same_plain += 1
         elif rel.endswith("_CodeSignature/CodeResources"):
             continue
+        elif rel == "embedded.mobileprovision":
+            # A baseline taken from a signed archive (Xcode's automatic signing embeds a development
+            # profile there) legitimately gets the distribution profile at export. The profile is
+            # judged on its own by `verify`; it is never part of the code.
+            continue
         else:
+            if rel == "Info.plist":  # the TOP-LEVEL file only; nested Info.plist files are named like "PlugIns/X.appex/Info.plist"
+                accepted, why = info_plist_reserialization(a, b)
+                if accepted:
+                    reserialized = accepted
+                    continue
+                refused_reserialization = why
             changed.append(rel)
+            if rel.endswith(".plist"):
+                differing_plists.append((rel, a, b))
     rep.ev("same_code_macho_files", same_macho)
     rep.ev("same_code_other_files", same_plain)
     rep.check(not missing, "no file of the unsigned build is missing from the IPA",
               "files missing from the IPA: %s" % ", ".join(missing[:8]))
     rep.check(not extra, "the IPA adds no file beyond the profile and the signatures",
               "files added to the IPA: %s" % ", ".join(extra[:8]))
-    rep.check(not changed, "the IPA is the unsigned build plus signatures only (%d executables identical apart from the signature, %d other files byte-identical)" % (same_macho, same_plain),
+    rep.check(not changed, "the IPA is the unsigned build plus signatures only (%d executables identical apart from the signature, %d other files byte-identical%s)" % (
+                  same_macho, same_plain, ", and the top-level Info.plist re-serialized with identical content and types" if reserialized else ""),
               "files that differ from the unsigned build: %s" % "; ".join(changed[:6]))
+    describe_plist_differences(rep, differing_plists)
+    if reserialized:
+        rep.ev("same_code_info_plist", "reserialized_identical_content_and_types")
+        rep.ev("same_code_info_plist_sha256", "unsigned %s signed %s" % (reserialized[0], reserialized[1]))
+        rep.info("Info.plist: the top-level file differs from the unsigned build in SERIALIZATION ONLY and is accepted: binary property list, "
+                 "%d byte(s) -> %d byte(s), SHA-256 %s -> %s, identical keys, values and types: equal in content, NOT byte for byte (docs/IOS_SIGNING.md section 3.1e)" % (reserialized[2], reserialized[3], reserialized[0], reserialized[1]))
+    elif refused_reserialization:
+        rep.info("Info.plist: not accepted as a re-serialization (%s); it stays a failure" % refused_reserialization)
 
 
 def finish(rep, args, unverified=True):
-    print("")
+    emit("")
     if unverified:
-        print("NOT VERIFIED by this tool (needs a real Apple-signed IPA, Apple's trust anchors or Apple):")
+        emit("NOT VERIFIED by this tool (needs a real Apple-signed IPA, Apple's trust anchors or Apple):")
         for t in NOT_VERIFIED:
-            print("  - " + t)
+            emit("  - " + t)
     rep.ev("checks_passed", rep.passed)
     rep.ev("checks_failed", rep.failed)
     rep.ev("checks_warned", rep.warned)
@@ -744,12 +943,153 @@ def finish(rep, args, unverified=True):
         with open(args.evidence, "w", encoding="utf-8") as f:
             for k, v in rep.evidence:
                 f.write("%s=%s\n" % (k, v))
-    print("")
+    emit("")
     if rep.failed:
-        print("verify_ipa: %d check(s) FAILED, %d passed, %d warning(s)" % (rep.failed, rep.passed, rep.warned))
+        emit("verify_ipa: %d check(s) FAILED, %d passed, %d warning(s)" % (rep.failed, rep.passed, rep.warned))
         return 1
-    print("verify_ipa: all %d checks passed (%d warning(s))" % (rep.passed, rep.warned))
+    emit("verify_ipa: all %d checks passed (%d warning(s))" % (rep.passed, rep.warned))
     return 0
+
+
+# ---- certificate -------------------------------------------------------------------------------
+
+
+def pem_of(der):
+    import base64
+    b = base64.b64encode(der).decode("ascii")
+    return "-----BEGIN CERTIFICATE-----\n%s\n-----END CERTIFICATE-----\n" % "\n".join(b[i:i + 64] for i in range(0, len(b), 64))
+
+
+def certificate(args):
+    """Collect the PUBLIC signing certificate of an Apple-signed app or IPA, with its SHA-256 fingerprint.
+
+    This is how the fingerprint of a cloud-managed distribution certificate (which exists in no local
+    keychain, so `security find-certificate` cannot show it) is read from the signed artifact itself. It
+    judges nothing and pins nothing: it reports who signed, whether every executable agrees, and what the
+    embedded profile says, so that the fingerprint can be recorded and later pinned with
+    `verify --expect-cert-sha256`. It reads public data only; no private key exists in an IPA."""
+    rep = Report()
+    emit("verify_ipa certificate: %s" % os.path.basename(args.target.rstrip("/")))
+    with tempfile.TemporaryDirectory(prefix="verify_ipa_") as tmp:
+        target = args.target
+        if os.path.isfile(target):
+            rep.ev("ipa_sha256", sha256_path(target))
+            app_dir, extra = extract_ipa(target, tmp)
+            if app_dir is None:
+                for p in extra:
+                    rep.fail("container: %s" % p)
+                return finish(rep, args, unverified=False)
+        elif os.path.isdir(target):
+            app_dir = target
+        else:
+            die("%s is neither an .ipa nor a directory" % target)
+        try:
+            with open(os.path.join(app_dir, "Info.plist"), "rb") as f:
+                info = plistlib.load(f)
+            exe_name = info["CFBundleExecutable"]
+        except Exception as e:
+            rep.fail("Info.plist is unreadable: %s" % I.plist_failure_text(e))  # never the parser's own text
+            return finish(rep, args, unverified=False)
+        if not isinstance(exe_name, str) or not exe_name or "/" in exe_name or exe_name.startswith("."):
+            rep.fail("CFBundleExecutable %r is not a plain file name" % (exe_name,))
+            return finish(rep, args, unverified=False)
+        rep.ev("bundle_id", info.get("CFBundleIdentifier", ""))
+        rep.ev("version_name", info.get("CFBundleShortVersionString", ""))
+        rep.ev("version_code", info.get("CFBundleVersion", ""))
+
+        signers, main_signer, main_certs = {}, None, None
+        files = [exe_name] + [r for r in all_macho(app_dir) if r != exe_name]
+        for rel in files:
+            path = os.path.join(app_dir, rel)
+            if not os.path.isfile(path):
+                rep.fail("executable '%s' is missing" % rel)
+                continue
+            sig = I.read_signature(path)
+            if sig["error"] or not sig["slices"]:
+                rep.fail("%s: %s" % (rel, sig["error"] or "no architecture slice"))
+                continue
+            for s in sig["slices"]:
+                if not s["signed"] or s["cms"] is None:
+                    rep.fail("%s is not signed by an identity (no CMS signature)" % rel)
+                    continue
+                try:
+                    cms = I.parse_cms(s["cms"])
+                except (I.Asn1Error, IndexError, ValueError, KeyError) as e:
+                    rep.fail("%s: the signature is unreadable: %s" % (rel, e))
+                    continue
+                if cms["signer"] is None:
+                    rep.fail("%s: the signature carries no signer certificate" % rel)
+                    continue
+                v = I.cms_verify(s["cms"], detached=s["slots"].get(I.SLOT_CODEDIRECTORY))
+                if not v["ok"] or v["signer_sha256"] != cms["signer"]["sha256"]:
+                    rep.fail("%s: the CMS signature is not valid (%s)" % (rel, v["why"] or "signer mismatch"))
+                    continue
+                signers.setdefault(cms["signer"]["sha256"], (cms["signer"], []))[1].append(rel)
+                if rel == exe_name and main_signer is None:
+                    main_signer, main_certs = cms["signer"], cms["certs"]
+        if main_signer is None:
+            rep.fail("the main executable has no verifiable signing certificate")
+            return finish(rep, args, unverified=False)
+
+        sg = main_signer
+        for k, v in (("subject", dn_text(sg["subject"])), ("issuer", dn_text(sg["issuer"])), ("serial", sg["serial"]),
+                     ("not_before", sg["not_before"]), ("not_after", sg["not_after"]),
+                     ("sha256", sg["sha256"]), ("sha1", sg["sha1"])):
+            emit("  %-10s %s" % (k, v))
+            rep.ev("signer_" + k, v)
+        rep.check(len(signers) == 1, "all %d signed executable(s) carry this one certificate" % sum(len(v[1]) for v in signers.values()),
+                  "the bundle is signed by %d different certificates (an App Store build needs one): %s" % (
+                      len(signers), "; ".join("%s: %d file(s)" % (h[:16], len(v[1])) for h, v in sorted(signers.items()))))
+        leaf_cn = (sg["subject"].get("CN") or [""])[0]
+        prefixes = args.leaf_prefix or list(LEAF_PREFIXES)
+        rep.check(any(leaf_cn.startswith(p) for p in prefixes), "the certificate's name is a distribution certificate (%s)" % leaf_cn,
+                  "the certificate '%s' is not named as a distribution certificate (%s)" % (leaf_cn, " / ".join(prefixes)))
+        marked = [t for t in SYNTHETIC_MARKERS if any(t in v for d in (sg["subject"], sg["issuer"]) for vals in d.values() for v in vals)]
+        if marked and not args.allow_synthetic:
+            rep.fail("the certificate is a %s identity, not a genuine Apple-issued one" % marked[0].lower())
+        elif marked:
+            rep.warn("accepting a %s identity because --allow-synthetic was given (tests only)" % marked[0].lower())
+        if args.team_id:
+            rep.check(args.team_id in sg["subject"].get("OU", []), "the certificate belongs to Team ID %s" % args.team_id,
+                      "the certificate's OU %s is not Team ID %s" % (sg["subject"].get("OU"), args.team_id))
+        prof_path = os.path.join(app_dir, "embedded.mobileprovision")
+        if os.path.isfile(prof_path):
+            try:
+                prof = I.read_profile(prof_path)
+                listed = [hashlib.sha256(bytes(c)).hexdigest() for c in prof["plist"].get("DeveloperCertificates", [])]
+                rep.ev("profile_type", I.profile_type(prof["plist"]))
+                rep.info("embedded profile: '%s', type %s, lists %d certificate(s)" % (
+                    prof["plist"].get("Name", ""), I.profile_type(prof["plist"]), len(listed)))
+                rep.check(prof["signature_valid"], "the profile's CMS signature is valid",
+                          "the profile's CMS signature is not valid: %s" % prof["signature_error"])
+                rep.check(sg["sha256"] in listed, "the embedded profile lists this certificate",
+                          "the profile does not list this certificate")
+            except Exception as e:
+                rep.fail("embedded.mobileprovision is unreadable: %s" % e)
+        else:
+            rep.warn("no embedded.mobileprovision: the profile's listing of the certificate could not be compared")
+        if args.trust_anchors:
+            extra = [c["der"] for c in (main_certs or []) if c["sha256"] != sg["sha256"]]
+            probs = I.chain_problems(sg["der"], extra, args.trust_anchors,
+                                     int(parse_now(args.now).replace(tzinfo=datetime.timezone.utc).timestamp()))
+            rep.check(not probs, "the certificate chains to the supplied trust anchors",
+                      "the certificate does not chain to the supplied trust anchors: %s" % "; ".join(probs))
+        else:
+            rep.warn("no --trust-anchors: nothing here shows the certificate chains to an Apple root")
+        rep.warn("revocation is never checked (no OCSP/CRL lookup): a revoked certificate would look the same here")
+        if args.pem:
+            with open(args.pem, "w", encoding="ascii") as f:
+                f.write(pem_of(sg["der"]))
+            rep.info("wrote the PUBLIC certificate to %s" % args.pem)
+        emit("")
+        if not rep.failed:
+            emit("RECORD (a public value; the pin for `verify --expect-cert-sha256`): %s" % sg["sha256"])
+            emit("This command pins and approves nothing: a fingerprint read from the artifact it will later")
+            emit("judge is evidence only after the release coordinator has recorded it and it agrees with an")
+            emit("independent source (trust anchors, the profile, the Apple account).")
+        else:
+            emit("Nothing to record: the checks above failed.")
+    return finish(rep, args, unverified=False)
 
 
 # ---- structure ----------------------------------------------------------------------------------
@@ -761,7 +1101,7 @@ def structure(args):
     ID, no certificate policy, no profile. It is for reading what Apple's own codesign wrote (a
     throwaway identity, no Apple account) and comparing the result with Apple's `codesign --verify`."""
     rep = Report()
-    print("verify_ipa structure: %s" % os.path.basename(args.target.rstrip("/")))
+    emit("verify_ipa structure: %s" % os.path.basename(args.target.rstrip("/")))
     with tempfile.TemporaryDirectory(prefix="verify_ipa_") as tmp:
         target = args.target
         if os.path.isfile(target):
@@ -779,7 +1119,7 @@ def structure(args):
                 info = plistlib.load(f)
             exe_name, bundle_id = info["CFBundleExecutable"], info["CFBundleIdentifier"]
         except Exception as e:
-            rep.fail("Info.plist is unreadable: %s" % e)
+            rep.fail("Info.plist is unreadable: %s" % I.plist_failure_text(e))  # never the parser's own text
             return finish(rep, args, unverified=False)
         if not isinstance(exe_name, str) or not exe_name or "/" in exe_name:
             rep.fail("CFBundleExecutable %r is not a plain file name" % (exe_name,))
@@ -796,13 +1136,24 @@ def structure(args):
 # ---- compare ------------------------------------------------------------------------------------
 
 
+COMPARE_NOTICE = ("NOTE  compare authenticates NO signature: it reads no CodeDirectory, no seal and no CMS signature (`verify` does). "
+                  "Never accept an IPA on `compare` alone.")
+
+
 def compare(args):
     """Is SIGNED (a Runner.app directory or an .ipa) the UNSIGNED bundle plus signatures only?
-    This is the check for the signing job: nothing was recompiled, changed or injected."""
+    This is the check for the signing job: nothing was recompiled, changed or injected.
+
+    `compare` AUTHENTICATES NO SIGNATURE: it does not read a CodeDirectory, a seal or a CMS signature, and it says so (COMPARE_NOTICE) on every
+    invocation. The signed top-level Info.plist may differ from the unsigned one in serialization only (same_code_check: equal content, not equal
+    bytes); that it is the file Apple's signature seals is checked by `verify`. Never accept an IPA on `compare` alone."""
+    # Said on EVERY invocation, whatever the outcome, before anything can fail: this command reads no signature at all.
+    emit(COMPARE_NOTICE)
+    sys.stdout.flush()  # before any error can be written to the other stream
     rep = Report()
     if not os.path.isdir(args.unsigned):
         die("%s is not a directory" % args.unsigned)
-    print("verify_ipa compare: %s  vs  %s" % (os.path.basename(args.unsigned.rstrip("/")), os.path.basename(args.signed.rstrip("/"))))
+    emit("verify_ipa compare: %s  vs  %s" % (os.path.basename(args.unsigned.rstrip("/")), os.path.basename(args.signed.rstrip("/"))))
     with tempfile.TemporaryDirectory(prefix="verify_ipa_") as tmp:
         signed = args.signed
         if os.path.isfile(signed):
@@ -829,8 +1180,8 @@ def analyze_unsigned(args):
         die("%s has no Info.plist (pass the Runner.app directory)" % app)
     with open(plist_path, "rb") as f:
         info = plistlib.load(f)
-    print("analyze-unsigned: %s" % app)
-    print("  bundle id %s, version %s+%s, minimum iOS %s, SDK %s" % (
+    emit("analyze-unsigned: %s" % app)
+    emit("  bundle id %s, version %s+%s, minimum iOS %s, SDK %s" % (
         info.get("CFBundleIdentifier"), info.get("CFBundleShortVersionString"), info.get("CFBundleVersion"),
         info.get("MinimumOSVersion"), info.get("DTSDKName")))
     unsigned, adhoc, signed_other, other = [], [], [], []
@@ -856,22 +1207,22 @@ def analyze_unsigned(args):
                             who = "unreadable"
                     signed_other.append((rel, cds[0]["team_id"] if cds else "", who))
     unsigned, adhoc = sorted(set(unsigned)), sorted(set(adhoc))
-    print("  Mach-O files: %d with no signature, %d ad-hoc signed, %d signed by an identity"
+    emit("  Mach-O files: %d with no signature, %d ad-hoc signed, %d signed by an identity"
           % (len(unsigned), len(adhoc), len(signed_other)))
     for rel in unsigned:
-        print("    unsigned   %s" % rel)
+        emit("    unsigned   %s" % rel)
     for rel in adhoc:
-        print("    ad-hoc     %s (must be re-signed with --force)" % rel)
+        emit("    ad-hoc     %s (must be re-signed with --force)" % rel)
     for rel, team, who in signed_other:
-        print("    signed     %s  team %s  by %s (must be re-signed with --force: App Store builds need ONE identity)" % (rel, team or "-", who))
+        emit("    signed     %s  team %s  by %s (must be re-signed with --force: App Store builds need ONE identity)" % (rel, team or "-", who))
     for rel, err in other:
-        print("    unreadable %s: %s" % (rel, err))
-    print("  sealed bundles: %s" % ", ".join(sorted(
+        emit("    unreadable %s: %s" % (rel, err))
+    emit("  sealed bundles: %s" % ", ".join(sorted(
         d for d in os.listdir(os.path.join(app, "Frameworks"))
         if os.path.isfile(os.path.join(app, "Frameworks", d, "_CodeSignature", "CodeResources")))) or "none")
-    print("  has embedded.mobileprovision: %s; has _CodeSignature: %s" % (
+    emit("  has embedded.mobileprovision: %s; has _CodeSignature: %s" % (
         os.path.exists(os.path.join(app, "embedded.mobileprovision")), os.path.isdir(os.path.join(app, "_CodeSignature"))))
-    print("  entitlements file embedded: none (nothing is signed, so none exists)")
+    emit("  entitlements file embedded: none (nothing is signed, so none exists)")
     notes = []
     if "ITSAppUsesNonExemptEncryption" not in info:
         notes.append("Info.plist has no ITSAppUsesNonExemptEncryption (export-compliance question at upload)")
@@ -882,11 +1233,318 @@ def analyze_unsigned(args):
     if not os.path.isfile(os.path.join(app, "PrivacyInfo.xcprivacy")):
         notes.append("the app has no PrivacyInfo.xcprivacy (frameworks with one: %s)" % (", ".join(privacy) or "none"))
     for n in notes:
-        print("  NOTE  " + n)
+        emit("  NOTE  " + n)
     return 0
 
 
 # ---- command line -----------------------------------------------------------------------------
+
+
+# ---- capture-evidence (Phase 7C, Issue #71): READ-ONLY evidence for V8 and for the Distribution DER blob ------------------------------
+# What it is for. The first Apple-signed IPA (run 44834801248) failed V8 because its top-level Info.plist differed from the archive's, and
+# neither the IPA nor its Info.plist was kept, so the difference is still unknown. This subcommand makes the NEXT signing run keep what
+# is needed to find out: the two Info.plist files (exact bytes, as base64 text), their sizes and digests, how they differ, and whether the
+# CodeDirectory's slot-1 seal matches each; and the DER entitlements blob of the Distribution-signed executable (exact bytes, as hex).
+# What it is not. It decides nothing: V7 and V8 keep their rules and their verdicts, this runs apart from them, and a difference between the
+# two files is NOT a failure of the capture. It never retains the IPA, a profile or any credential; it reads the IPA by path and writes only
+# text under --out. Everything it keeps is judged by ipa_inspect.evidence_unsafe_reason on the DECODED bytes first (base64 is an encoding,
+# not sanitisation): content that fails is not kept, and the reason (the KIND of material, never the material) is recorded instead.
+# The log gets counts, digests and file names only, never a property list value.
+CAPTURE_MEMBER_RE = re.compile(r"^Payload/([^/]+)\.app/Info\.plist$")
+CAPTURE_EXE_CAP = 256 << 20
+
+
+def _cap_kv(path, limit=65536):
+    """key=value lines of a small evidence file; {} when it is missing or unreadable."""
+    out = {}
+    try:
+        with open(path, "rb") as f:
+            text = f.read(limit).decode("utf-8", "replace")
+    except OSError:
+        return out
+    for line in text.splitlines():
+        if "=" in line and not line.startswith("#"):
+            k, _, v = line.partition("=")
+            out[k.strip()] = v.strip()
+    return out
+
+
+def _cap_write(out_dir, name, text):
+    """Write one evidence file. A LINE that would trip the evidence seal is replaced by a note, so that the seal can never be made to
+    delete ALL the evidence by one hostile string (the note names the kind of material, not the material)."""
+    kept = []
+    for line in text.splitlines():
+        why = I.evidence_unsafe_reason(line)
+        kept.append("[line withheld: it contained %s]" % why if why else line)
+    with open(os.path.join(out_dir, name), "w", encoding="utf-8") as f:
+        f.write("\n".join(kept) + "\n")
+
+
+def _cap_esc(value, limit=120):
+    return I.escape_text(str(value), backslash=True, limit=limit)
+
+
+def _cap_read_member(zf, info, cap):
+    if info.file_size > cap:
+        return None, "larger than %d bytes (%d)" % (cap, info.file_size)
+    with zf.open(info) as f:
+        data = f.read(cap + 1)
+    if len(data) > cap:
+        return None, "larger than %d bytes" % cap
+    return data, None
+
+
+def _cap_file_facts(label, data, show_keys):
+    """Lines that describe one property list file (bytes in, text out; no values). Its top-level key NAMES are listed only when the file's
+    bytes may be kept (`show_keys`): for a file that is withheld, whatever the reason, no content of it is shown in any form."""
+    lines = ["%s: size=%d bytes" % (label, len(data)), "%s: sha256=%s" % (label, hashlib.sha256(data).hexdigest()),
+             "%s: sha1=%s" % (label, hashlib.sha1(data).hexdigest()), "%s: container_format=%s" % (label, I.plist_container_format(data))]
+    st = I.bplist_structure(data)
+    if st is not None:
+        lines.append("%s: bplist version/sort=%d offset_int_size=%d object_ref_size=%d num_objects=%d top_object=%d offset_table_offset=%d trailer_consistent=%s"
+                     % (label, st["sort_version"], st["offset_int_size"], st["object_ref_size"], st["num_objects"], st["top_object"],
+                        st["offset_table_offset"], "yes" if st["consistent"] else "NO"))
+    keys = I.plist_top_keys(data) if show_keys else None
+    if not show_keys:
+        lines.append("%s: top-level keys not listed: the bytes of this file are withheld, so nothing of its content is shown" % label)
+    elif keys is None:
+        lines.append("%s: top-level keys: not readable as a property list dictionary" % label)
+    else:
+        shown = ", ".join(_cap_esc(k, 60) for k in keys[:I.EVIDENCE_KEY_LIST_MAX])
+        lines.append("%s: top-level keys (%d, in file order): %s%s" % (label, len(keys), shown, " ..." if len(keys) > I.EVIDENCE_KEY_LIST_MAX else ""))
+    return lines
+
+
+def _cap_plist_retention(data):
+    """(reason, kept) for a property list: reason is None when its bytes may be kept, otherwise why not (the KIND of problem); `kept` is the
+    status word. One decision, used everywhere, so that what may be SHOWN about a file is exactly what may be KEPT of it."""
+    if len(data) > I.EVIDENCE_PLIST_MAX_BYTES:
+        return "larger than %d bytes" % I.EVIDENCE_PLIST_MAX_BYTES, "withheld: too large"
+    unsafe = I.plist_evidence_unsafe_reason(data)
+    return ("the content has %s" % unsafe, "withheld: " + unsafe) if unsafe else (None, "kept")
+
+
+def _cap_seal_lines(label, cds, data, slot, slot_name):
+    """For each CodeDirectory: the sealed hash of `slot`, the hash of `data` under that CodeDirectory's algorithm, and whether they agree."""
+    lines = []
+    for key, cd in cds:
+        want = I.slot_hash(cd, slot)
+        got = hash_with(cd, data) if data is not None else None
+        verdict = "n/a" if got is None else ("no seal in this CodeDirectory" if want is None else ("MATCH" if want == got else "DIFFERENT"))
+        lines.append("seal: CodeDirectory 0x%x (%s): %s slot %d sealed=%s %s=%s -> %s" % (
+            key, cd["hash_name"], slot_name, slot, want.hex() if want else "none", label, got.hex() if got else "none", verdict))
+    return lines
+
+
+def capture_evidence(args):
+    out_dir, ev_dir = args.out, args.evidence_dir
+    os.makedirs(out_dir, exist_ok=True)
+    problems = []
+    prov = []
+    src, arch, res, xc = (_cap_kv(os.path.join(ev_dir, n)) for n in ("source.txt", "archive.txt", "export-result.txt", "xcode.txt"))
+    for label, d, keys in (("source", src, ("approved_sha", "tools_commit", "workflow_blob", "run")), ("archive", arch, ("archive_tar_sha256", "archive_app_files")),
+                           ("export", res, ("xcodebuild_exportArchive_exit", "ipa_sha256_after_export", "ipa_size")), ("xcode", xc, ("xcode",))):
+        for k in keys:
+            prov.append("provenance: %s %s=%s" % (label, k, _cap_esc(d.get(k, "(absent)"))))
+    prov.append("provenance: this run id=%s attempt=%s, tools commit=%s" % (_cap_esc(args.run_id or "(not given)"), _cap_esc(args.run_attempt or "(not given)"), _cap_esc(args.tools_sha or "(not given)")))
+    for n in ("ExportOptions-used.txt", "archive-app.sha256"):
+        p = os.path.join(ev_dir, n)
+        prov.append("provenance: %s sha256=%s" % (n, sha256_path(p) if os.path.isfile(p) else "(absent)"))
+
+    # ---- which situation is this? (decided from the export evidence, never guessed)
+    if "xcodebuild_exportArchive_exit" not in res:
+        state = "export-not-reached"
+    elif res["xcodebuild_exportArchive_exit"] != "0":
+        state = "export-failed"
+    else:
+        state = "export-succeeded"
+    ipa = args.ipa or ""
+    if state == "export-succeeded" and not (ipa and os.path.isfile(ipa)):
+        state = "ipa-missing-after-export"
+        problems.append("the export reported success but there is no IPA to read (a diagnostic failure, not a skip)")
+
+    # ---- the archive's Info.plist (the V8 baseline)
+    archive_plist, archive_why = None, None
+    if args.archive_app:
+        ap_path = os.path.join(args.archive_app, "Info.plist")
+        try:
+            with open(ap_path, "rb") as f:
+                archive_plist = f.read(I.EVIDENCE_READ_CAP + 1)
+            if len(archive_plist) > I.EVIDENCE_READ_CAP:
+                archive_plist, archive_why = None, "larger than %d bytes" % I.EVIDENCE_READ_CAP
+        except OSError as e:
+            archive_why = "cannot be read (%s)" % type(e).__name__
+    else:
+        archive_why = "no archive app was given"
+    if archive_plist is None and state in ("export-succeeded", "ipa-missing-after-export"):
+        problems.append("the archived Info.plist is unavailable: %s" % archive_why)
+
+    # ---- the IPA's Info.plist and the main executable
+    ipa_plist, ipa_why, exe_bytes, exe_name, app_name, exe_note, names_ok = None, None, None, None, None, None, False
+    ipa_sha = None
+    if state == "export-succeeded":
+        try:
+            ipa_sha = sha256_path(ipa)
+            if res.get("ipa_sha256_after_export") and res["ipa_sha256_after_export"] != ipa_sha:
+                problems.append("the IPA's SHA-256 differs from the one recorded right after the export")
+            with zipfile.ZipFile(ipa) as zf:
+                cands = [i for i in zf.infolist() if CAPTURE_MEMBER_RE.match(i.filename)]
+                if len(cands) != 1:
+                    ipa_why = "the IPA holds %d top-level Info.plist member(s), expected exactly 1" % len(cands)
+                else:
+                    app_name = CAPTURE_MEMBER_RE.match(cands[0].filename).group(1)
+                    ipa_plist, ipa_why = _cap_read_member(zf, cands[0], I.EVIDENCE_READ_CAP)
+                    exe = None
+                    if ipa_plist is not None:
+                        try:
+                            exe, _fmt = I.read_plist_exact(ipa_plist)
+                            exe = exe.get("CFBundleExecutable") if isinstance(exe, dict) else None
+                        except ValueError:
+                            exe = None
+                    # CFBundleExecutable is a VALUE of the exported Info.plist. It is used to find the executable, but it may be NAMED in an
+                    # output (der-summary.txt, status.txt, the log) only if that plist may be kept: for a withheld plist it is untrusted, and a
+                    # confidential value must not leave through a diagnostic that the pattern scan would not recognise (Phase 7C-R2).
+                    names_ok = ipa_plist is not None and _cap_plist_retention(ipa_plist)[0] is None
+                    exe_name = exe if isinstance(exe, str) and exe and "/" not in exe and not exe.startswith(".") else app_name
+                    try:
+                        exe_info = zf.getinfo("Payload/%s.app/%s" % (app_name, exe_name))
+                        exe_bytes, exe_why = _cap_read_member(zf, exe_info, CAPTURE_EXE_CAP)
+                    except KeyError:
+                        exe_why = "the IPA has no executable named %r" % exe_name if names_ok else "no executable was found under the name the exported Info.plist gives (the name is not shown: that file is withheld)"
+                    if exe_bytes is None:
+                        exe_note = "the exported executable could not be located: %s" % _cap_esc(exe_why)
+        except (OSError, zipfile.BadZipFile, ValueError, RuntimeError) as e:
+            ipa_why = "the IPA cannot be read (%s)" % type(e).__name__
+        if ipa_plist is None:
+            problems.append("the exported Info.plist is unavailable: %s" % _cap_esc(ipa_why))
+    elif state == "export-failed":
+        ipa_why = "the export failed (exit %s): there is no exported file, and none is invented" % _cap_esc(res.get("xcodebuild_exportArchive_exit"))
+    elif state == "export-not-reached":
+        ipa_why = "the export step did not run, so there is no exported file"
+
+    # ---- the Info.plist evidence
+    # A file is RETAINABLE only if it is within the size bound and passes ipa_inspect.plist_evidence_unsafe_reason (raw bytes with UTF-16 views,
+    # every parsed key and string, binary data values; a file that cannot be inspected is not retainable). Nothing derived from a file that is
+    # not retainable is shown in ANY form, hex and base64 included: no byte window, no key name, no value, no key-difference line. Sizes,
+    # digests, formats, counts, offsets as numbers and the reason are safe metadata and stay.
+    info_lines = ["Info.plist evidence (Phase 7C). Exact bytes are kept as base64 text only when the content passes the safety check.", ""] + prov + [""]
+    kept, retainable = {}, {}
+    for label, data, why in (("archive", archive_plist, archive_why), ("ipa", ipa_plist, ipa_why)):
+        if data is None:
+            info_lines.append("%s: Info.plist not captured: %s" % (label, _cap_esc(why)))
+            kept[label] = "absent"
+            retainable[label] = False
+            continue
+        reason, kept[label] = _cap_plist_retention(data)
+        retainable[label] = reason is None
+        info_lines.extend(_cap_file_facts(label, data, retainable[label]))
+        if reason is not None:
+            info_lines.append("%s: bytes NOT kept: %s" % (label, reason))
+            continue
+        _cap_write(out_dir, "%s-Info.plist.b64" % label, I.b64_lines(data))
+        info_lines.append("%s: bytes kept as %s-Info.plist.b64 (base64 of the exact file)" % (label, label))
+    if archive_plist is not None and ipa_plist is not None:
+        detail = retainable["archive"] and retainable["ipa"]
+        fd = I.first_difference(archive_plist, ipa_plist)
+        info_lines += ["", "comparison (archive -> ipa):", "bytes_identical=%s equal_length=%s" % ("yes" if fd["identical"] else "NO", "yes" if fd["equal_length"] else "NO")]
+        if not detail:
+            info_lines.append("detail withheld: at least one of the two files is not retainable, so no byte window, key name, value or key-difference line is shown; only counts, offsets and flags")
+        if fd["offset"] is not None:
+            info_lines.append("first_differing_byte_offset=%d differing_bytes=%d%s" % (fd["offset"], fd["differing_bytes"], " window_start=%d" % fd["window_start"] if detail else ""))
+            if detail:
+                info_lines.append("window archive (hex): %s" % fd["window_a"])
+                info_lines.append("window ipa     (hex): %s" % fd["window_b"])
+        d = I.plist_difference(archive_plist, ipa_plist)
+        if not d["readable"]:
+            info_lines.append("typed comparison: not possible (%s)" % (_cap_esc(d["error"]) if detail else "a file is not readable as a property list"))
+        else:
+            tc = [c for c in d["changed"] if " -> " in c[1] and not c[1].startswith("array of")]
+            info_lines.append("typed comparison (every key, value AND type): semantic=%s serialization_only=%s" % (d["semantic"], "yes" if d["serialization_only"] else "no"))
+            info_lines.append("formats: %s -> %s; added=%d removed=%d changed=%d (of which type-changed=%d%s)" % (
+                d["old_format"], d["new_format"], d["counts"]["added"], d["counts"]["removed"], d["counts"]["changed"], len(tc),
+                "; listing truncated" if d["truncated"] else ""))
+            if detail:
+                for kind, items in (("added", d["added"]), ("removed", d["removed"]), ("changed", d["changed"])):
+                    for path, what, old_v, new_v in items[:I.EVIDENCE_KEY_LIST_MAX]:
+                        info_lines.append("%s: %s (%s) %s%s" % (kind, _cap_esc(path, 100), _cap_esc(what, 60),
+                                                               "" if old_v is None else "old=%s " % _cap_esc(old_v, 100), "" if new_v is None else "new=%s" % _cap_esc(new_v, 100)))
+        ka, kb = (I.plist_top_keys(archive_plist), I.plist_top_keys(ipa_plist)) if detail else (None, None)
+        if ka is not None and kb is not None:
+            idx = next((i for i, (x, y) in enumerate(zip(ka, kb)) if x != y), None)
+            info_lines.append("top_level_key_order_equal=%s%s" % ("yes" if ka == kb else "NO", "" if idx is None else " first_difference_at_index=%d (archive %s, ipa %s)" % (idx, _cap_esc(ka[idx], 60), _cap_esc(kb[idx], 60))))
+    # ---- the slot-1 seal of the exported executable, for both files
+    der_lines = ["DER entitlements evidence (Phase 7C). The blob is kept as hex whether or not the parser reads it.", ""] + prov + [""]
+    der_status = "not captured"
+    if exe_bytes is not None:
+        with tempfile.TemporaryDirectory(prefix="verify_ipa_cap_") as tmp:
+            exe_path = os.path.join(tmp, "exe")
+            with open(exe_path, "wb") as f:
+                f.write(exe_bytes)
+            sig = I.read_signature(exe_path)
+        der_lines.append("source executable: %s, %d bytes, sha256=%s" % (
+            "Payload/%s.app/%s" % (_cap_esc(app_name), _cap_esc(exe_name)) if names_ok else "the main executable of the IPA (its name is not shown: the exported Info.plist is withheld)",
+            len(exe_bytes), hashlib.sha256(exe_bytes).hexdigest()))
+        if sig["error"] or not sig["slices"]:
+            der_lines.append("the executable's signature cannot be read: %s" % _cap_esc(sig["error"] or "no architecture slice"))
+            problems.append("the exported executable's signature cannot be read")
+        for si, sl in enumerate(sig["slices"]):
+            tag = "slice %d (cpu 0x%x)" % (si, sl["cpu"])
+            cds = sl.get("cds") or []
+            if ipa_plist is not None or archive_plist is not None:
+                info_lines.append("")
+                for lab, dat in (("ipa_info_plist", ipa_plist), ("archive_info_plist", archive_plist)):
+                    if dat is not None:
+                        info_lines += ["%s: %s" % (tag, line) for line in _cap_seal_lines(lab, cds, dat, I.SLOT_INFO, "Info.plist")]
+                if not cds:
+                    info_lines.append("%s: no readable CodeDirectory: the Info.plist seal cannot be compared" % tag)
+            blob = sl.get("der_entitlements_blob")
+            if blob is None:
+                der_lines.append("%s: no DER entitlements slot (slot %d)" % (tag, I.SLOT_DER_ENTITLEMENTS))
+                der_status = "absent"
+                continue
+            too_large = len(blob) > I.EVIDENCE_DER_MAX_BYTES
+            unsafe = None if too_large else I.evidence_unsafe_reason(blob)
+            keepable = not too_large and unsafe is None
+            der_lines.append("%s: DER entitlements blob: %d bytes, sha256=%s" % (tag, len(blob), hashlib.sha256(blob).hexdigest()))
+            if keepable:  # header bytes and the parser's own words (they can quote a key) only for a blob whose bytes may be kept
+                der_lines.append("%s: header: magic=%s declared_length=%s" % (tag, blob[:4].hex(), int.from_bytes(blob[4:8], "big") if len(blob) >= 8 else "n/a"))
+            der_lines += ["%s: %s" % (tag, line) for line in _cap_seal_lines("der_blob", cds, blob, I.SLOT_DER_ENTITLEMENTS, "DER entitlements")]
+            try:
+                parsed = I.parse_der_entitlements(blob)
+                verdict = "accepted, %d top-level entitlement(s)" % len(parsed)
+            except (I.Asn1Error, IndexError, ValueError, struct.error, RecursionError) as e:
+                verdict = "refused: %s" % _cap_esc(e, 200) if keepable else "refused (the parser's text is not shown for a blob that is withheld)"
+            der_lines.append("%s: parser verdict (information only, does not decide what is kept): %s" % (tag, verdict))
+            if too_large:
+                der_lines.append("%s: bytes NOT kept: larger than %d bytes" % (tag, I.EVIDENCE_DER_MAX_BYTES))
+                der_status = "withheld: too large"
+                continue
+            if unsafe:
+                der_lines.append("%s: bytes NOT kept: the content has %s" % (tag, unsafe))
+                der_status = "withheld: " + unsafe
+                continue
+            name = "der-entitlements-slice%d-cpu%x.hex" % (si, sl["cpu"])
+            _cap_write(out_dir, name, I.hex_lines(blob))
+            der_lines.append("%s: bytes kept as %s (hex of the exact blob)" % (tag, name))
+            der_status = "kept"
+    elif state == "export-succeeded":
+        der_lines.append("not captured: %s" % (exe_note or "the executable was unavailable"))
+        problems.append("the DER entitlements could not be read: %s" % (exe_note or "the executable was unavailable"))
+    else:
+        der_lines.append("not captured: %s" % ("the export failed: no exported executable exists" if state == "export-failed" else "no export happened"))
+
+    status = ["state=%s" % state, "infoplist_archive=%s" % kept.get("archive", "absent"), "infoplist_ipa=%s" % kept.get("ipa", "absent"), "der=%s" % der_status,
+              "problems=%d" % len(problems)] + ["problem: %s" % p for p in problems]
+    _cap_write(out_dir, "infoplist-summary.txt", "\n".join(info_lines) + "\n")
+    _cap_write(out_dir, "der-summary.txt", "\n".join(der_lines) + "\n")
+    _cap_write(out_dir, "status.txt", "\n".join(status) + "\n")
+    emit("capture-evidence: state=%s, Info.plist archive=%s ipa=%s, DER %s, %d problem(s)" % (state, kept.get("archive", "absent"), kept.get("ipa", "absent"), der_status, len(problems)))
+    if archive_plist is not None and ipa_plist is not None:
+        emit("capture-evidence: archive Info.plist %d bytes sha256 %s; exported %d bytes sha256 %s; byte-identical: %s" % (
+            len(archive_plist), hashlib.sha256(archive_plist).hexdigest(), len(ipa_plist), hashlib.sha256(ipa_plist).hexdigest(), "yes" if archive_plist == ipa_plist else "NO"))
+    for p in problems:
+        emit("  FAIL  evidence capture: %s" % p)
+    return 1 if problems else 0
 
 
 def main(argv):
@@ -904,19 +1562,41 @@ def main(argv):
     v.add_argument("--unsigned-app", help="the unsigned Runner.app directory the manifest describes")
     v.add_argument("--trust-anchors", metavar="PEM", help="trust-anchor certificates (PEM) the signing chain must reach; supplied by the operator")
     v.add_argument("--allow-synthetic", action="store_true", help="tests only: accept a throwaway/synthetic identity (never for production)")
+    v.add_argument("--forbid-entitlement", action="append", default=[], metavar="KEY",
+                   help="fail when the app's signed entitlements contain KEY (repeatable), e.g. aps-environment "
+                        "when the release record decides there is no push capability")
     v.add_argument("--min-sdk", type=int)
     v.add_argument("--warn-days", type=int, default=30)
     v.add_argument("--now", help="UTC time to judge validity at (default now), e.g. 2026-10-22T12:00:00Z")
     v.add_argument("--repo", default=os.path.dirname(HERE))
     v.add_argument("--evidence", help="write text evidence (key=value) here")
+    ce = sub.add_parser("certificate", help="read the public signing certificate and its SHA-256 fingerprint from a signed app or IPA")
+    ce.add_argument("target", help="a Runner.app directory or an .ipa")
+    ce.add_argument("--pem", metavar="FILE", help="write the PUBLIC signing certificate (PEM) here")
+    ce.add_argument("--team-id")
+    ce.add_argument("--leaf-prefix", action="append", default=None, help="accepted prefixes of the certificate CN (default: Apple Distribution:, iPhone Distribution:)")
+    ce.add_argument("--allow-synthetic", action="store_true", help="tests only")
+    ce.add_argument("--trust-anchors", metavar="PEM")
+    ce.add_argument("--now")
+    ce.add_argument("--evidence")
     a = sub.add_parser("analyze-unsigned", help="describe what re-signing an unsigned Runner.app involves")
     a.add_argument("app")
     st = sub.add_parser("structure", help="check the signing structure of an app or IPA without judging the identity")
     st.add_argument("target", help="a Runner.app directory or an .ipa")
     st.add_argument("--evidence")
-    c = sub.add_parser("compare", help="is SIGNED the UNSIGNED bundle plus signatures only?")
+    c = sub.add_parser("compare", help="is SIGNED the UNSIGNED bundle plus signatures only? (authenticates NO signature: use `verify` for that)",
+                       description="Is SIGNED the UNSIGNED bundle plus signatures only? This command authenticates NO signature: it reads no CodeDirectory, no seal and no CMS signature "
+                                   "(`verify` does). Every file must be byte-identical, except that the top-level Info.plist may differ in serialization only.")
     c.add_argument("unsigned", help="the unsigned Runner.app directory")
     c.add_argument("signed", help="the signed Runner.app directory or the .ipa")
+    cap = sub.add_parser("capture-evidence", help="keep the Info.plist files and the DER entitlements blob as text evidence (read-only; decides nothing)")
+    cap.add_argument("--out", required=True, help="directory the evidence files are written to")
+    cap.add_argument("--evidence-dir", required=True, help="the existing evidence directory (provenance files are read from it)")
+    cap.add_argument("--ipa", default="", help="the exported IPA (read, never copied)")
+    cap.add_argument("--archive-app", default="", help="the archive's Runner.app directory (the V8 baseline)")
+    cap.add_argument("--run-id", default="")
+    cap.add_argument("--run-attempt", default="")
+    cap.add_argument("--tools-sha", default="")
     args = ap.parse_args(argv[1:])
     if args.cmd == "verify":
         if args.leaf_prefix is None:
@@ -930,19 +1610,31 @@ def main(argv):
         except SystemExit:
             raise
         except Exception as e:  # fail closed: an unexpected error is a failed verification, never a pass
-            print("  FAIL  internal error while verifying (%s: %s); the IPA is NOT verified" % (type(e).__name__, e))
-            print("")
-            print("verify_ipa: verification aborted, treated as FAILED")
+            emit("  FAIL  internal error while verifying (%s: %s); the IPA is NOT verified" % (type(e).__name__, e))
+            emit("")
+            emit("verify_ipa: verification aborted, treated as FAILED")
             return 1
     if args.cmd == "analyze-unsigned":
         return analyze_unsigned(args)
+    if args.cmd == "certificate":
+        if args.team_id and not re.match(r"^[A-Z0-9]{10}$", args.team_id):
+            die("--team-id must be a 10-character Apple Team ID")
+        if args.trust_anchors and not os.path.isfile(args.trust_anchors):
+            die("--trust-anchors %s is not a file" % args.trust_anchors)
+        try:
+            return certificate(args)
+        except SystemExit:
+            raise
+        except Exception as e:
+            emit("  FAIL  internal error while reading the certificate (%s: %s)" % (type(e).__name__, e))
+            return 1
     if args.cmd == "structure":
         try:
             return structure(args)
         except SystemExit:
             raise
         except Exception as e:
-            print("  FAIL  internal error while reading the structure (%s: %s)" % (type(e).__name__, e))
+            emit("  FAIL  internal error while reading the structure (%s: %s)" % (type(e).__name__, e))
             return 1
     if args.cmd == "compare":
         try:
@@ -950,7 +1642,15 @@ def main(argv):
         except SystemExit:
             raise
         except Exception as e:
-            print("  FAIL  internal error while comparing (%s: %s)" % (type(e).__name__, e))
+            emit("  FAIL  internal error while comparing (%s: %s)" % (type(e).__name__, e))
+            return 1
+    if args.cmd == "capture-evidence":
+        try:
+            return capture_evidence(args)
+        except SystemExit:
+            raise
+        except Exception as e:  # fail closed: a failed capture is reported, and it is never a pass
+            emit("  FAIL  internal error while capturing evidence (%s)" % type(e).__name__)
             return 1
     ap.print_help()
     return 2

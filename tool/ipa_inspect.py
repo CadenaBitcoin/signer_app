@@ -27,6 +27,8 @@ import shutil
 import struct
 import subprocess
 import tempfile
+import unicodedata
+import xml.parsers.expat
 
 # ---- ASN.1 / BER (enough for CMS and X.509; indefinite lengths included) ---------------------
 
@@ -230,13 +232,66 @@ def parse_cms(blob):
 
 
 OID_APPLE_CDHASHES = "1.2.840.113635.100.9.1"
+CDHASH_LEN = 20
+MAX_CDHASHES_PLIST = 65536  # the real attribute is a few hundred bytes; refuse anything absurd before parsing it
+
+
+class _StrictDict(dict):
+    """A plist dictionary that refuses a repeated key (plistlib would silently keep the last one, so two
+    `cdhashes` entries could show a verifier one list and a reader another)."""
+
+    def __setitem__(self, key, value):
+        if key in self:
+            raise Asn1Error("a repeated key in the cdhashes property list")  # the key's name is never quoted
+        dict.__setitem__(self, key, value)
+
+
+def parse_cdhashes_plist(data):
+    """The `cdhashes` array of Apple's hash-agility attribute -> [bytes of 20], in the attribute's order.
+
+    The property list is read with an EXPLICIT format, never `plistlib`'s automatic detection: that detection
+    accepts an XML list only when it starts with `<?xml` or `<plist`, and Apple's cloud-managed signing service
+    (Xcode 26.3, observed in Authorization C, run 44834801248: 16 of 16 signatures) writes it starting with
+    `<!DOCTYPE plist`, with no XML declaration. Accepted: XML (with or without the declaration, optionally after
+    white space) and binary (`bplist00`). Refused, each as an Asn1Error: any other first bytes, an oversized
+    attribute, a DTD that declares entities, a repeated key, a top level that is not a dictionary, a missing or
+    non-list `cdhashes`, an empty list, an element that is not data of exactly 20 bytes, and a repeated hash."""
+    if len(data) > MAX_CDHASHES_PLIST:
+        raise Asn1Error("the cdhashes property list is larger than %d bytes" % MAX_CDHASHES_PLIST)
+    head = data.lstrip(b" \t\r\n")
+    if head.startswith(b"bplist00"):
+        fmt = plistlib.FMT_BINARY
+    elif head.startswith((b"<?xml", b"<!DOCTYPE plist", b"<plist")):
+        fmt = plistlib.FMT_XML
+        if b"<!ENTITY" in data:
+            raise Asn1Error("the cdhashes property list declares entities")
+    else:
+        raise Asn1Error("the cdhashes attribute is neither an XML nor a binary property list")
+    try:
+        plist = plistlib.loads(data, fmt=fmt, dict_type=_StrictDict)
+    except _PLIST_PARSE_ERRORS as e:
+        raise Asn1Error("the cdhashes property list is unreadable (%s)" % type(e).__name__)  # never the parser's own text: it can quote the file
+    if not isinstance(plist, dict):
+        raise Asn1Error("the cdhashes property list is not a dictionary")
+    hashes = plist.get("cdhashes")
+    if not isinstance(hashes, list) or not hashes:
+        raise Asn1Error("the cdhashes property list has no non-empty `cdhashes` array")
+    out = []
+    for h in hashes:
+        if not isinstance(h, (bytes, bytearray)) or len(h) != CDHASH_LEN:
+            raise Asn1Error("a `cdhashes` element is not data of exactly %d bytes" % CDHASH_LEN)
+        out.append(bytes(h))
+    if len(set(out)) != len(out):
+        raise Asn1Error("the `cdhashes` array lists the same hash twice")
+    return out
 
 
 def cms_cdhashes(blob):
     """The cdhashes that the CMS signature of a code signature binds (Apple signed attribute
-    1.2.840.113635.100.9.1, a plist with a `cdhashes` array), as a list of bytes; None if absent.
-    This is what ties the alternate CodeDirectories to the signature: the CMS message digest only
-    covers the primary one."""
+    1.2.840.113635.100.9.1, a property list with a `cdhashes` array), as a list of bytes; None if the
+    attribute is absent. This is what ties the alternate CodeDirectories to the signature: the CMS message
+    digest only covers the primary one. Anything present but malformed raises Asn1Error (it is never read as
+    "absent" and never as an empty list)."""
     root = parse_der(blob)
     sd = root.children[1].children[0]
     sets = [p for p in sd.children if p.cls == 0 and p.tag == 17]
@@ -247,8 +302,10 @@ def cms_cdhashes(blob):
         if k.cls == 2 and k.tag == 0:  # [0] IMPLICIT signedAttrs
             for attr in k.children:
                 if oid_str(attr.children[0]) == OID_APPLE_CDHASHES:
-                    plist = plistlib.loads(octets(attr.children[1].children[0]))
-                    found.append([bytes(h) for h in plist.get("cdhashes", [])])
+                    values = attr.children[1].children
+                    if len(values) != 1 or values[0].cls != 0 or values[0].tag != 4:
+                        raise Asn1Error("the cdhashes attribute must hold exactly one OCTET STRING")
+                    found.append(parse_cdhashes_plist(octets(values[0])))
     if len(found) > 1:
         raise Asn1Error("the cdhashes attribute appears more than once")
     return found[0] if found else None
@@ -372,6 +429,7 @@ CSMAGIC_DER_ENTITLEMENTS = 0xFADE7172
 CSMAGIC_BLOBWRAPPER = 0xFADE0B01
 CS_ADHOC, CS_LINKER_SIGNED = 0x2, 0x20000
 HASH_TYPES = {1: ("sha1", 20), 2: ("sha256", 32), 3: ("sha256", 20), 4: ("sha384", 48)}
+DER_DICT_CLASS, DER_DICT_TAG = 2, 16  # the entitlements dictionary of the DER blob: [CONTEXT 16] (observed, not a SET)
 SLOT_INFO, SLOT_REQUIREMENTS, SLOT_RESOURCES, SLOT_ENTITLEMENTS, SLOT_DER_ENTITLEMENTS = 1, 2, 3, 5, 7
 SLOT_CODEDIRECTORY, SLOT_CMS = 0, 0x10000
 SLOT_ALT_CODEDIRECTORIES = tuple(range(0x1000, 0x1005))
@@ -445,6 +503,48 @@ def parse_macho_slice(data, off, size):
         pos += csize
     return {"cpu": cpu, "filetype": filetype, "ncmds": ncmds, "sizeofcmds": sizeofcmds, "cmds": cmds,
             "codesig": codesig, "linkedit": linkedit, "cmds_end": 32 + sizeofcmds, "size": len(sl)}
+
+
+_ZEROFILL_SECTION_TYPES = (0x01, 0x0C, 0x12)  # S_ZEROFILL, S_GB_ZEROFILL, S_THREAD_LOCAL_ZEROFILL
+
+
+def embedded_info_plist(sl, m):
+    """The contents of the `__TEXT,__info_plist` section of a 64-bit slice, or None when it has none.
+
+    A Mach-O that is not the executable of a bundle can carry its Info.plist inside itself (the section is
+    linked in with `-sectcreate __TEXT __info_plist`); Apple's codesign then seals THESE bytes in special slot 1,
+    where a bundle seals its Info.plist file. Observed on real data: the Apple-signed Swift runtime library
+    `libswift_Concurrency.dylib` of the 1.0.4 archive has the section (591 bytes) and both of its CodeDirectories
+    (SHA-1 and SHA-256) seal exactly its hash. No file name is consulted: any slice is read the same way.
+    Anything that would make the section ambiguous or unreadable raises MachOError: more than one such section,
+    a zero-fill section, or content outside the slice."""
+    found = []
+    for cmd, pos, csize in m["cmds"]:
+        if cmd != LC_SEGMENT_64:
+            continue
+        if csize < 72:
+            raise MachOError("segment command too small")
+        nsects = struct.unpack("<I", sl[pos + 64:pos + 68])[0]
+        if 72 + 80 * nsects > csize:
+            raise MachOError("segment command smaller than its sections")
+        for i in range(nsects):
+            base = pos + 72 + 80 * i
+            sectname = sl[base:base + 16].split(b"\0")[0]
+            segname = sl[base + 16:base + 32].split(b"\0")[0]
+            if sectname == b"__info_plist" and segname == b"__TEXT":
+                size, off = struct.unpack("<QI", sl[base + 40:base + 52])
+                flags = struct.unpack("<I", sl[base + 64:base + 68])[0]
+                found.append((size, off, flags))
+    if not found:
+        return None
+    if len(found) > 1:
+        raise MachOError("more than one __TEXT,__info_plist section")
+    size, off, flags = found[0]
+    if (flags & 0xFF) in _ZEROFILL_SECTION_TYPES or (off == 0 and size != 0):
+        raise MachOError("the __TEXT,__info_plist section has no file content")
+    if off + size > len(sl):
+        raise MachOError("the __TEXT,__info_plist section lies outside the slice")
+    return bytes(sl[off:off + size])
 
 
 def parse_superblob(blob):
@@ -547,27 +647,144 @@ def code_slot_problems(cd, slice_data, signature_offset=None):
     return out
 
 
+# ---- the DER entitlements reader (a STRICT DER reader of its own; parse_node above stays the lenient BER reader that CMS needs) ----
+# Phase 6C-B (Issue #71). DER has exactly ONE encoding for every value. Refusing what the DER rules forbid (an indefinite or padded length,
+# a BOOLEAN other than 00/ff, a padded INTEGER, a high-tag form that has a short one) removes those specific encoding ambiguities, and so
+# reduces the risk that this reader and a different reader of the same blob (the kernel's) take it to say different things. It does NOT
+# establish that the two are equivalent: Apple's kernel reader has not been examined, and what it accepts or refuses beyond DER is unknown.
+# Two rules here are NOT ASN.1 DER requirements but limits of THIS application: the root holds exactly two elements (the layout Apple's
+# output shows: version, dictionary) and nesting stops at MAX_DER_ENTITLEMENTS_DEPTH. Every refusal carries the rule and a byte offset.
+# Apple's own blobs (7 distinct ones, Authorization D1) satisfy all of it. NOT part of this reader, and deliberately left for later: key
+# order, empty or NUL keys, non-ASCII keys, Unicode normalisation, and limits on the size of a value or on the number of entries.
+MAX_DER_ENTITLEMENTS_DEPTH = 32
+# What it is: the deepest element's nesting level, the root [APPLICATION 16] being level 0 (a dictionary adds 2 levels per nesting: the
+# dictionary and its entry; an array adds 1). Apple's deepest observed blob has 7 (the `dicts` vector), the real app's has 3. 32 allows
+# about 14 nested dictionaries, far beyond any entitlement, and bounds the reader's recursion: at most about 3 Python frames per level
+# on any CPython (about 100 in all, a tenth of the default limit); measured on 3.14, a blob at the limit needs 34 frames above its
+# caller. The reader therefore cannot exhaust the interpreter's stack on its own, whatever the blob.
+MAX_DER_TAG_BYTES = 4  # bytes of a high-tag-number identifier that are read at all (no tag this reader accepts is anywhere near 31)
+
+
+class _DerNode(object):
+    """One element of the strict reader: `start` and `end` are offsets in the whole blob. Like the BER reader's Node, the children of a
+    constructed element are read (strictly) the first time they are asked for, so an element the layout does not allow is refused for
+    what it is before anything inside it is looked at."""
+    __slots__ = ("data", "cls", "tag", "constructed", "value", "start", "vstart", "end", "depth", "_kids")
+
+    def __init__(self, data, cls, tag, constructed, start, vstart, end, depth):
+        self.data, self.cls, self.tag, self.constructed = data, cls, tag, constructed
+        self.start, self.vstart, self.end, self.depth, self._kids = start, vstart, end, depth, None
+        self.value = data[vstart:end]
+
+    @property
+    def children(self):
+        if self._kids is None:
+            kids, cur = [], self.vstart
+            while self.constructed and cur < self.end:
+                child = _der_strict_node(self.data, cur, self.end, self.depth + 1)
+                kids.append(child)
+                cur = child.end
+            self._kids = kids
+        return self._kids
+
+
+def _der_strict_node(data, off, limit, depth):
+    """Read the header of the DER element at `off` in `data[off:limit]`, with every DER rule that concerns a header. Raises Asn1Error,
+    naming the rule and the offset."""
+    def bad(why, at=off):
+        raise Asn1Error("DER entitlements are not canonical DER at byte %d: %s" % (at, why))
+    if depth > MAX_DER_ENTITLEMENTS_DEPTH:
+        bad("nested deeper than %d levels" % MAX_DER_ENTITLEMENTS_DEPTH)
+    if off + 2 > limit:
+        bad("truncated element")
+    first = data[off]
+    cls, constructed, tag = first >> 6, bool(first & 0x20), first & 0x1F
+    pos = off + 1
+    if tag == 0x1F:  # high-tag-number form: only canonical for a tag number of 31 or more, and then without leading zeros
+        tag, nbytes = 0, 0
+        while True:
+            if pos >= limit or nbytes >= MAX_DER_TAG_BYTES:
+                bad("unreadable or overlong tag number")
+            b = data[pos]
+            if nbytes == 0 and b == 0x80:
+                bad("tag number with a leading zero")
+            pos += 1
+            nbytes += 1
+            tag = (tag << 7) | (b & 0x7F)
+            if not b & 0x80:
+                break
+        if tag < 31:
+            bad("tag number %d in the high-tag-number form (it must use the single-octet form)" % tag)
+    if pos >= limit:
+        bad("truncated length")
+    lb = data[pos]
+    pos += 1
+    if lb == 0x80:
+        bad("indefinite length (DER allows only definite lengths)")
+    if lb & 0x80:
+        n = lb & 0x7F
+        if n > 4 or pos + n > limit:
+            bad("unreadable or oversized length")
+        if data[pos] == 0:
+            bad("length with a leading zero octet")
+        length = int.from_bytes(data[pos:pos + n], "big")
+        pos += n
+        if length < 0x80:
+            bad("length %d in the long form (it must use the short form)" % length)
+    else:
+        length = lb
+    if pos + length > limit:
+        bad("element runs past its container")
+    return _DerNode(data, cls, tag, constructed, off, pos, pos + length, depth)
+
+
+def _der_is(node, cls, tag, constructed):
+    """True if the element has exactly this class, tag number and form (constructed or primitive)."""
+    return node.cls == cls and node.tag == tag and node.constructed == constructed
+
+
+def _der_boolean(node):
+    # DER: exactly one content octet, 00 for FALSE and ff for TRUE. (BER reads any non-zero octet as TRUE, so one reader taking 01 for
+    # FALSE and another taking it for TRUE would disagree: neither is accepted.)
+    if node.value not in (b"\x00", b"\xff"):
+        raise Asn1Error("DER entitlements are not canonical DER at byte %d: BOOLEAN is not exactly 00 or ff" % node.start)
+    return node.value == b"\xff"
+
+
+def _der_integer(node):
+    # DER: at least one content octet, in the shortest two's-complement form (no 00 before a byte below 80, no ff before a byte of 80 or more).
+    v = node.value
+    if not v:
+        raise Asn1Error("DER entitlements are not canonical DER at byte %d: INTEGER without content" % node.start)
+    if len(v) > 1 and ((v[0] == 0x00 and v[1] < 0x80) or (v[0] == 0xFF and v[1] >= 0x80)):
+        raise Asn1Error("DER entitlements are not canonical DER at byte %d: INTEGER is not in its shortest form" % node.start)
+    return int.from_bytes(v, "big", signed=True)
+
+
 def _der_entitlement_value(node):
-    if node.cls != 0:
-        raise Asn1Error("unexpected tag class in DER entitlements")
-    if node.tag == 1:
-        return node.value == b"\xff"
-    if node.tag == 2:
-        return int.from_bytes(node.value, "big", signed=True)
-    if node.tag == 12:
+    # Class AND form are checked for every kind of value: a BOOLEAN, INTEGER or UTF8String is a primitive element, an array
+    # (SEQUENCE) and a dictionary ([CONTEXT 16]) are constructed. A dictionary is NOT a SET and a SET is NOT a value.
+    if _der_is(node, 0, 1, False):
+        return _der_boolean(node)
+    if _der_is(node, 0, 2, False):
+        return _der_integer(node)
+    if _der_is(node, 0, 12, False):
         return node.value.decode("utf-8")
-    if node.tag == 16:
+    if _der_is(node, 0, 16, True):
         return [_der_entitlement_value(c) for c in node.children]
-    if node.tag == 17:
+    if _der_is(node, DER_DICT_CLASS, DER_DICT_TAG, True):
         return _der_entitlement_dict(node)
-    raise Asn1Error("unsupported value type %d in DER entitlements" % node.tag)
+    raise Asn1Error("unsupported value (class %d, tag %d, %s) in DER entitlements"
+                    % (node.cls, node.tag, "constructed" if node.constructed else "primitive"))
 
 
 def _der_entitlement_dict(node):
     out = {}
     for pair in node.children:
+        if not _der_is(pair, 0, 16, True):
+            raise Asn1Error("malformed entry in DER entitlements")
         kv = pair.children
-        if pair.tag != 16 or len(kv) != 2 or kv[0].tag != 12:
+        if len(kv) != 2 or not _der_is(kv[0], 0, 12, False):
             raise Asn1Error("malformed entry in DER entitlements")
         key = kv[0].value.decode("utf-8")
         if key in out:
@@ -577,20 +794,628 @@ def _der_entitlement_dict(node):
 
 
 def parse_der_entitlements(blob):
-    """Decode the DER entitlements blob (magic 0xfade7172): [APPLICATION 16] { INTEGER 1, SET OF
-    SEQUENCE { UTF8String key, value } }. The kernel enforces THESE where present, so they must be
-    reconciled with the XML entitlements. The layout is from public descriptions and has not been
-    checked against a real Apple-signed app (docs/IOS_SIGNING.md); anything else is an error."""
+    """Decode the DER entitlements blob (magic 0xfade7172), in the layout Apple's own `codesign
+    --generate-entitlement-der` writes. OBSERVED on genuine Apple output (Issue #71, Authorization D1, 14 signings by
+    Xcode 26.3's codesign, 7 distinct blobs; tool/test_verify_ipa.sh decodes all of them):
+
+        blob  = magic 0xfade7172 | length (4 bytes, big endian, of the whole blob) | DER
+        DER   = [APPLICATION 16] constructed { INTEGER 1, dictionary }          (exactly these two elements)
+        dict  = [CONTEXT 16] constructed { entry ... }            (NOT a SET; Apple orders the entries by key)
+        entry = SEQUENCE { UTF8String key, value }
+        value = BOOLEAN | INTEGER | UTF8String | SEQUENCE { value ... } (array) | dict (nested, the same [CONTEXT 16])
+
+    The kernel enforces THESE where present, so they must be reconciled with the XML entitlements. The obsolete SET layout
+    (the one this parser assumed from public descriptions before genuine evidence existed) is refused, and so is every other
+    class, tag or form.
+
+    It is a STRICT DER reader (Phase 6C-B; `_der_strict_node`, which is NOT the lenient BER reader parse_node that CMS needs). It
+    refuses what ASN.1 DER forbids: an indefinite or non-minimal length, a tag number in a non-canonical high-tag form, a BOOLEAN that
+    is not exactly 00 or ff, and an INTEGER that is empty or not in its shortest two's-complement form. That removes those encoding
+    ambiguities and reduces the risk of a parser differential with the kernel's reader; it does not prove the two equivalent. It also
+    applies two limits that are specific to this application and are NOT DER requirements: the root must hold exactly two elements,
+    and nesting deeper than MAX_DER_ENTITLEMENTS_DEPTH is refused. Every failure is an Asn1Error naming the rule and the byte offset.
+    What is deliberately NOT checked here (still deferred): key order, empty or NUL keys, non-ASCII keys, Unicode normalisation,
+    and limits on the size of a value or the number of entries."""
     magic, length = struct.unpack(">II", blob[:8])
     if magic != CSMAGIC_DER_ENTITLEMENTS or length != len(blob):
         raise Asn1Error("DER entitlements blob header is wrong")
-    root = parse_der(blob[8:])
-    if root.end != len(blob) - 8 or root.cls != 1 or root.tag != 16:
+    root = _der_strict_node(blob, 8, len(blob), 0)
+    if root.end != len(blob) or not _der_is(root, 1, 16, True):
         raise Asn1Error("DER entitlements are not a single [APPLICATION 16] element")
-    ver, body = root.children[0], root.children[1]
-    if ver.tag != 2 or ver.value != b"\x01" or body.tag != 17:
+    if len(root.children) != 2:
+        # an application rule, not a DER one; the offset is where the surplus starts, or where the root's content ends if it is short
+        at = root.children[2].start if len(root.children) > 2 else root.end
+        raise Asn1Error("DER entitlements root holds %d element(s), exactly 2 are required (version, dictionary); %s byte %d"
+                        % (len(root.children), "the first surplus element starts at" if len(root.children) > 2 else "its content ends at", at))
+    ver, body = root.children
+    if not _der_is(ver, 0, 2, False) or ver.value != b"\x01" or not _der_is(body, DER_DICT_CLASS, DER_DICT_TAG, True):
         raise Asn1Error("unsupported DER entitlements version or layout")
     return _der_entitlement_dict(body)
+
+
+# ---- output sanitization (Phase 2 hardening) ---------------------------------------------------------------------
+# Everything that reaches a log or an evidence file may come from an IPA that someone else built: member names, property
+# list keys and values, entitlement strings, certificate fields. These functions are applied ONLY at the point of output.
+# The values that are hashed, compared or verified are never replaced by their escaped form.
+
+_ESCAPE_CATEGORIES = frozenset(("Cc", "Cf", "Cs", "Zl", "Zp"))  # controls, format (bidi, zero width), surrogates, line/paragraph separators
+MAX_LINE_CHARS = 4000
+
+
+def escape_text(text, backslash=False, limit=None):
+    """`text` made safe for ONE line of a log or evidence file.
+
+    Every control character (newline, carriage return, ESC and the C1 range that terminals read as escape sequences,
+    DEL), every format character (bidirectional overrides, zero-width characters, the byte order mark), every surrogate and
+    the Unicode line and paragraph separators is written as a backslash escape (x, u or U followed by hex digits). A line
+    therefore never ends early, never starts
+    with `::` (a GitHub workflow command is only read at the start of a line) and never carries a terminal escape sequence.
+    With backslash=True a backslash is written as two, which makes the encoding reversible: two different texts never give
+    the same result (used for evidence). `limit` cuts the result and says how much was cut."""
+    if isinstance(text, (bytes, bytearray)):
+        text = bytes(text).decode("utf-8", "backslashreplace")
+    elif not isinstance(text, str):
+        text = str(text)
+    out = []
+    for ch in text:
+        cp = ord(ch)
+        if ch == "\\" and backslash:
+            out.append("\\\\")
+        elif cp < 0x20 or cp == 0x7F or (cp > 0x7E and unicodedata.category(ch) in _ESCAPE_CATEGORIES):
+            out.append("\\x%02x" % cp if cp <= 0xFF else "\\u%04x" % cp if cp <= 0xFFFF else "\\U%08x" % cp)
+        else:
+            out.append(ch)
+    res = "".join(out)
+    if limit is not None and len(res) > limit:
+        res = res[:limit] + "...[%d more character(s)]" % (len(res) - limit)
+    return res
+
+
+_EVIDENCE_KEY_OK = frozenset("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789._-")
+
+
+def evidence_key(key):
+    """An evidence key that can never contain `=`, a space, a line break or anything else a reader could mistake for structure.
+    Letters, digits, `.`, `_` and `-` stay as they are; every other character becomes %XX per UTF-8 byte (and so does `%`).
+    The encoding is reversible, so two different identifiers never share a key (replacing `/` by `_` would). An empty key is `%`."""
+    key = key if isinstance(key, str) else str(key)
+    out = []
+    for ch in key:
+        out.append(ch if ch in _EVIDENCE_KEY_OK else "".join("%%%02X" % b for b in ch.encode("utf-8", "surrogatepass")))
+    return "".join(out) or "%"
+
+
+def read_capped(path, cap):
+    """The bytes of a file, or None when it is larger than `cap`. At most cap + 1 bytes are ever read into memory."""
+    with open(path, "rb") as f:
+        data = f.read(cap + 1)
+    return None if len(data) > cap else data
+
+
+# ---- diagnostics (Phase 2 of the verifier repair): what a blob or a property list actually contains ------------
+# Nothing below decides anything. These functions only DESCRIBE data that a check has already judged, in bounded,
+# credential-free text, so that a failure leaves the evidence needed to understand it. No acceptance rule uses them.
+
+_ASN1_CLASSES = ("UNIVERSAL", "APPLICATION", "CONTEXT", "PRIVATE")
+_ASN1_UNIVERSAL = {1: "BOOLEAN", 2: "INTEGER", 4: "OCTET STRING", 5: "NULL", 6: "OID", 12: "UTF8String", 16: "SEQUENCE",
+                   17: "SET", 19: "PrintableString", 22: "IA5String", 23: "UTCTime", 24: "GeneralizedTime"}
+DER_DIAG_MAX_BYTES = 4096  # the entitlements of a real app are a few hundred bytes; never print more than this
+
+
+def _asn1_label(node):
+    if node.cls == 0:
+        name = _ASN1_UNIVERSAL.get(node.tag, "tag %d" % node.tag)
+    else:
+        name = "%s %d" % (_ASN1_CLASSES[node.cls], node.tag)
+    return name + (" constructed" if node.constructed else "")
+
+
+def describe_asn1(data, max_depth=6, max_nodes=80, show_text=False):
+    """An outline of an ASN.1 element that assumes NO layout: class, tag, form and length, and the content of small
+    BOOLEAN and INTEGER values (their encoding is part of the structure). The content of strings and of every other
+    primitive element is NOT shown, unless show_text is true, which only the probe for DISPOSABLE SYNTHETIC input
+    uses. -> list of text lines; never raises."""
+    lines, budget = [], [max_nodes]
+
+    def show(node, depth):
+        if budget[0] <= 0:
+            return
+        budget[0] -= 1
+        text = "%s%s, %d byte(s)" % ("  " * depth, _asn1_label(node), len(node.value))
+        if not node.constructed:
+            v = node.value
+            if node.cls == 0 and node.tag in (1, 2) and len(v) <= 8:
+                text += ": 0x" + v.hex()
+            elif show_text:
+                if node.cls == 0 and node.tag == 12 and len(v) <= 60 and all(32 <= b < 127 for b in v):
+                    text += ": %r" % v.decode("ascii")
+                elif len(v) <= 16:
+                    text += ": 0x" + v.hex()
+        lines.append(text)
+        if node.constructed:
+            if depth >= max_depth:
+                lines.append("%s..." % ("  " * (depth + 1)))
+                return
+            for child in node.children:
+                show(child, depth + 1)
+
+    try:
+        pos = 0
+        while pos < len(data) and budget[0] > 0:
+            node = parse_node(data, pos, len(data))
+            show(node, 0)
+            pos = node.end
+        if pos < len(data) and budget[0] > 0:
+            lines.append("(%d trailing byte(s))" % (len(data) - pos))
+        if budget[0] <= 0:
+            lines.append("... (outline truncated)")
+    except (Asn1Error, IndexError, ValueError, RecursionError) as e:
+        lines.append("(not readable as ASN.1 from here: %s)" % e)
+    return lines
+
+
+def der_blob_diagnostic(blob, raw=False):
+    """What a DER entitlements blob (magic 0xfade7172) looks like, with no layout assumed.
+
+    STRUCTURE (always): its size and SHA-256, the header and an ASN.1 outline (classes, tags, lengths, the small
+    BOOLEAN and INTEGER values; no string content). That is enough to see the layout.
+    RAW (only with raw=True, which the probe passes for DISPOSABLE SYNTHETIC input and nothing else does): the string
+    content in the outline and the bytes in hex, at most DER_DIAG_MAX_BYTES of them. A real IPA's blob is never printed
+    raw by the verifier."""
+    out = {"length": len(blob), "sha256": hashlib.sha256(blob).hexdigest(), "header": None, "outline": [], "hex": None,
+           "hex_truncated": False, "raw": bool(raw)}
+    if len(blob) >= 8:
+        magic, length = struct.unpack(">II", blob[:8])
+        out["header"] = "magic 0x%08x, declared length %d, actual length %d" % (magic, length, len(blob))
+        out["outline"] = describe_asn1(blob[8:], show_text=raw)
+    else:
+        out["header"] = "shorter than the 8-byte blob header"
+    if raw:
+        out["hex"] = blob[:DER_DIAG_MAX_BYTES].hex()
+        out["hex_truncated"] = len(blob) > DER_DIAG_MAX_BYTES
+    return out
+
+
+# What a property-list parser can raise on a malformed file (plistlib raises AttributeError for a date that is not a date). Every one is a refusal, never a crash.
+_PLIST_PARSE_ERRORS = (ValueError, xml.parsers.expat.ExpatError, struct.error, OverflowError, RecursionError, AttributeError, TypeError, IndexError, KeyError)
+
+
+def plist_failure_text(exc):
+    """A FIXED explanation for a failure to read a property list, for use in a message. The text of the exception itself is NEVER used: a
+    parser's message can quote the file (the name of a repeated key, the name of an unexpected element, a value that is not a number), and a
+    diagnostic must not carry input-derived content. What is kept is the CLASS of the failure, which is code-defined and useful."""
+    if isinstance(exc, KeyError):
+        return "a required key is missing"
+    return "it cannot be parsed as a property list (%s)" % type(exc).__name__
+
+
+class _UniqueKeyDict(dict):
+    def __setitem__(self, key, value):
+        if key in self:
+            raise ValueError("a repeated key")  # the key's name is never quoted
+        dict.__setitem__(self, key, value)
+
+
+MAX_PLIST_DIFF_BYTES = 4 * 1024 * 1024
+
+
+def read_plist_exact(data):
+    """A property list read with an EXPLICIT format (binary or XML; never automatic detection), refusing repeated
+    keys, entity declarations and oversized input. -> (object, "binary"|"xml"). Raises ValueError."""
+    if len(data) > MAX_PLIST_DIFF_BYTES:
+        raise ValueError("larger than %d bytes" % MAX_PLIST_DIFF_BYTES)
+    head = data.lstrip(b" \t\r\n")
+    if head.startswith(b"bplist00"):
+        fmt, name = plistlib.FMT_BINARY, "binary"
+    elif head.startswith((b"<?xml", b"<!DOCTYPE plist", b"<plist")):
+        fmt, name = plistlib.FMT_XML, "xml"
+        if b"<!ENTITY" in data:
+            raise ValueError("declares entities")
+    else:
+        raise ValueError("neither a binary nor an XML property list")
+    try:
+        return plistlib.loads(data, fmt=fmt, dict_type=_UniqueKeyDict), name
+    except _PLIST_PARSE_ERRORS as e:
+        raise ValueError("the parser refused it (%s)" % type(e).__name__)  # never the parser's own text: it can quote the file
+
+
+def plist_type_name(v):
+    if isinstance(v, bool):
+        return "bool"
+    for t, n in ((int, "integer"), (float, "real"), (str, "string"), (bytes, "data"), (bytearray, "data"),
+                 (list, "array"), (dict, "dict"), (plistlib.UID, "uid")):
+        if isinstance(v, t):
+            return n
+    import datetime
+    if isinstance(v, datetime.datetime):
+        return "date"
+    return type(v).__name__
+
+
+def plist_equal_strict(a, b):
+    """Equal in value AND in type, all the way down. Python's own == is not enough for a security comparison:
+    True == 1 and 1 == 1.0. Dictionaries are equal without regard to key order (a property list dictionary has
+    none); arrays are equal only in the same order."""
+    if plist_type_name(a) != plist_type_name(b):
+        return False
+    if isinstance(a, dict):
+        return a.keys() == b.keys() and all(plist_equal_strict(a[k], b[k]) for k in a)
+    if isinstance(a, list):
+        return len(a) == len(b) and all(plist_equal_strict(x, y) for x, y in zip(a, b))
+    if isinstance(a, float):
+        return struct.pack(">d", a) == struct.pack(">d", b)
+    if isinstance(a, plistlib.UID):
+        return a.data == b.data
+    return a == b
+
+
+# ---- the ONE accepted re-serialisation: the app's top-level Info.plist (Issue #71, Phase 9) --------------------------------------
+# Evidence (run 45148346007, Authorization D): Xcode's export rewrote the app's top-level Info.plist as a binary property list with
+# the SAME 40 keys, the SAME values and types, but another key order. V8 compares every file byte for byte, so it refused the app. The
+# comparison below is the narrow exception for exactly that case, and nothing else. It REPORTS (True or False and a reason); the caller
+# (verify_ipa.same_code_check) decides what to do with the answer, and only ever asks it about the top-level Info.plist.
+#
+# What this check can and cannot settle. It settles SEMANTIC equality: the two files have the same CONTENT as Python reads it (the same keys, the
+# same values, the same value types - True is not 1, 1 is not 1.0 - and the same array order; dictionary key order and the object layout of the
+# binary file do not matter). It does NOT settle BYTEWISE immutability: two files this function accepts are different byte strings (that is the
+# point), and bytes that the content does not reach are not compared at all. Nor does it authenticate anything: that the signed bytes are the bytes
+# Apple's signature seals is checked, independently, by `verify` (the CodeDirectory's slot-1 seal of this very file, and the CMS signature over the
+# CodeDirectory), never here. RESIDUAL RISKS, accepted and documented (docs/IOS_SIGNING.md section 3.1e):
+#   1. Unreferenced objects. A binary property list may hold objects that no dictionary or array refers to. They are not part of the content, so
+#      two files that differ only in such objects are "equal" here (the real files carry two unreferenced `true` objects each). No reader of the
+#      content reaches them, but they ARE bytes of the signed app. The equal-length condition is a coarse extra bound and NOT a guarantee: it refuses
+#      padding or an added or dropped object that changes the length, and it does not exclude unreferenced bytes replaced in place, or one object
+#      added while another of the same size is dropped. After signing, the slot-1 seal covers every byte of the file; before signing, nothing here
+#      compares those bytes with the archive's.
+#   2. The content is read with Python's plistlib; the app is read by Apple's CoreFoundation. A construct the two read differently could make
+#      equal-looking files differ for the app. The limits below (binary only, no repeated key, no date, UID, data or real, bounded size, depth and
+#      node count, string keys, 64-bit integers) keep the accepted language to what the real file uses; they do not prove that the readers agree.
+INFO_PLIST_RESERIALIZE_MAX_BYTES = 64 * 1024
+INFO_PLIST_RESERIALIZE_MAX_DEPTH = 16
+INFO_PLIST_RESERIALIZE_MAX_NODES = 5000
+_INFO_PLIST_TYPES = frozenset(("bool", "integer", "string", "array", "dict"))
+
+
+def _info_plist_walk(root):
+    """None when `root` stays inside the accepted language, otherwise a short reason. ITERATIVE (no recursion, so no RecursionError), and
+    every value visited counts, so a structure that shares sub-objects, or refers to itself, ends at the depth or the node limit."""
+    stack, nodes = [(root, 1)], 0
+    while stack:
+        v, depth = stack.pop()
+        nodes += 1
+        if nodes > INFO_PLIST_RESERIALIZE_MAX_NODES:
+            return "more than %d values" % INFO_PLIST_RESERIALIZE_MAX_NODES
+        if depth > INFO_PLIST_RESERIALIZE_MAX_DEPTH:
+            return "nested deeper than %d levels" % INFO_PLIST_RESERIALIZE_MAX_DEPTH
+        t = plist_type_name(v)
+        if t not in _INFO_PLIST_TYPES:
+            return "a value of type %s (only bool, integer, string, array and dict are accepted)" % t
+        if t == "integer" and not (-(1 << 63) <= v < (1 << 63)):
+            return "an integer outside 64 bits"
+        if t == "dict":
+            for k, x in v.items():
+                if not isinstance(k, str):
+                    return "a dictionary key that is not a string"
+                stack.append((x, depth + 1))
+        elif t == "array":
+            stack.extend((x, depth + 1) for x in v)
+    return None
+
+
+def info_plist_reserialized_only(old, new):
+    """(True, "") when `new` is a binary re-serialisation of `old` with identical content AND types; otherwise (False, why).
+    `why` names the rule and never quotes the files. Both must be binary property lists (`bplist00`, no leading bytes) of at most
+    INFO_PLIST_RESERIALIZE_MAX_BYTES, read with read_plist_exact (explicit format, a repeated key refused), with a dictionary as the root,
+    inside the accepted language (_info_plist_walk), equal under plist_equal_strict, and of EQUAL LENGTH (a coarse extra bound: a length change from
+    padding or an added or dropped object is refused; a same-length difference in bytes the content does not reach is NOT excluded). This is SEMANTIC equality, not
+    bytewise equality. Fails closed: every error, a RecursionError and a MemoryError included, is a refusal. A refusal reason is a FIXED text: it never
+    includes the text of an exception, because that text can quote the file."""
+    for what, data in (("the unsigned", old), ("the signed", new)):
+        if len(data) > INFO_PLIST_RESERIALIZE_MAX_BYTES:
+            return False, "%s file is larger than %d bytes" % (what, INFO_PLIST_RESERIALIZE_MAX_BYTES)
+        if not data.startswith(b"bplist00"):
+            return False, "%s file is not a binary property list" % what
+    try:
+        a, fa = read_plist_exact(old)
+        b, fb = read_plist_exact(new)
+        if fa != "binary" or fb != "binary":
+            return False, "a file is not read as a binary property list"
+        if not isinstance(a, dict) or not isinstance(b, dict):
+            return False, "the root of a file is not a dictionary"
+        for what, root in (("the unsigned", a), ("the signed", b)):
+            why = _info_plist_walk(root)
+            if why:
+                return False, "%s file has %s" % (what, why)
+        if not plist_equal_strict(a, b):
+            return False, "the content differs (a key, a value, a value type or an array order)"
+    except ValueError:  # the reader's message can quote the file (a repeated key's name, for one), so it is never used
+        return False, "a file is not readable as a property list"
+    except (RecursionError, MemoryError, OverflowError):
+        return False, "a file is too deeply nested or too large to compare"
+    if len(old) != len(new):
+        return False, "the content is equal but the length differs (%d and %d bytes)" % (len(old), len(new))
+    return True, ""
+
+
+# Keys that carry the identity, version, platform or privileges of an app. A change to one of them is LABELLED in the
+# diagnostics; it is not treated differently otherwise (any difference is a failure of the comparison).
+PLIST_SENSITIVE_KEYS = frozenset((
+    "CFBundleIdentifier", "CFBundleExecutable", "CFBundlePackageType", "CFBundleShortVersionString", "CFBundleVersion",
+    "CFBundleDisplayName", "CFBundleName", "DTPlatformName", "DTSDKName", "MinimumOSVersion", "CFBundleSupportedPlatforms",
+    "UIRequiredDeviceCapabilities", "UIDeviceFamily", "UIBackgroundModes", "BGTaskSchedulerPermittedIdentifiers",
+    "NSAppTransportSecurity", "CFBundleURLTypes", "LSApplicationQueriesSchemes", "ITSAppUsesNonExemptEncryption"))
+PLIST_SENSITIVE_PREFIXES = ("NS", "UI", "LS", "BG", "ITS")
+
+# DISPLAY allowlist. Only these top-level keys may show a value, and only in a restricted form; for every other key the
+# diagnostics give the path, the kind of change, the value type and a size, and NEVER the content. A key name that does
+# not look like a credential proves nothing about its value, so there is no deny-list: what is not approved is not shown.
+# (Display only. No acceptance rule reads this list.)
+PLIST_DISPLAY_KEYS = frozenset((
+    "BuildMachineOSBuild", "CFBundleDevelopmentRegion", "CFBundleExecutable", "CFBundleIdentifier",
+    "CFBundleInfoDictionaryVersion", "CFBundlePackageType", "CFBundleShortVersionString", "CFBundleSignature",
+    "CFBundleVersion", "DTAppStoreToolsBuild", "DTCompiler", "DTPlatformBuild", "DTPlatformName", "DTPlatformVersion",
+    "DTSDKBuild", "DTSDKName", "DTXcode", "DTXcodeBuild", "ITSAppUsesNonExemptEncryption", "LSRequiresIPhoneOS",
+    "MinimumOSVersion"))
+PLIST_DISPLAY_ARRAY_KEYS = frozenset(("CFBundleSupportedPlatforms", "UIBackgroundModes", "UIDeviceFamily", "UIRequiredDeviceCapabilities"))
+_DISPLAY_STRING = re.compile(r"[A-Za-z0-9._+ -]{0,64}")
+_ARRAY_ELEMENT = re.compile(r"([A-Za-z0-9]+)\[[0-9]{1,4}\]")
+PLIST_PATH_LIMIT = 120
+
+
+def plist_sensitive(path):
+    top = path.split(".")[0].split("[")[0]
+    return top in PLIST_SENSITIVE_KEYS or top.startswith(PLIST_SENSITIVE_PREFIXES)
+
+
+def plist_displayable(path, v):
+    """May the VALUE at this path be shown? Only an approved top-level key (or an element of an approved array key), and
+    only a boolean, an integer, a real number or a short string of letters, digits and `. _ + -` and space."""
+    m = _ARRAY_ELEMENT.fullmatch(path)
+    approved = path in PLIST_DISPLAY_KEYS or (m is not None and m.group(1) in PLIST_DISPLAY_ARRAY_KEYS)
+    if not approved:
+        return False
+    t = plist_type_name(v)
+    if t == "string":
+        return _DISPLAY_STRING.fullmatch(v) is not None
+    return t in ("bool", "integer", "real") and len(repr(v)) <= 24
+
+
+def plist_show(path, v):
+    """One line about a value: the value itself only where plist_displayable allows it; otherwise its type and size
+    ("value not shown"). Never an arbitrary string, a digest or a prefix of the content."""
+    if plist_displayable(path, v):
+        return repr(v)
+    t = plist_type_name(v)
+    if t == "string":
+        return "<string, %d character(s), %d byte(s) in UTF-8; value not shown>" % (len(v), len(v.encode("utf-8", "surrogatepass")))
+    if t == "data":
+        return "<data, %d byte(s); value not shown>" % len(v)
+    if t == "array":
+        return "<array of %d; elements not shown>" % len(v)
+    if t == "dict":
+        return "<dict of %d key(s); content not shown>" % len(v)
+    return "<%s; value not shown>" % t
+
+
+def plist_difference(old_bytes, new_bytes, max_items=60):
+    """How two property list files differ. Reports only; it accepts nothing.
+
+    -> {"identical_bytes", "old_format", "new_format", "readable", "error", "semantic" ("identical" | "different" |
+    None), "serialization_only" (the bytes differ but the content is equal in value AND type), "counts" (the EXACT number
+    of added, removed and changed entries found), "added", "removed", "changed" (lists of (path, type text, old value
+    text, new value text), each holding at most max_items entries), "truncated" (True when any list is shorter than its
+    count)}
+
+    Every difference is COUNTED, so the totals are exact; only the first max_items of each kind are kept and rendered.
+    Counting costs time proportional to the input, which the caller bounds before it reads the file (MAX_PLIST_DIFF_BYTES)."""
+    res = {"identical_bytes": old_bytes == new_bytes, "old_format": None, "new_format": None, "readable": False,
+           "error": None, "semantic": None, "serialization_only": False,
+           "counts": {"added": 0, "removed": 0, "changed": 0}, "added": [], "removed": [], "changed": [],
+           "truncated": False}
+    try:
+        old, res["old_format"] = read_plist_exact(old_bytes)
+        new, res["new_format"] = read_plist_exact(new_bytes)
+    except ValueError as e:
+        res["error"] = str(e)
+        return res
+    res["readable"] = True
+    counts = {"added": 0, "removed": 0, "changed": 0}
+    kept = {"added": [], "removed": [], "changed": []}
+
+    def note(kind, path, what, old_text, new_text):
+        counts[kind] += 1
+        if len(kept[kind]) < max_items:  # the bound applies to every kind, in every container
+            kept[kind].append((path, what, old_text, new_text))
+
+    def walk(path, a, b):
+        if plist_type_name(a) != plist_type_name(b):
+            note("changed", path, "%s -> %s" % (plist_type_name(a), plist_type_name(b)),
+                 plist_show(path, a) if len(kept["changed"]) < max_items else None,
+                 plist_show(path, b) if len(kept["changed"]) < max_items else None)
+        elif isinstance(a, dict):
+            for k in sorted(set(a) | set(b), key=str):
+                p = "%s.%s" % (path, k) if path else str(k)
+                if k not in b:
+                    note("removed", p, plist_type_name(a[k]), plist_show(p, a[k]) if len(kept["removed"]) < max_items else None, None)
+                elif k not in a:
+                    note("added", p, plist_type_name(b[k]), None, plist_show(p, b[k]) if len(kept["added"]) < max_items else None)
+                else:
+                    walk(p, a[k], b[k])
+        elif isinstance(a, list):
+            if len(a) != len(b):
+                note("changed", path, "array of %d -> array of %d" % (len(a), len(b)),
+                     plist_show(path, a) if len(kept["changed"]) < max_items else None,
+                     plist_show(path, b) if len(kept["changed"]) < max_items else None)
+            else:
+                for i, (x, y) in enumerate(zip(a, b)):
+                    walk("%s[%d]" % (path, i), x, y)
+        elif not plist_equal_strict(a, b):
+            note("changed", path, "%s value" % plist_type_name(a),
+                 plist_show(path, a) if len(kept["changed"]) < max_items else None,
+                 plist_show(path, b) if len(kept["changed"]) < max_items else None)
+
+    try:
+        walk("", old, new)
+        res["semantic"] = "identical" if plist_equal_strict(old, new) else "different"
+    except (RecursionError, MemoryError):
+        res["readable"], res["error"] = False, "too deeply nested or too large to compare"
+        return res
+    res["serialization_only"] = (not res["identical_bytes"]) and res["semantic"] == "identical"
+    res["counts"] = counts
+    for kind in ("added", "removed", "changed"):
+        res[kind] = kept[kind]
+        if counts[kind] > len(kept[kind]):
+            res["truncated"] = True
+    return res
+
+
+# ---- evidence capture helpers (Phase 7C, Issue #71): READ-ONLY. They describe bytes; they decide nothing and change no verdict. ----
+# The V8 comparison (same_code_check in verify_ipa.py) is byte-strict for every file, with ONE exception (info_plist_reserialized_only above, Phase 9).
+# These functions exist so that the next signing run can
+# KEEP the two Info.plist files, the DER entitlements blob and the facts about them, instead of only the verdict.
+EVIDENCE_READ_CAP = 1 << 20          # at most this many bytes of one file are read at all
+EVIDENCE_PLIST_MAX_BYTES = 65536     # a property list larger than this is described (size, digest) but its bytes are not kept (the real one is 2.5 KB)
+EVIDENCE_DER_MAX_BYTES = 16384       # the same for a DER entitlements blob (the real ones are a few hundred bytes)
+EVIDENCE_KEY_LIST_MAX = 200          # top-level key names listed per file
+EVIDENCE_WINDOW = 16                 # bytes shown on each side of the first differing byte (as hex)
+
+# What must never be kept as evidence. Base64 and hex are encodings, not sanitisation: the DECODED bytes are what is judged. These are
+# the markers of the workflow's own evidence seal (PRIVATE KEY, BEGIN PKCS7, a JWT-shaped token), the PEM armour line, a bearer
+# token, and one unbroken run of 120 or more base64-like characters (key or token material; the longest run in the real Info.plist is 46).
+_EVIDENCE_UNSAFE = (
+    (re.compile(rb"PRIVATE KEY"), "a private-key marker"),
+    (re.compile(rb"-----BEGIN"), "a PEM armour line"),
+    (re.compile(rb"BEGIN PKCS7"), "a PKCS7 marker"),
+    (re.compile(rb"eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}"), "a JWT-shaped token"),
+    (re.compile(rb"(?i)(bearer|authorization:?)[ \t]+[A-Za-z0-9._~+/=-]{8,}"), "a bearer or authorization token"),
+    (re.compile(rb"[A-Za-z0-9+/=_-]{120,}"), "an unbroken run of 120 or more base64-like characters"),
+)
+
+
+def _evidence_text_views(data):
+    """The same bytes read as text in the encodings a property list or a blob may use: UTF-16 big and little endian, each at both byte
+    alignments (a binary property list stores a string with a non-ASCII character as UTF-16 big endian, so a token inside it never appears
+    as ASCII bytes), re-encoded as UTF-8 so that the patterns of _EVIDENCE_UNSAFE apply to them."""
+    views = []
+    for enc in ("utf-16-be", "utf-16-le"):
+        for start in (0, 1):
+            views.append(data[start:len(data) - ((len(data) - start) % 2)].decode(enc, "ignore").encode("utf-8", "ignore"))
+    return views
+
+
+def evidence_unsafe_reason(data):
+    """None when `data` (bytes, or text) may be kept as evidence, otherwise a short reason that names the KIND of material and never
+    shows it. The bytes are judged as they are AND read as UTF-16 (see _evidence_text_views), so an encoded copy is refused the same way.
+    For a property list use plist_evidence_unsafe_reason, which also looks at the parsed keys and values."""
+    if isinstance(data, str):
+        data = data.encode("utf-8", "replace")
+    for view in [data] + _evidence_text_views(data):
+        for pattern, why in _EVIDENCE_UNSAFE:
+            if pattern.search(view):
+                return why
+    return None
+
+
+EVIDENCE_DATA_MAX = 16       # a property list <data> value longer than this cannot be judged by looking at it and is not kept
+EVIDENCE_NODE_LIMIT = 20000  # property list objects inspected at most
+
+
+def plist_evidence_unsafe_reason(data):
+    """None when the property list `data` may be kept as evidence, otherwise a short reason (the KIND of problem, never its content).
+    Fail closed, in three steps: (1) the raw bytes, with UTF-16 views; (2) the PARSED content: every key and every string, at any depth in
+    any dictionary or array, is judged as text whatever encoding the file stores it in; (3) a <data> value is judged as bytes and, because
+    arbitrary binary data cannot be shown safe by looking at it, a non-trivial one (longer than EVIDENCE_DATA_MAX bytes) is refused. A file
+    that cannot be read with an explicit format cannot be inspected and is refused as well. It reads the file with the same reader as the
+    V8 diagnostics (read_plist_exact) and changes nothing about what any verification accepts."""
+    why = evidence_unsafe_reason(data)
+    if why:
+        return why
+    try:
+        obj, _fmt = read_plist_exact(data)
+    except Exception:  # not readable, too deep, entities, repeated keys...: it cannot be inspected, so it is not kept
+        return "a property list that cannot be inspected (it is not readable with an explicit format)"
+    stack, seen = [obj], 0
+    while stack:
+        seen += 1
+        if seen > EVIDENCE_NODE_LIMIT:
+            return "a property list with too many objects to inspect"
+        v = stack.pop()
+        if isinstance(v, dict):
+            for k, x in v.items():
+                stack.append(k)
+                stack.append(x)
+        elif isinstance(v, list):
+            stack.extend(v)
+        elif isinstance(v, str):
+            why = evidence_unsafe_reason(v.encode("utf-8", "surrogatepass"))
+            if why:
+                return why
+        elif isinstance(v, (bytes, bytearray)):
+            if len(v) > EVIDENCE_DATA_MAX:
+                return "binary data in a property list that cannot be inspected (longer than %d bytes)" % EVIDENCE_DATA_MAX
+            why = evidence_unsafe_reason(bytes(v))
+            if why:
+                return why
+    return None
+
+
+def b64_lines(data, width=76):
+    import base64
+    text = base64.b64encode(data).decode("ascii")
+    return "\n".join(text[i:i + width] for i in range(0, len(text), width)) + "\n"
+
+
+def hex_lines(data, width=64):
+    text = data.hex()
+    return "\n".join(text[i:i + width] for i in range(0, len(text), width)) + "\n"
+
+
+def plist_container_format(data):
+    """'binary', 'xml' or 'unknown', from the first bytes only."""
+    if data[:8] == b"bplist00":
+        return "binary"
+    if data.lstrip()[:5] in (b"<?xml", b"<!DOC", b"<plis"):
+        return "xml"
+    return "unknown"
+
+
+def bplist_structure(data):
+    """The 32-byte trailer of a binary property list, or None when `data` is not one: the facts that tell two serialisations of the
+    same content apart (how many objects, how wide the references and offsets are, where the offset table starts)."""
+    if data[:8] != b"bplist00" or len(data) < 8 + 32:
+        return None
+    t = data[-32:]
+    out = {"sort_version": t[5], "offset_int_size": t[6], "object_ref_size": t[7], "num_objects": int.from_bytes(t[8:16], "big"),
+           "top_object": int.from_bytes(t[16:24], "big"), "offset_table_offset": int.from_bytes(t[24:32], "big")}
+    out["consistent"] = (out["offset_int_size"] in (1, 2, 3, 4, 5, 6, 7, 8) and out["object_ref_size"] in (1, 2, 4, 8)
+                         and 8 <= out["offset_table_offset"] <= len(data) - 32
+                         and out["offset_table_offset"] + out["offset_int_size"] * out["num_objects"] == len(data) - 32)
+    return out
+
+
+def first_difference(a, b):
+    """-> {"identical", "equal_length", "offset" (the first differing byte, or None), "differing_bytes" (over the common length, plus the
+    length difference), "window_a", "window_b" (hex of EVIDENCE_WINDOW bytes each side of the first difference)}"""
+    n = min(len(a), len(b))
+    off = next((i for i in range(n) if a[i] != b[i]), None)
+    if off is None and len(a) != len(b):
+        off = n
+    out = {"identical": a == b, "equal_length": len(a) == len(b), "offset": off, "differing_bytes": 0, "window_a": None, "window_b": None}
+    if off is not None:
+        out["differing_bytes"] = sum(1 for i in range(n) if a[i] != b[i]) + abs(len(a) - len(b))
+        lo = max(0, off - EVIDENCE_WINDOW)
+        out["window_a"], out["window_b"] = a[lo:off + EVIDENCE_WINDOW].hex(), b[lo:off + EVIDENCE_WINDOW].hex()
+        out["window_start"] = lo
+    return out
+
+
+def plist_top_keys(data):
+    """The top-level keys of a property list in the order the FILE lists them, or None when it cannot be read."""
+    try:
+        d, _fmt = read_plist_exact(data)
+    except ValueError:
+        return None
+    return list(d) if isinstance(d, dict) else None
 
 
 def read_signature(path):
@@ -646,18 +1471,30 @@ def read_signature(path):
             item["entitlements_blob"] = slots[SLOT_ENTITLEMENTS]
             blob = slots[SLOT_ENTITLEMENTS]
             try:
-                if struct.unpack(">I", blob[:4])[0] != CSMAGIC_ENTITLEMENTS:
-                    raise ValueError("entitlements blob magic")
-                item["entitlements"] = plistlib.loads(blob[8:])
-            except Exception as e:  # unreadable plist is a finding, not a crash
-                item["problems"].append("entitlements blob is unreadable: %s" % e)
+                magic_ok = struct.unpack(">I", blob[:4])[0] == CSMAGIC_ENTITLEMENTS
+            except struct.error:
+                magic_ok = False
+            if not magic_ok:
+                item["problems"].append("entitlements blob is unreadable: its magic is wrong or it is too short")
+            else:
+                try:
+                    item["entitlements"] = plistlib.loads(blob[8:])
+                except Exception as e:  # unreadable plist is a finding, not a crash
+                    item["problems"].append("entitlements blob is unreadable: %s" % plist_failure_text(e))
         item["der_entitlements_blob"] = slots.get(SLOT_DER_ENTITLEMENTS)
         item["der_entitlements"] = None
         if item["der_entitlements_blob"] is not None:
             try:
                 item["der_entitlements"] = parse_der_entitlements(item["der_entitlements_blob"])
-            except (Asn1Error, IndexError, ValueError, struct.error) as e:
-                item["problems"].append("DER entitlements are unreadable: %s" % e)
+            except (Asn1Error, IndexError, ValueError, struct.error, RecursionError) as e:
+                # RecursionError too: a failure of the reader is a recorded problem, never an abort that skips the other checks
+                item["problems"].append("DER entitlements are unreadable: %s" % (e if not isinstance(e, RecursionError) else "nested too deeply to read"))
+                # The check above still fails. This only keeps what the blob really looks like, so the failure
+                # can be understood from its own report (Phase 2: the layout was never seen on real Apple data).
+                try:
+                    item["der_diag"] = der_blob_diagnostic(item["der_entitlements_blob"])
+                except Exception as diag_error:  # observational only: it must never replace the failure recorded above
+                    item["der_diag"] = {"error": type(diag_error).__name__}
         if SLOT_REQUIREMENTS in slots:
             item["requirements_blob"] = slots[SLOT_REQUIREMENTS]
         if SLOT_CMS in slots:
@@ -849,7 +1686,10 @@ def read_profile(path):
         v["ok"], err = False, "the signer certificate read from the structure is not the one openssl verified"
     if v["content"] is None:
         raise Asn1Error(err or "the provisioning profile carries no verified content")
-    plist = plistlib.loads(v["content"])
+    try:
+        plist = plistlib.loads(v["content"])
+    except _PLIST_PARSE_ERRORS as e:
+        raise Asn1Error("the profile's property list " + plist_failure_text(e))  # never the parser's own text
     return {"plist": plist, "signer": cms["signer"], "certs": cms["certs"], "signature_valid": v["ok"],
             "signature_error": err}
 

@@ -9,8 +9,10 @@ import 'package:flutter_idensic_mobile_sdk_plugin/flutter_idensic_mobile_sdk_plu
 import 'package:get/get.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:signer/services/app_minimize_service.dart';
+import 'package:signer/config/build_config.dart';
 import 'package:signer/services/auto_signing_service.dart';
 import 'package:signer/services/dataService/apiService.dart';
+import 'package:signer/services/installed_app_info.dart';
 import 'package:signer/services/storage_service.dart';
 import 'package:signer/services/utilService.dart';
 import 'package:signer/src/ui/controllers/appController.dart';
@@ -19,6 +21,7 @@ import 'package:signer/src/ui/screens/splashScreen.dart';
 import 'package:signer/src/ui/screens/verify_password_screen.dart';
 import 'package:signer/src/ui/theme/app_Text_Styles.dart';
 import 'package:signer/src/ui/theme/colors.dart';
+import 'package:signer/src/ui/widgets/app_version_label.dart';
 import 'package:signer/src/ui/widgets/connect_to_cadena_button.dart';
 
 import '../../../models/user_profile_model.dart';
@@ -33,6 +36,11 @@ class HomeScreen extends StatefulWidget {
 class _HomeScreenState extends State<HomeScreen> {
   AppController appController = Get.find<AppController>();
   final AutoSigningService autoSigningService = Get.find<AutoSigningService>();
+
+  /// The product version and build number of the INSTALLED application, read from
+  /// the native package metadata (never from the backend). Null until loaded, or
+  /// when the metadata cannot be read.
+  InstalledAppInfo? _installedApp;
 
   final _storage = const FlutterSecureStorage();
   bool _isKycLaunching = false;
@@ -242,12 +250,18 @@ class _HomeScreenState extends State<HomeScreen> {
   @override
   void initState() {
     super.initState();
+    _loadInstalledApp();
     initWallet();
     _checkTokenAndStartTimer();
     _checkTokenAndGetProfile();
 
     // Check JWT token and update button states
     appController.checkJwtTokenAndUpdateButtons();
+  }
+
+  Future<void> _loadInstalledApp() async {
+    final info = await InstalledAppInfo.load();
+    if (mounted) setState(() => _installedApp = info);
   }
 
   Future<void> _checkTokenAndStartTimer() async {
@@ -1394,25 +1408,19 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   Widget _buildAppVersionDisplay() {
-    final appVersion = appController.appVersionObject.value.payload?.appVersionNrNewest;
-    final apiVersion = appController.appVersionObject.value.payload?.apiVersionNr;
+    // The installed version is shown from the native package metadata and does not
+    // depend on the backend. The backend's API version and newest published app
+    // version are read here only so that the Obx rebuilds when they arrive.
+    final payload = appController.appVersionObject.value.payload;
 
-    if (appVersion == null && apiVersion == null) {
-      return SizedBox.shrink();
-    }
-
-    return Container(
-      child: Row(
-        mainAxisAlignment: MainAxisAlignment.start,
-        children: [
-          Text(
-            'App: ${appVersion ?? 'N/A'} | API: ${apiVersion ?? 'N/A'}',
-            style: AppTextStyles.caption.copyWith(
-              color: primaryTextColor.value.withOpacity(0.7),
-              fontSize: 12,
-            ),
-          ),
-        ],
+    return AppVersionLabel(
+      installed: _installedApp,
+      apiVersion: payload?.apiVersionNr,
+      newestPublished: payload?.appVersionNrNewest,
+      environment: BuildConfig.environment,
+      style: AppTextStyles.caption.copyWith(
+        color: primaryTextColor.value.withOpacity(0.7),
+        fontSize: 12,
       ),
     );
   }

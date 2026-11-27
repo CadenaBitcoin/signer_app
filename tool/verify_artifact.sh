@@ -156,6 +156,27 @@ check_signing_expectation() { # WANT ACTUAL_KIND: debug|unsigned vs what was fou
   if [ "$2" = "$1" ]; then pass "signing status is '$2' as expected"; else fail "signing status is '$2', expected '$1'"; fi
 }
 
+# Launcher icon (Issue #139): the icon an APK declares for each density must be, byte for byte, the
+# file of the flavor's own source set (android/app/src/<env>/res/mipmap-*/ic_launcher.jpg), which
+# tool/verify_version.sh requires to differ from the other flavor's. AAPT2 stores a JPEG unchanged
+# but shortens the resource paths, so the entry is found through `aapt2 dump badging`.
+check_apk_launcher_icon() { # ENV BADGING FILE
+  local env=$1 badging=$2 file=$3 pair dpi folder entry want wrong=""
+  tmpdir
+  for pair in 160:mdpi 240:hdpi 320:xhdpi 480:xxhdpi 640:xxxhdpi; do
+    dpi=${pair%%:*}; folder=${pair##*:}
+    entry=$(sed -n "s/^application-icon-$dpi:'\(.*\)'\$/\1/p" <<<"$badging" | sed -n '1p')
+    want="android/app/src/$env/res/mipmap-$folder/ic_launcher.jpg"
+    if [ -z "$entry" ] || [ ! -f "$want" ] || ! unzip -p "$file" "$entry" >"$TMP/launcher_icon" 2>/dev/null; then
+      wrong="$wrong $folder(not readable)"
+    elif ! cmp -s "$TMP/launcher_icon" "$want"; then
+      wrong="$wrong $folder"
+    fi
+  done
+  [ -z "$wrong" ] && pass "launcher icon is the $env icon (all densities identical to android/app/src/$env/res)" \
+    || fail "launcher icon is not the $env icon in:$wrong (compared with android/app/src/$env/res)"
+}
+
 verify_apk() { # ENV FILE SIGNING
   local env=$1 file=$2 signing=$3 aapt2 apksigner badging id code name label sign_out kind dn digest
   aapt2=$(find_sdk_tool aapt2) || die "aapt2 not found (set ANDROID_HOME)"
@@ -169,6 +190,7 @@ verify_apk() { # ENV FILE SIGNING
 
   [ "$id" = "$(expected_id "$env" android)" ] && pass "application ID is $id" || fail "application ID is '$id', expected $(expected_id "$env" android)"
   [ "$label" = "$(expected_name "$env")" ] && pass "display name is '$label'" || fail "display name is '$label', expected '$(expected_name "$env")'"
+  check_apk_launcher_icon "$env" "$badging" "$file"
   [ "$name" = "$EXPECT_NAME" ] && pass "versionName $name matches pubspec.yaml" || fail "versionName '$name' != pubspec $EXPECT_NAME"
   [ "$code" = "$EXPECT_BUILD" ] && pass "versionCode $code matches pubspec.yaml" || fail "versionCode '$code' != pubspec $EXPECT_BUILD"
   if [ "$DEBUG_BUILD" -eq 1 ]; then
@@ -382,7 +404,7 @@ verify_ios_toolchain() { # APP_DIR PLIST EXECUTABLE_NAME
 }
 
 verify_ios() { # ENV APP_DIR
-  local env=$1 app=$2 plist id name short build status="unsigned" exe archs="" cs_out out
+  local env=$1 app=$2 plist id name short build status="unsigned" exe archs="" cs_out out icon_want icon_got icon_name icon_files
   load_version
   plist="$app/Info.plist"
   [ -f "$plist" ] || die "$plist not found (pass the Runner.app directory)"
@@ -391,6 +413,21 @@ verify_ios() { # ENV APP_DIR
 
   [ "$id" = "$(expected_id "$env" ios)" ] && pass "bundle identifier is $id" || fail "bundle identifier is '$id', expected $(expected_id "$env" ios)"
   [ "$name" = "$(expected_name "$env")" ] && pass "display name is '$name'" || fail "display name is '$name', expected '$(expected_name "$env")'"
+  # Launcher icon (Issue #139): the icon set the flavor's xcconfig selects must be the one the built
+  # app declares. (The compiled catalog itself, Assets.car, is only readable on macOS.)
+  icon_want=$(sed -n 's/^ASSETCATALOG_COMPILER_APPICON_NAME = //p' "ios/Flutter/Flavor-$env.xcconfig" 2>/dev/null | sed -n '1p') || true
+  icon_got=$(python3 -I -c '
+import plistlib, sys
+with open(sys.argv[1], "rb") as f:
+    p = plistlib.load(f).get("CFBundleIcons", {}).get("CFBundlePrimaryIcon", {})
+print(p.get("CFBundleIconName", "") + "|" + ",".join(p.get("CFBundleIconFiles", [])))
+' "$plist")
+  icon_name=${icon_got%%|*}; icon_files=${icon_got#*|}
+  if [ -n "$icon_want" ] && [ "$icon_name" = "$icon_want" ] && [[ "$icon_files" =~ ^${icon_want}[0-9] ]]; then
+    pass "launcher icon set is $icon_name (selected by ios/Flutter/Flavor-$env.xcconfig)"
+  else
+    fail "launcher icon set is '$icon_name' (files '$icon_files'), expected '$icon_want' from ios/Flutter/Flavor-$env.xcconfig"
+  fi
   [ "$short" = "$EXPECT_NAME" ] && pass "CFBundleShortVersionString $short matches pubspec.yaml" || fail "CFBundleShortVersionString '$short' != pubspec $EXPECT_NAME"
   [ "$build" = "$EXPECT_BUILD" ] && pass "CFBundleVersion $build matches pubspec.yaml" || fail "CFBundleVersion '$build' != pubspec $EXPECT_BUILD"
 

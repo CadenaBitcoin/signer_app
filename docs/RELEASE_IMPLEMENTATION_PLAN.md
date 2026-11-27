@@ -16,8 +16,8 @@
 | Merge into `production` | Android production APK (website); Android production AAB (Google Play); iOS production build (App Store) |
 
 All five signed under Cadena-controlled authority; staging and production are
-separate applications and separate signing/deployment contexts; a merge builds,
-publication is authorized separately.
+separate applications and separate signing/deployment contexts; the authorized merge
+is the single authorization of the branch's complete pipeline (RELEASE_POLICY.md 2.3).
 
 ## 2. Dependency-ordered sequence
 
@@ -33,18 +33,18 @@ account and policy work no code change can replace.
 | # | Step | Depends on | Notes |
 |---|---|---|---|
 | 1 | **Release governance and versioning** (this issue, #54): policy, signing design, plan, version checker, `GOVERNANCE.md` | none | Documentation and a read-only script. |
-| 2 | **Human: people, lineage, Apple** ∥ | none | Name the release authority, signing custodians and a second Apple administrator; inventory the existing Android key, Apple team, Play and App Store Connect accounts; confirm ownership by the Cadena organization; start the Apple items of section 5 for the **staging** application. Gates steps 8, 11, 12. |
+| 2 | **Human: people, lineage, Apple** ∥ | none | Name the continuity signing custodians and a second Apple administrator (the release authority is the authorized merge); inventory the existing Android key, Apple team, Play and App Store Connect accounts; confirm ownership by the Cadena organization; start the Apple items of section 5 for the **staging** application. Gates steps 8, 11, 12. |
 | 3 | **Production-grade iOS toolchain** ∥ **start immediately** | none to start | App Store Connect uploads have required Xcode 26 and the iOS 26 SDK since 2026-04-28; TestFlight delivery goes through App Store Connect, so the same requirement is expected to apply (Apple's page does not say so explicitly; confirm early). Prove (unsigned, on a branch, from a copy of the validation workflow) that Flutter 3.35.3, CocoaPods with Sumsub and Fingerprint Pro, and the committed Rust `libdlcplazacryptlib.a` build with Xcode 26; confirm a hosted runner image with Xcode 26. The outcome may require a Flutter upgrade, a separate explicitly approved issue (`CLAUDE.md` sections 3 and 7). Highest risk and longest lead: gates M1. |
 | 4 | **Shared explicit build configuration** (successor of Issue #57 B1) | 1 | Merge or rebase B1 onto `development` and adapt it: no default, fail on missing/inconsistent/unsuitable configuration, branch check, release identifier, flavor cross-check (sections 3 and 4). Touches environment selection (sensitive): investigation report first. |
 | 5 | **Network-specific XPUB/address validation** ∥ with 4 | investigation | Existing code validates nothing for Signet (policy section 6). Investigation, then an approved change in sensitive code. Must exist before staging builds are handed to testers as the Signet-validating build. |
 | 6 | **Application identities on both platforms**, **iOS staging first** | 4 | Flavors `staging`/`production`; separate application ID and bundle ID, names, icons; per-variant `Info.plist`/manifest values. Check third-party and backend coupling to application IDs and the `BGTaskSchedulerPermittedIdentifiers` mismatch first. Changes both CI build commands (section 3). Updates the version checker and the bootstrap in `CLAUDE.md`. |
 | 7 | **In-app staging identifier display** | 4, 6 | Small UI change outside wallet/auth/signing code: staging shows `vX.Y.Z-rc.N`, production shows nothing. Required for the iOS acceptance. |
 | 8 | **Signing infrastructure, staging context, iOS first** | 2, 6 (staging bundle ID), Apple items of section 5 | Protected environment `staging-ios` and its secrets, the staging App Store Connect record and profile, TestFlight group of authorized testers, custody procedure. `staging-android` follows in step 10. No credential is created before step 2. |
-| **9** | **M1: signed iOS staging build and restricted TestFlight delivery** | 3, 4, 5, 6, 7, 8 | Push to `staging` builds, signs and delivers to the staging TestFlight record. **Acceptance:** policy section 8.1. Whether the upload needs an additional approval is decided during this step. |
+| **9** | **M1: signed iOS staging build and restricted TestFlight delivery** | 3, 4, 5, 6, 7, 8 | Push to `staging` builds, signs and delivers to the staging TestFlight record. **Acceptance:** policy section 8.1. The upload needs no additional approval: the merge authorizes it (policy 2.3). |
 | 10 | **Signed Android staging build** ∥ with 9, if convenient | 4, 6, 8 (Android staging key) | Same pipeline pattern, no Xcode 26 dependency. **Prerequisite:** the internal, non-public distribution mechanism (policy section 8.2) is chosen first; until then the pipeline only verifies and records the APK and publishes nothing. |
 | 11 | **Create `production` branch** | 2 (lineage), production context of step 8 | Policy section 2.1. Needs explicit approval. Must exist, protected and with its pipeline reviewed, before its first merge. *Status: the branch was created at the adopted baseline `7b63c97` (Issue #68); signing and publication are not established.* |
-| 12 | **Signed production builds** (APK, AAB, iOS) | 9, 10, 11, production signing context | Publication still not automatic. |
-| 13 | **Publication and release automation** | 12 | Website upload procedure, Google Play track, App Store submission, release notes, release-record publication, rollbacks. Each channel behind its own approval. |
+| 12 | **Signed production builds** (APK, AAB, iOS IPA) | 9, 10, 11, production signing context | The merge authorizes the pipeline: build, retain, verify, sign, verify again, upload to the configured non-public destinations (policy 2.3, open decision 16). |
+| 13 | **Public publication and App Review submission** | 12 | **Outside the configured automated scope** (policy 2.3, CTO 2026-11-17). Incorporated only by an explicit architectural extension of the policy, through a reviewed pull request, with no approval step added after the merge. Release notes, release-record publication and rollbacks are reviewed changes. |
 
 Every requirement of the policy is covered: governance and versioning (1),
 people and accounts (2), iOS toolchain (3), shared configuration (4), network
@@ -54,6 +54,27 @@ TestFlight (9), signed Android staging (10), `production` and signed production
 dependency justifies it: the toolchain (3) starts at once because it is
 independent and the riskiest item on the M1 path, and iOS staging (9) is ahead of
 Android staging (10).
+
+### 2.1 Implementation requirements of the authorization policy (issue #54; none started)
+
+The authorization policy ([RELEASE_POLICY.md](RELEASE_POLICY.md) 2.3, 2.4, 7.3) states the intended
+architecture. These are what must exist before the corresponding step is switched on. Each is its own
+reviewed change; **none is implemented and this document starts none**. State checked 2026-11-17.
+
+| # | Requirement | Today |
+|---|---|---|
+| R1 | **Version-advancement check** (policy 7.3): a required status check on every pull request into `staging` and `production`, with no path filter, failing unless the build number is strictly above every consumed number and the published floors and the Android and iOS rules hold; no workflow writes the version | Not implemented |
+| R2 | **Signed-commit enforcement** (`required_signatures`) on the release branches | Not active |
+| R3 | **Required status checks** on the release branches (the version check, the existing tests and validation) | Not active |
+| R4 | **Retention recipients** in `config/release/artifact_recipients.txt` ([RETAINED_ARTIFACTS.md](RETAINED_ARTIFACTS.md)) | Empty |
+| R5 | **Protected environments**, deployable from their one branch, with no required reviewer | None exist |
+| R6 | **Signing credentials** in those environments, with the custody of [RELEASE_SIGNING_ARCHITECTURE.md](RELEASE_SIGNING_ARCHITECTURE.md) section 7 (no credential is created by the policy) | None |
+| R7 | **Post-signing verification** wired so that a failure stops delivery (the tools exist, no workflow calls them after a signature) | Not wired |
+| R8 | **Automated non-public store delivery** (App Store Connect, Play Console) | Not implemented |
+| R9 | **Retry handling** (policy 2.4): the same retained, verified artifact, idempotent, no recompilation, every attempt recorded | Not implemented |
+| R10 | **Delivery records** with the merge, the verification results and every attempt (policy 9) | Not implemented |
+| F1 | Future, not decided: version display in the application dashboard (policy 7.6) | Not started |
+| F2 | Future, not decided: development-only Android APKs without staging promotion (policy 7.6) | Not started |
 
 ## 3. Transition from validation CI to the signed pipeline
 
@@ -74,6 +95,7 @@ request:
 | T2 | **Configuration lands (step 4), then flavors (step 6).** While the legacy path still works, the new mechanism is additive and the validation workflows keep passing. Fail-closed is then switched on **in the same pull request that adds the explicit configuration (and `--flavor`) to both validation workflows' build commands.** | **Must change, deliberately.** Once configuration is mandatory, `flutter build apk --debug` and `flutter build ios --release --no-codesign` without it fail, as intended. The change is small, reviewed, and shown green with a manual run before merge. |
 | T3 | New signed workflows as **new files**: staging on push to `staging`, production on push to `production`, using the protected environments | Validation workflows keep running beside them. No dependency between the two sets unless later decided. |
 | T4 | Decide whether validation stays as a fast unsigned check (for example as a required status check) or retires | Never removed without approval |
+| Stage 2 of #54 (retained artifacts) | `build-variants.yml` can keep each verified Android APK/AAB and unsigned iOS `.xcarchive`, encrypted to public keys, with checksums and manifests ([RETAINED_ARTIFACTS.md](RETAINED_ARTIFACTS.md)). It is the credential-free input of the signing stages T3 and 8 to 12; it signs and uploads nothing | Untouched; the validation workflows keep their meaning |
 
 Other consequences to schedule: the iOS workflows moved to Xcode 26.3 on `macos-15` with
 Issue #70 (step 3; hosted proof is recorded in `docs/IOS_CI.md`);
@@ -143,8 +165,8 @@ Readiness record: [IOS_SIGNING.md](IOS_SIGNING.md). Stages A and B are documenta
 | C | Prerequisites of policy 8.1: release identifier scheme, in-app staging identifier, Signet validation, export-compliance declaration | No (declaration awaits the answers) |
 | D | Static workflow guards; IPA verifier and its fixtures (**done**, security-reviewed: [IOS_SIGNING.md](IOS_SIGNING.md) 3.1); signing-job separation (credential-free evidence **done**, hosted `codesign` experiment **prepared, not run**: 3.2 and 3.3); Stage C audit (**done**, read-only: 3.4); unsigned archive job | No |
 | E | Staging environment, certificate, profile, service user and key; signed staging IPA **without upload** | **Yes** |
-| F | Upload to the staging record, processing state, internal TestFlight; assignment to testers by explicit approval | **Yes** |
-| G | Production signing procedure verified without upload; production upload behind **independent** approval | **Yes**, and a second approver |
+| F | Upload to the staging record, processing state, internal TestFlight delivery to the configured group on merge | **Yes** |
+| G | Production signing procedure verified without upload; production upload as a configured delivery operation authorized by the merge | **Yes** |
 | H | Final runbook; the iOS floor recorded in `published_versions.json` | |
 
 Each stage is its own approved change. Steps 8 and 9 of the sequence above are covered by

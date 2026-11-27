@@ -1,0 +1,523 @@
+# iOS RELEASE DIAGNOSTICS, Phase 1 (Issue #71). Credential-free. It is not a release, a signing run or an upload.
+#
+# Purpose: produce, on a GitHub-hosted macOS runner and without anyone's Mac, the pre-signing evidence that
+# docs/IOS_RELEASE.md section 9 asks for (the required-reason import scan and the native symbol inspection) and
+# that the release record needs for decision X2 (privacy manifest), and learn from the real build output what the
+# later signing procedure will meet. It decides nothing: no D or X row of docs/release-records/ios-1.0.4-1000035.md,
+# no gate, no authorization.
+#
+# What it does, on macos-15 with Xcode 26.3 (the pins of ios-ci-validation.yml and build-variants.yml):
+#   1. checks out EXACTLY the approved commit and verifies it: its SHA, that it is on `production`, that its
+#      application content equals the reviewed content, that the tree is clean and that the version is the expected one;
+#   2. runs the repository's own checks of that commit (version wiring, build configuration, pinned Rust library);
+#   3. builds it twice, both UNSIGNED: `flutter build ios --release --no-codesign` (the established CI command and the
+#      input of the section 9 scan) and `flutter build ipa --release --no-codesign` (the unsigned archive that the
+#      signing procedure of docs/IOS_SIGNING.md route B would export). Each result passes tool/verify_artifact.sh and the
+#      drift check;
+#   4. scans every Mach-O file of both applications (full `nm -u`, the required-reason imports, the privacy manifests) and
+#      inspects the pinned library and the built dlc_wallet framework (Issue #22 symbol checks);
+#   5. records the structure of the unsigned archive, which Xcode and Apple tools the runner offers, and the export options
+#      this Xcode documents, WITHOUT running an export;
+#   6. keeps text only (never a binary, an archive or an app) as a downloadable Actions artifact, with SHA-256 sums.
+#
+# What it must never do, and this workflow is kept to it:
+#   - sign, export an archive, or contact or authenticate to any Apple service; upload anything to Apple;
+#   - use a certificate, provisioning profile, App Store Connect key, password or any stored credential;
+#   - read the repository's secret store, select an environment, or use the OIDC token;
+#   - run on a push, a pull request or a schedule: it is started by hand (workflow_dispatch) only;
+#   - change anything it builds: it builds the approved commit as it is and the drift check fails on any change.
+#
+# Nothing here is a release: the applications are unsigned and not installable. See docs/IOS_CI.md.
+
+name: iOS release diagnostics (credential-free, not a release)
+
+on:
+  workflow_dispatch:
+    inputs:
+      approved_sha:
+        description: "Approved release commit (APPROVED_SHA of the release record): 40 lower-case hex characters"
+        required: true
+        default: "42d358a4e7bcbf85b92aa992ec6439214dbd4405"
+      content_ref:
+        description: "Reviewed content reference (CONTENT_REF of the release record): 40 lower-case hex characters"
+        required: true
+        default: "862831e0b3a0f30c4155d2e086c69fc28bdab286"
+      expected_version:
+        description: "Expected application version, exactly as in pubspec.yaml (name+build)"
+        required: true
+        default: "1.0.4+1000035"
+
+# Least privilege: the job only reads this repository. No write access of any kind, no token for other services.
+permissions:
+  contents: read
+
+concurrency:
+  group: ios-release-diagnostics
+  cancel-in-progress: false
+
+env:
+  # The release being examined. Production only: the release record covers the production flavor.
+  BUILD_ENV: production
+  BUILD_CONFIG_FILE: config/build/production.json
+  # The pins of ios-ci-validation.yml and build-variants.yml. tool/verify_ios_toolchain.sh compares those two files only,
+  # so a change of a pin there must be copied here by hand.
+  XCODE_APP: /Applications/Xcode_26.3.app
+  EXPECTED_XCODE: "26.3"
+  EXPECTED_MIN_SDK_MAJOR: "26"
+  EXPECTED_COCOAPODS: "1.17.0"
+  EXPECTED_FLUTTER: "3.35.3"
+  EXPECTED_FLUTTER_REVISION: a402d9a437
+  EXPECTED_DART: "3.9.2"
+  # Prebuilt Rust static library linked by the dlc_wallet plugin; never rebuilt here.
+  RUST_LIB: flutter_plugin/flutter_plugin/ios/Classes/libdlcplazacryptlib.a
+  EXPECTED_RUST_LIB_SHA256: 203dcd7abe4187de0b756638a55f691b2d5c680b17d4fbfa7dda550ed703949b
+  # Application content that the release record compares between the reviewed and the approved commit (IOS_RELEASE.md section 5).
+  CONTENT_PATHS: "lib ios flutter_plugin pubspec.yaml pubspec.lock config/build android"
+
+jobs:
+  diagnostics:
+    name: Unsigned build, native framework scan and archive structure
+    # macos-15 is the arm64 image. Not macos-latest.
+    runs-on: macos-15
+    timeout-minutes: 90
+    steps:
+      - name: Validate the inputs
+        env:
+          APPROVED_SHA: ${{ inputs.approved_sha }}
+          CONTENT_REF: ${{ inputs.content_ref }}
+          EXPECTED_VERSION: ${{ inputs.expected_version }}
+        run: |
+          fail=0
+          printf '%s' "$APPROVED_SHA" | grep -Eq '^[0-9a-f]{40}$' || { echo "::error::approved_sha must be 40 lower-case hex characters."; fail=1; }
+          printf '%s' "$CONTENT_REF" | grep -Eq '^[0-9a-f]{40}$' || { echo "::error::content_ref must be 40 lower-case hex characters."; fail=1; }
+          printf '%s' "$EXPECTED_VERSION" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+\+[0-9]+$' || { echo "::error::expected_version must look like 1.0.4+1000035."; fail=1; }
+          [ "$fail" -eq 0 ] || exit 1
+
+      # The commit that is built is the approved one, not the commit of this workflow file. Its own tool/ directory is
+      # the one that built the accepted CI runs, so the checks below are the repository's, unchanged.
+      - name: Checkout the approved commit
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ inputs.approved_sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Verify the source (SHA, production ancestry, reviewed content, clean tree, version)
+        env:
+          APPROVED_SHA: ${{ inputs.approved_sha }}
+          CONTENT_REF: ${{ inputs.content_ref }}
+          EXPECTED_VERSION: ${{ inputs.expected_version }}
+        run: |
+          set -uo pipefail
+          set +e
+          fail=0
+          head="$(git rev-parse HEAD)"
+          echo "HEAD=$head"
+          [ "$head" = "$APPROVED_SHA" ] || { echo "::error::HEAD is $head, expected $APPROVED_SHA."; fail=1; }
+          if git merge-base --is-ancestor "$APPROVED_SHA" origin/production; then echo "on_production=yes"; else echo "::error::$APPROVED_SHA is not an ancestor of origin/production."; fail=1; fi
+          git cat-file -e "$CONTENT_REF^{commit}" 2>/dev/null || { echo "::error::content_ref $CONTENT_REF is not a commit of this repository."; fail=1; }
+          # shellcheck disable=SC2086
+          content_diff="$(git diff --stat "$CONTENT_REF" "$APPROVED_SHA" -- $CONTENT_PATHS 2>&1)"
+          if [ -n "$content_diff" ]; then echo "::error::The application content differs from the reviewed content:"; echo "$content_diff"; fail=1; else echo "content_equals_reviewed=yes (empty diff against $CONTENT_REF)"; fi
+          [ -z "$(git status --porcelain)" ] || { echo "::error::The working tree is not clean."; git status --short | head -n 20; fail=1; }
+          version="$(sed -n 's/^version:[[:space:]]*//p' pubspec.yaml | head -n1 | tr -d '[:space:]')"
+          echo "pubspec_version=$version"
+          [ "$version" = "$EXPECTED_VERSION" ] || { echo "::error::pubspec.yaml has version '$version', expected '$EXPECTED_VERSION'."; fail=1; }
+          echo "tree=$(git rev-parse HEAD^{tree})"
+          [ "$fail" -eq 0 ] || exit 1
+          mkdir -p diagnostics
+          {
+            echo "approved_sha=$head"
+            echo "tree=$(git rev-parse HEAD^{tree})"
+            echo "content_ref=$CONTENT_REF"
+            echo "on_production=yes"
+            echo "content_equals_reviewed=yes"
+            echo "pubspec_version=$version"
+            echo "workflow_ref=$GITHUB_REF"
+            echo "workflow_sha=$GITHUB_SHA"
+            echo "run=$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID (attempt $GITHUB_RUN_ATTEMPT)"
+          } > diagnostics/source.txt
+
+      - name: Select Xcode 26.3
+        run: |
+          sudo xcode-select -s "$XCODE_APP/Contents/Developer"
+          xcodebuild -version
+          actual="$(xcodebuild -version | sed -n '1s/^Xcode //p')"
+          if [ "$actual" != "$EXPECTED_XCODE" ]; then
+            echo "::error::Expected Xcode $EXPECTED_XCODE at $XCODE_APP but xcodebuild reports '$actual'."
+            exit 1
+          fi
+
+      - name: Set up Flutter 3.35.3
+        uses: subosito/flutter-action@1a449444c387b1966244ae4d4f8c696479add0b2 # v2
+        with:
+          flutter-version: "3.35.3"
+          channel: stable
+          cache: true
+
+      - name: Record and verify toolchain
+        run: |
+          arch="$(uname -m)"
+          iphoneos_sdk="$(xcrun --sdk iphoneos --show-sdk-version)"
+          pod_version="$(pod --version)"
+          flutter_json="$(flutter --version --machine)"
+          field() { printf '%s' "$flutter_json" | python3 -I -c "import sys,json; print(json.load(sys.stdin).get('$1',''))"; }
+          flutter_version="$(field frameworkVersion)"
+          flutter_revision="$(field frameworkRevision)"
+          dart_version="$(field dartSdkVersion | awk '{print $1}')"
+          {
+            echo "runner_image=${ImageOS:-unknown} ${ImageVersion:-unknown}"
+            echo "runner_arch=${arch}"
+            echo "macos=$(sw_vers -productVersion) ($(sw_vers -buildVersion))"
+            echo "xcode=$(xcodebuild -version | sed -n '1s/^Xcode //p') ($(xcodebuild -version | sed -n '2s/^Build version //p'))"
+            echo "iphoneos_sdk=${iphoneos_sdk}"
+            echo "flutter=${flutter_version} (revision ${flutter_revision:0:10})"
+            echo "dart=${dart_version}"
+            echo "cocoapods=${pod_version}"
+            echo "swift=$(xcrun swift --version 2>&1 | head -n1)"
+            echo "python=$(python3 --version 2>&1)"
+            echo "clang=$(xcrun clang --version 2>&1 | head -n1)"
+            echo "nm=$(nm --version 2>&1 | head -n1)"
+          } > diagnostics/toolchain.txt
+          cat diagnostics/toolchain.txt
+          fail=0
+          if [ "$arch" != "arm64" ]; then echo "::error::Runner architecture is '$arch', expected arm64."; fail=1; fi
+          if [ "$flutter_version" != "$EXPECTED_FLUTTER" ]; then echo "::error::Flutter is '$flutter_version', expected $EXPECTED_FLUTTER."; fail=1; fi
+          case "$flutter_revision" in
+            "$EXPECTED_FLUTTER_REVISION"*) ;;
+            *) echo "::error::Flutter revision is '$flutter_revision', expected $EXPECTED_FLUTTER_REVISION*."; fail=1 ;;
+          esac
+          if [ "$dart_version" != "$EXPECTED_DART" ]; then echo "::error::Dart is '$dart_version', expected $EXPECTED_DART."; fail=1; fi
+          case "${iphoneos_sdk%%.*}" in
+            ''|*[!0-9]*) echo "::error::Cannot read the iPhoneOS SDK version (got '$iphoneos_sdk')."; fail=1 ;;
+            *) if [ "${iphoneos_sdk%%.*}" -lt "$EXPECTED_MIN_SDK_MAJOR" ]; then echo "::error::Expected an iPhoneOS SDK $EXPECTED_MIN_SDK_MAJOR or later but Xcode $EXPECTED_XCODE provides $iphoneos_sdk."; fail=1; fi ;;
+          esac
+          if [ "$pod_version" != "$EXPECTED_COCOAPODS" ]; then echo "::error::CocoaPods is '$pod_version', expected $EXPECTED_COCOAPODS."; fail=1; fi
+          [ "$fail" -eq 0 ] || exit 1
+
+      - name: Resolve dependencies exactly as the lockfiles say
+        run: |
+          flutter pub get --enforce-lockfile
+          (cd flutter_plugin/flutter_plugin && flutter pub get)
+
+      # Deliberately the system /bin/bash (3.2 on macOS): the tools must stay portable to it.
+      - name: Repository checks (configuration, version wiring)
+        run: |
+          set -o pipefail
+          resolved="$(/bin/bash tool/verify_build_config.sh resolve "$BUILD_CONFIG_FILE" "$BUILD_ENV")"
+          echo "$resolved"
+          grep -qx "APP_ENV=$BUILD_ENV" <<<"$resolved" || { echo "::error::$BUILD_CONFIG_FILE does not resolve to APP_ENV=$BUILD_ENV"; exit 1; }
+          /bin/bash tool/verify_build_config.sh verify
+          /bin/bash tool/verify_version.sh 2>&1 | tee diagnostics/verify_version.txt
+
+      - name: Check that the prebuilt Rust static library is the audited one (not rebuilt)
+        run: |
+          set -o pipefail
+          sha="$(shasum -a 256 "$RUST_LIB" | awk '{print $1}')"
+          {
+            echo "rust_lib=$RUST_LIB"
+            echo "rust_lib_sha256=$sha"
+            echo "rust_lib_expected_sha256=$EXPECTED_RUST_LIB_SHA256"
+            echo "rust_lib_size=$(stat -f%z "$RUST_LIB")"
+            echo "rust_lib_lipo=$(lipo -info "$RUST_LIB" 2>&1)"
+            echo "rust_lib_build_versions=$(python3 -I tool/macho_info.py "$RUST_LIB" | tr '\n' ';')"
+          } | tee diagnostics/rust_lib.txt
+          if [ "$sha" != "$EXPECTED_RUST_LIB_SHA256" ]; then
+            echo "::error::$RUST_LIB has sha256 $sha, not the audited $EXPECTED_RUST_LIB_SHA256. Nothing was built."
+            exit 1
+          fi
+
+      # 3a. The established CI command. Flutter runs `pod install` itself. No signing: CODE_SIGNING_ALLOWED=NO.
+      - name: Build 1 of 2, unsigned app (flutter build ios, the section 9 scan input)
+        run: |
+          set -o pipefail
+          mkdir -p diagnostics
+          flutter build ios --release --no-codesign --flavor "$BUILD_ENV" --dart-define-from-file="$BUILD_CONFIG_FILE" 2>&1 | tee "$RUNNER_TEMP/build-ios.log"
+          app="build/ios/Release-${BUILD_ENV}-iphoneos/Runner.app"
+          if [ ! -d "$app" ]; then app="$(find build/ios -maxdepth 3 -type d -name Runner.app -print 2>/dev/null | sort | head -n1 || true)"; fi
+          if [ -z "$app" ] || [ ! -d "$app" ]; then
+            echo "::error::flutter build ios succeeded but no Runner.app was found under build/ios."
+            find build/ios -maxdepth 3 2>/dev/null | head -n 40 || true
+            exit 1
+          fi
+          echo "$app"
+          echo "PRE_APP=$app" >> "$GITHUB_ENV"
+          echo "build_1=flutter build ios --release --no-codesign --flavor $BUILD_ENV --dart-define-from-file=$BUILD_CONFIG_FILE" >> diagnostics/builds.txt
+          echo "build_1_app=$app" >> diagnostics/builds.txt
+
+      - name: Verify build 1 (bundle ID, name, version, unsigned, environment) and the drift rule
+        run: |
+          /bin/bash tool/verify_artifact.sh selftest ios "$BUILD_ENV" "$PRE_APP" --min-sdk "$EXPECTED_MIN_SDK_MAJOR"
+          /bin/bash tool/verify_artifact.sh ios "$BUILD_ENV" "$PRE_APP" --min-sdk "$EXPECTED_MIN_SDK_MAJOR" --evidence diagnostics/verify_artifact_build1.txt
+          /bin/bash tool/check_build_drift.sh
+
+      # 3b. The unsigned archive that route B of docs/IOS_SIGNING.md would export. `flutter build ipa --no-codesign` archives
+      # with CODE_SIGNING_ALLOWED=NO and skips the export (verified in the pinned Flutter source, IOS_SIGNING.md 3.2).
+      - name: Build 2 of 2, unsigned archive (flutter build ipa --no-codesign)
+        run: |
+          set -o pipefail
+          flutter build ipa --release --no-codesign --flavor "$BUILD_ENV" --dart-define-from-file="$BUILD_CONFIG_FILE" 2>&1 | tee "$RUNNER_TEMP/build-ipa.log"
+          archive=build/ios/archive/Runner.xcarchive
+          if [ ! -d "$archive/Products/Applications/Runner.app" ]; then
+            echo "::error::flutter build ipa --no-codesign produced no $archive/Products/Applications/Runner.app"
+            find build/ios/archive -maxdepth 4 2>/dev/null | head -n 40 || true
+            exit 1
+          fi
+          echo "ARCHIVE_PATH=$archive" >> "$GITHUB_ENV"
+          echo "ARCHIVE_APP=$archive/Products/Applications/Runner.app" >> "$GITHUB_ENV"
+          echo "build_2=flutter build ipa --release --no-codesign --flavor $BUILD_ENV --dart-define-from-file=$BUILD_CONFIG_FILE" >> diagnostics/builds.txt
+          echo "build_2_archive=$archive" >> diagnostics/builds.txt
+
+      - name: Verify build 2 and the drift rule
+        run: |
+          /bin/bash tool/verify_artifact.sh ios "$BUILD_ENV" "$ARCHIVE_APP" --min-sdk "$EXPECTED_MIN_SDK_MAJOR" --evidence diagnostics/verify_artifact_build2.txt
+          /bin/bash tool/check_build_drift.sh
+
+      # 4. IOS_RELEASE.md section 9, "Required-reason API imports", on BOTH applications, with the FULL `nm -u` of every
+      # Mach-O file (the section asks for the whole output of the framework, not only the matches). Evidence for the
+      # coordinator's privacy-manifest decision (X2); never a stop condition and never a compliance statement.
+      - name: Scan every Mach-O file (nm -u, required-reason imports, privacy manifests)
+        run: |
+          set -uo pipefail
+          set +e
+          problems=0
+          # The scan is tool/scan_required_reason.sh of the commit of THIS workflow file (not of the approved commit, which
+          # predates it): read from the history that the checkout fetched, outside the working tree so that the tree stays
+          # clean for the drift check. It reads every layout of `nm -u` (llvm-nm of Xcode 26.3 prints bare names, cctools nm
+          # prints a "U" column) and is tested by tool/test_required_reason_scan.sh.
+          REASON_SCAN="$RUNNER_TEMP/scan_required_reason.sh"
+          if git show "$GITHUB_SHA:tool/scan_required_reason.sh" > "$REASON_SCAN" 2> "$RUNNER_TEMP/scan_required_reason.err" && [ -s "$REASON_SCAN" ]; then
+            echo "scan_required_reason.sh sha256=$(shasum -a 256 "$REASON_SCAN" | awk '{print $1}') (from workflow commit $GITHUB_SHA)" > diagnostics/scan-tool.txt
+            echo "nm=$(nm --version 2>&1 | head -n1)" >> diagnostics/scan-tool.txt
+          else
+            echo "::error::tool/scan_required_reason.sh is not in workflow commit $GITHUB_SHA; the required-reason scan cannot run (X2 evidence incomplete)."
+            cat "$RUNNER_TEMP/scan_required_reason.err"
+            exit 1
+          fi
+          for pair in "preflight:$PRE_APP" "archive:$ARCHIVE_APP"; do
+            label="${pair%%:*}"; root="${pair#*:}"
+            out="diagnostics/$label"
+            mkdir -p "$out/nm-u"
+            : > "$out/macho-files.txt"
+            : > "$out/required-reason-imports.txt"
+            count=0
+            while IFS= read -r f; do
+              desc="$(file -b "$f")"
+              case "$desc" in *Mach-O*) ;; *) continue ;; esac
+              rel="${f#"$root"/}"
+              flat="$(printf '%s' "$rel" | sed 's|/|__|g')"
+              count=$((count + 1))
+              printf '%s  %s  [%s]\n' "$(shasum -a 256 "$f" | awk '{print $1}')" "$rel" "$desc" >> "$out/macho-files.txt"
+              nm -u "$f" > "$out/nm-u/$flat.txt" 2> "$out/nm-u/$flat.err"
+              [ -s "$out/nm-u/$flat.err" ] || rm -f "$out/nm-u/$flat.err"
+              echo "== $rel" >> "$out/required-reason-imports.txt"
+              # The complete output was written above and is never filtered; this adds only the matching lines.
+              bash "$REASON_SCAN" "$out/nm-u/$flat.txt" >> "$out/required-reason-imports.txt" || { echo "::error::$label: the required-reason scan failed on $rel."; problems=1; }
+            done < <(find "$root" -type f | sort)
+            echo "$label: $count Mach-O files scanned under $root"
+            if [ "$count" -eq 0 ]; then echo "::error::$label: no Mach-O file found, so no scan is possible (X2 evidence incomplete)."; problems=1; fi
+            # Where each manifest is, with its SHA-256 and the declared required-reason entries (public plist text).
+            ( cd "$root" && find . -name PrivacyInfo.xcprivacy | sort | sed 's|^\./||' ) > "$out/privacy-manifests.txt"
+            : > "$out/privacy-manifests-detail.txt"
+            while IFS= read -r m; do
+              [ -n "$m" ] || continue
+              {
+                echo "== $m"
+                echo "sha256=$(shasum -a 256 "$root/$m" | awk '{print $1}')"
+                plutil -convert json -o - "$root/$m" 2>&1 | head -c 4000
+                echo
+              } >> "$out/privacy-manifests-detail.txt"
+            done < "$out/privacy-manifests.txt"
+            echo "$label: $(wc -l < "$out/privacy-manifests.txt" | tr -d ' ') PrivacyInfo.xcprivacy file(s)"
+            # The framework that carries the pinned Rust library.
+            fwdir="$root/Frameworks/dlc_wallet.framework"
+            if [ -f "$fwdir/dlc_wallet" ] && file -b "$fwdir/dlc_wallet" | grep -q 'Mach-O'; then
+              { echo "framework_dir=Frameworks/dlc_wallet.framework"; ls -la "$fwdir"; echo; echo "-- manifests inside the framework bundle:"; ( cd "$fwdir" && find . -name PrivacyInfo.xcprivacy | sort ); echo "(end)"; } > "$out/dlc_wallet-framework.txt"
+            else
+              echo "::error::$label: $fwdir/dlc_wallet is missing or is not a Mach-O file; the dlc_wallet inspection (X2) cannot be done."
+              problems=1
+            fi
+          done
+          if diff -q diagnostics/preflight/required-reason-imports.txt diagnostics/archive/required-reason-imports.txt >/dev/null; then
+            echo "required_reason_imports_preflight_vs_archive=identical" | tee diagnostics/scan-compare.txt
+          else
+            echo "required_reason_imports_preflight_vs_archive=DIFFER (see both files)" | tee diagnostics/scan-compare.txt
+          fi
+          [ "$problems" -eq 0 ] || exit 1
+
+      # 4b. IOS_RELEASE.md section 9, "Native symbol-table inspection (Issue #22)": evidence, not a pass or a fail.
+      - name: Inspect the pinned library and the built dlc_wallet framework (symbols)
+        run: |
+          set -uo pipefail
+          set +e
+          out=diagnostics/native
+          mkdir -p "$out"
+          printf '%s\n' _create_cet_adaptor_sigs_c _create_deterministic_nonce_c _free_cstring _get_address_c _get_public_key_c _get_xpub_c _init_from_file_c _init_with_entropy_c _sign_hash_ecdsa_c > "$out/lib-exports-expected.txt"
+          lipo -info "$RUST_LIB" > "$out/lib-lipo.txt" 2>&1
+          lipo "$RUST_LIB" -thin arm64 -output "$RUNNER_TEMP/lib-arm64.a" || { echo "::error::lipo could not thin the arm64 slice."; exit 1; }
+          nm -a "$RUNNER_TEMP/lib-arm64.a" > "$RUNNER_TEMP/lib-arm64.nm.txt" 2>"$out/lib-nm.err"
+          # The full table is large and is not kept; its digest and size are.
+          echo "lib_arm64_nm_sha256=$(shasum -a 256 "$RUNNER_TEMP/lib-arm64.nm.txt" | awk '{print $1}')" > "$out/lib-summary.txt"
+          echo "lib_arm64_nm_lines=$(wc -l < "$RUNNER_TEMP/lib-arm64.nm.txt" | tr -d ' ')" >> "$out/lib-summary.txt"
+          # (a) names that must NOT exist: no output expected
+          grep -E 'sign_schnorr_with_nonce|schnorrsig_sign_with_nonce|constant_nonce_fn' "$RUNNER_TEMP/lib-arm64.nm.txt" > "$out/lib-forbidden-names.txt" || true
+          echo "lib_forbidden_name_lines=$(wc -l < "$out/lib-forbidden-names.txt" | tr -d ' ')" >> "$out/lib-summary.txt"
+          # (b) the C functions the library exports: the nine expected
+          nm -g --defined-only "$RUNNER_TEMP/lib-arm64.a" 2>>"$out/lib-nm.err" | grep -E ' T _(create|free|get|init|sign)[a-z_]*$' | awk '{print $3}' | sort -u > "$out/lib-exports.txt" || true
+          if diff -q "$out/lib-exports-expected.txt" "$out/lib-exports.txt" >/dev/null; then echo "lib_exports=exactly the nine expected" >> "$out/lib-summary.txt"; else echo "lib_exports=DIFFER from the nine expected (see lib-exports.txt)" >> "$out/lib-summary.txt"; fi
+          echo "lib_create_deterministic_nonce_lines=$(grep -c 'create_deterministic_nonce' "$RUNNER_TEMP/lib-arm64.nm.txt" || true)" >> "$out/lib-summary.txt"
+          # (c) the built frameworks (both applications): exports and strings
+          for pair in "preflight:$PRE_APP" "archive:$ARCHIVE_APP"; do
+            label="${pair%%:*}"; root="${pair#*:}"
+            fw="$root/Frameworks/dlc_wallet.framework/dlc_wallet"
+            [ -f "$fw" ] || { echo "::error::$label: $fw is missing."; exit 1; }
+            { echo "-- lipo"; lipo -info "$fw" 2>&1; echo "-- otool -L"; otool -L "$fw" 2>&1; echo "-- vtool"; vtool -show-build "$fw" 2>&1 | head -n 20; echo "-- file"; file -b "$fw"; } > "$out/$label-dlc_wallet-info.txt"
+            nm -gU "$fw" > "$out/$label-dlc_wallet.exports.txt" 2>"$out/$label-dlc_wallet.exports.err"
+            [ -s "$out/$label-dlc_wallet.exports.err" ] || rm -f "$out/$label-dlc_wallet.exports.err"
+            {
+              echo "exports_lines=$(wc -l < "$out/$label-dlc_wallet.exports.txt" | tr -d ' ')"
+              echo "forbidden_names_in_exports=$(grep -cE 'sign_schnorr_with_nonce|schnorrsig_sign_with_nonce|constant_nonce_fn' "$out/$label-dlc_wallet.exports.txt" || true)"
+              echo "forbidden_names_in_strings=$(strings -a "$fw" | grep -cE 'sign_schnorr_with_nonce|schnorrsig_sign_with_nonce|constant_nonce_fn' || true)"
+              echo "create_deterministic_nonce_in_exports=$(grep -c 'create_deterministic_nonce' "$out/$label-dlc_wallet.exports.txt" || true)"
+              echo "binary_sha256=$(shasum -a 256 "$fw" | awk '{print $1}')"
+            } > "$out/$label-dlc_wallet-summary.txt"
+            cat "$out/$label-dlc_wallet-summary.txt"
+          done
+
+      # 5. What the later signing procedure will meet. Nothing is exported, signed or sent anywhere.
+      - name: Inspect the unsigned archive structure (no export, no signing)
+        run: |
+          set -uo pipefail
+          set +e
+          out=diagnostics/archive-structure
+          mkdir -p "$out"
+          arc="$ARCHIVE_PATH"
+          {
+            echo "archive=$arc"
+            for p in Info.plist Products/Applications/Runner.app dSYMs SwiftSupport Products/Applications/Runner.app/Frameworks Products/Applications/Runner.app/embedded.mobileprovision Products/Applications/Runner.app/_CodeSignature; do
+              if [ -e "$arc/$p" ]; then echo "present: $p"; else echo "absent:  $p"; fi
+            done
+          } > "$out/presence.txt"
+          cat "$out/presence.txt"
+          find "$arc" -maxdepth 3 | sed "s|^$arc|.|" | sort | head -n 200 > "$out/tree-depth3.txt"
+          find "$arc/dSYMs" -maxdepth 1 2>/dev/null | sed "s|^$arc|.|" | sort > "$out/dsyms.txt" || true
+          find "$arc/SwiftSupport" -maxdepth 3 2>/dev/null | sed "s|^$arc|.|" | sort > "$out/swiftsupport.txt" || true
+          plutil -p "$arc/Info.plist" > "$out/archive-Info.plist.txt" 2>&1 || true
+          cat "$out/archive-Info.plist.txt"
+          plutil -p "$ARCHIVE_APP/Info.plist" 2>/dev/null | grep -E 'CFBundleIdentifier|CFBundleShortVersionString|CFBundleVersion|CFBundleDisplayName|MinimumOSVersion|DTSDKName|DTXcode|DTPlatformVersion|UIBackgroundModes|remote-notification' > "$out/app-Info.plist-keys.txt" || true
+          # Signature state of the archived app: it must be unsigned (the later signing stage adds the signature).
+          { codesign -dv "$ARCHIVE_APP" 2>&1 | head -n 6; } > "$out/codesign-state.txt" || true
+          cat "$out/codesign-state.txt"
+          # No entitlements are embedded (the project has no entitlements file; D6).
+          { codesign -d --entitlements :- "$ARCHIVE_APP" 2>&1 | head -n 10; } > "$out/entitlements-state.txt" || true
+          # What re-signing this app would involve (the repository's own analysis tool, read-only).
+          python3 -I tool/verify_ipa.py analyze-unsigned "$ARCHIVE_APP" > "$out/analyze-unsigned.txt" 2>&1; echo "analyze_unsigned_exit=$?" >> "$out/analyze-unsigned.txt"
+          tail -n 25 "$out/analyze-unsigned.txt"
+          # Is there signing material on this runner? (evidence that the run is credential-free)
+          {
+            echo "codesigning identities: $(security find-identity -p codesigning 2>&1 | tail -n 1)"
+            echo "provisioning profiles installed: $(ls "$HOME/Library/MobileDevice/Provisioning Profiles" 2>/dev/null | wc -l | tr -d ' ')"
+            echo "Xcode accounts configured: none by this workflow (no sign-in is attempted)"
+          } > "$out/runner-signing-material.txt"
+          cat "$out/runner-signing-material.txt"
+          if [ ! -f "$arc/Info.plist" ]; then echo "::error::The archive has no Info.plist."; exit 1; fi
+
+      - name: Record the Xcode commands and export options this runner offers (no export is run)
+        run: |
+          set -uo pipefail
+          set +e
+          out=diagnostics/xcode-tools
+          mkdir -p "$out"
+          { xcodebuild -version; xcodebuild -showsdks 2>&1 | grep -i iphoneos; } > "$out/xcodebuild-version.txt" 2>&1 || true
+          xcodebuild -help > "$out/xcodebuild-help.txt" 2>&1 || true
+          {
+            for k in -exportArchive -exportOptionsPlist -allowProvisioningUpdates -authenticationKeyPath -authenticationKeyID -authenticationKeyIssuerID -archivePath -exportPath; do
+              echo "xcodebuild option $k: $(grep -c -- "$k" "$out/xcodebuild-help.txt" | tr -d ' ') mention(s) in -help"
+            done
+            echo
+            echo "export options keys named in -help (IOS_RELEASE.md section 8 lists two as unconfirmed against Apple's documentation):"
+            for k in method teamID signingStyle signingCertificate provisioningProfiles destination uploadSymbols manageAppVersionAndBuildNumber testFlightInternalTestingOnly stripSwiftSymbols compileBitcode thinning; do
+              echo "  $k: $(grep -c -- "$k" "$out/xcodebuild-help.txt" | tr -d ' ') mention(s)"
+            done
+            echo
+            echo "lines naming method values:"
+            grep -n -E 'app-store-connect|release-testing|debugging|enterprise|developer-id|validation' "$out/xcodebuild-help.txt" | head -n 20 || true
+          } > "$out/export-options-keys.txt"
+          cat "$out/export-options-keys.txt"
+          # altool and Transporter: only whether they exist and what they document. `--help` prints text and contacts nothing.
+          {
+            echo "altool: $(xcrun --find altool 2>&1)"
+            xcrun altool --help > "$out/altool-help.txt" 2>&1 || true
+            for k in --upload-app --upload-package --validate-app --apiKey --apiIssuer --api-key --api-issuer --type --output-format; do
+              echo "altool option $k: $(grep -c -- "$k" "$out/altool-help.txt" | tr -d ' ') mention(s)"
+            done
+            echo "iTMSTransporter via xcrun: $(xcrun --find iTMSTransporter 2>&1 | head -n1)"
+            echo "iTMSTransporter inside Xcode: $(find "$XCODE_APP" -name iTMSTransporter -type f 2>/dev/null | head -n3 | tr '\n' ' ')"
+            echo "Transporter.app installed: $([ -d /Applications/Transporter.app ] && echo yes || echo no)"
+          } > "$out/upload-tools.txt"
+          cat "$out/upload-tools.txt"
+
+      - name: Seal the evidence (SHA-256 sums, text-only and size guard)
+        if: always()
+        run: |
+          set -uo pipefail
+          set +e
+          [ -d diagnostics ] || { echo "no diagnostics directory; nothing to seal"; exit 0; }
+          cp "$RUNNER_TEMP/build-ios.log" diagnostics/build-ios.log 2>/dev/null || true
+          cp "$RUNNER_TEMP/build-ipa.log" diagnostics/build-ipa.log 2>/dev/null || true
+          # Text only: nothing binary, nothing large. An app, an archive or a library is never kept.
+          bad="$(find diagnostics -type f | while IFS= read -r f; do enc="$(file -b --mime-encoding "$f")"; [ "$enc" = "binary" ] && echo "$f"; done)"
+          if [ -n "$bad" ]; then echo "::error::Binary file(s) in the evidence; refusing to keep them:"; echo "$bad"; rm -f $bad; fi
+          kb="$(du -sk diagnostics | awk '{print $1}')"
+          echo "evidence size: ${kb} KB"
+          if [ "$kb" -gt 40960 ]; then echo "::error::The evidence is larger than 40 MB; refusing to upload it."; exit 1; fi
+          ( cd diagnostics && find . -type f ! -name SHA256SUMS.txt -print0 | xargs -0 shasum -a 256 | sort -k2 > SHA256SUMS.txt )
+          echo "files: $(wc -l < diagnostics/SHA256SUMS.txt | tr -d ' ')"
+          echo "SHA256SUMS.txt sha256: $(shasum -a 256 diagnostics/SHA256SUMS.txt | awk '{print $1}')"
+
+      - name: Report (job summary)
+        if: always()
+        run: |
+          set +e
+          {
+            echo "## iOS release diagnostics (credential-free; NOT a release)"
+            echo
+            echo "Unsigned builds only. Nothing was signed, exported or sent to Apple; no credential was used."
+            echo "**This run decides nothing**: it is evidence for the release coordinator's decision X2. No statement that the"
+            echo "app complies with Apple's required-reason rules, or that Apple will accept the upload, follows from it."
+            echo
+            for f in diagnostics/source.txt diagnostics/toolchain.txt diagnostics/rust_lib.txt diagnostics/scan-compare.txt; do
+              [ -f "$f" ] && { echo "### ${f#diagnostics/}"; echo '```'; cat "$f"; echo '```'; }
+            done
+            for label in preflight archive; do
+              d="diagnostics/$label"
+              [ -d "$d" ] || continue
+              echo "### $label application"
+              echo "- Mach-O files scanned: $(wc -l < "$d/macho-files.txt" | tr -d ' ')"
+              echo "- PrivacyInfo.xcprivacy files: $(wc -l < "$d/privacy-manifests.txt" | tr -d ' ')"
+              echo
+              echo "Required-reason matches per binary (nm -u; empty list = no match):"
+              echo '```'
+              awk '/^== /{name=$2; next} {c[name]++} END{for (n in c) printf "%-70s %d\n", n, c[n]}' "$d/required-reason-imports.txt" | sort
+              echo '```'
+              echo "Privacy manifests found:"
+              echo '```'
+              cat "$d/privacy-manifests.txt"
+              echo '```'
+              [ -f "$d/dlc_wallet-framework.txt" ] && { echo "dlc_wallet.framework:"; echo '```'; cat "$d/dlc_wallet-framework.txt"; echo '```'; }
+            done
+            for f in diagnostics/native/lib-summary.txt diagnostics/native/preflight-dlc_wallet-summary.txt diagnostics/native/archive-dlc_wallet-summary.txt diagnostics/archive-structure/presence.txt diagnostics/xcode-tools/upload-tools.txt; do
+              [ -f "$f" ] && { echo "### ${f#diagnostics/}"; echo '```'; cat "$f"; echo '```'; }
+            done
+            [ -f diagnostics/xcode-tools/export-options-keys.txt ] && { echo "### Export options named by this Xcode"; echo '```'; cat diagnostics/xcode-tools/export-options-keys.txt; echo '```'; }
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      # Text only, kept for 30 days. Uploaded even when a step failed, so that a failure can be read.
+      - name: Upload the text evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: ios-release-diagnostics_${{ inputs.approved_sha }}_run${{ github.run_id }}-${{ github.run_attempt }}
+          path: diagnostics/
+          if-no-files-found: warn
+          retention-days: 30
