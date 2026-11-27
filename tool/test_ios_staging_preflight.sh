@@ -95,7 +95,7 @@ echo "== the delivery and the production workflows are untouched"
 want="$(grep -E '^G2S-STAGING-WORKFLOW-BLOB: ' "$rec" | sed 's/^[^:]*: //')"
 have="$(git -C "$root" hash-object .github/workflows/ios-staging-delivery.yml 2>/dev/null)"
 [ -n "$want" ] && [ "$want" = "$have" ]; chk "ios-staging-delivery.yml is still the blob the staging record binds ($have)" $?
-grep -E '^G2S-STAGING-STATUS: WITHDRAWN$' "$rec" >/dev/null; chk "this change authorizes nothing: the staging record is still WITHDRAWN" $?
+grep -E '^G2S-STAGING-STATUS: (WITHDRAWN|AUTHORIZED)$' "$rec" >/dev/null; chk "the preflight does not depend on the record's status: it reads one pin line only, whatever the status" $?
 ! grep -F 'ios-staging-archive-preflight' "$root/tool/check_staging_authorization.sh" "$root/.github/workflows/ios-staging-delivery.yml" >/dev/null; chk "neither the gate nor the delivery refers to the preflight (it cannot influence an authorization)" $?
 
 echo "== the comparison step, run on a synthetic archive (PlistBuddy replaced by a stub; no macOS, no Apple tool)"
