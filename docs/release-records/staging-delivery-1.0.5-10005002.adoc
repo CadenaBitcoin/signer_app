@@ -41,24 +41,45 @@ It contains no credential and no secret value. GitHub Actions artifacts expire (
 | VERIFIED by API read after the run
 | <<credentials>>
 
-| The build finished processing in App Store Connect / TestFlight
-| NOT CONFIRMED
-| nothing in the repository or the workflow reads App Store Connect after the upload
+| Apple finished processing the build in App Store Connect / TestFlight
+| CTO-REPORTED
+| <<testflight>> (the CTO verified it personally in App Store Connect; nothing in the repository or the workflow reads App Store Connect, so it cannot be re-verified from here)
 
-| The build is available to the internal tester group
-| NOT CONFIRMED
-| tester assignment is not automated
+| The build is assigned to the internal testing group and its TestFlight status is "Testing"
+| CTO-REPORTED
+| <<testflight>>
 
-| Export compliance and App Privacy answers for the staging application
-| NOT CONFIRMED
-| human action in App Store Connect (the verifier warns that `ITSAppUsesNonExemptEncryption` is absent)
+| Export compliance questionnaire, including the France-specific questions
+| CTO-REPORTED
+| <<testflight>> (the verifier had warned that `ITSAppUsesNonExemptEncryption` is absent, so the question was expected)
 
-| The application installs on a tester device and shows `1.0.5 (10005002)` and the staging identity
+| App Privacy answers for the staging application
 | NOT CONFIRMED
-| to be recorded by the testers
+| not part of the CTO's report; not required to be reported by this page's evidence
+
+| The application is installed on a tester device and shows `1.0.5 (10005002)` and the staging identity
+| NOT CONFIRMED
+| the testers have been instructed to install it; installation and functional verification are pending
+
+| The application works functionally against the staging backend on a device
+| NOT CONFIRMED
+| pending the testers' report
 |===
 
-Technical delivery to Apple succeeded. Processing, tester availability and installation are separate steps that have not been confirmed.
+Technical delivery to Apple succeeded, and the CTO reports that processing, export compliance and the internal group assignment are complete. Device installation and functional verification remain pending.
+
+[[testflight]]
+== TestFlight status (reported by the CTO, 2026-11-27)
+
+The CTO personally verified in App Store Connect (a human observation; it is recorded here as reported, not as repository-verified evidence):
+
+* application "Cadena Signer STAGING", version `1.0.5`, build `10005002`;
+* Apple build processing: completed;
+* export compliance questionnaire, including the France-specific questions: completed;
+* internal testing group assignment: confirmed;
+* TestFlight status: "Testing"; remaining TestFlight validity of the build: 90 days.
+
+The two internal testers named in `docs/IOS_STAGING_DELIVERY.md` section 5 have been instructed to install the new, separate staging application. Their installation and functional verification are **pending** and are not part of this page's verified claims.
 
 == Identity and source
 
@@ -197,7 +218,7 @@ The two text evidence artifacts hold the files this page summarizes (`delivery-r
 
 == Remaining work after this record
 
-. Confirm in App Store Connect that the build processed; answer export compliance and App Privacy; make sure the internal group receives the build; install it and record the Dashboard version and staging identity.
+. The testers install the application on a device and report the Dashboard version `1.0.5 (10005002)`, the staging identity ("Cadena Signer STAGING", Signet, staging backend) and whether it works against the staging backend; add that result to this page. The TestFlight build is valid for 90 days from the CTO's report.
 . The staging authorization record is withdrawn by the pull request that adds this page (decision S3); a new delivery needs a new version, a reviewed pull request and a new CTO decision.
 . Deferred by the CTO until after this delivery: reconciliation of the release-policy documents (`RELEASE_POLICY.md` 2.3, 3.1, 7.1 to 7.4; `IOS_SIGNING.md` section 6).
 . Open technical follow-ups, none blocking: the iOS deployment target and SDK warnings (April 2027), the CodeQL alert premise (`cache: false` in the diagnostics workflow), an optional off-GitHub copy of the evidence.
