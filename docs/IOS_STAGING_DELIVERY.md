@@ -174,8 +174,8 @@ the resulting file has the git blob `13c9efdd...` that the runner printed. The l
 ## 9. Not proven until the first real run
 
 The new workflow's secret-bearing steps are the production steps' text, but: the staging archive and `flutter build ipa --flavor staging` have only been compiled as an unsigned `.app` by CI before;
-whether Apple's cloud signing creates the staging App ID and profile on its own (A1 removes the doubt); the framework hash of a staging archive (the record's proposal is the production value; a mismatch stops the run
-before any secret and prints the real value; section 10 is the credential-free preflight that shows it beforehand); and the Podfile.lock regeneration of section 6. Expect one or two corrective pull requests on the first real run; each stops safely.
+whether Apple's cloud signing creates the staging App ID and profile on its own (A1 removes the doubt); the framework hash of a staging archive (the record's proposal is the staging archive's own value, measured by two preflight runs, section 10.1; a different hash stops the run
+before any secret and prints the real value); and the Podfile.lock regeneration of section 6. Expect one or two corrective pull requests on the first real run; each stops safely.
 
 **Also not proven: that a secret added while the job waits is available when it starts.** GitHub documents that a job cannot access environment secrets until the required reviewers approve it, which points
 the right way, but nothing in this repository shows a secret being added during the wait (the production authorizations added theirs before dispatch). The operational order of section 1.1 depends on it. Appendix A
@@ -185,7 +185,7 @@ provision the secrets before the merge (they would then exist in the environment
 ## 10. Credential-free preflight of the staging archive (the `dlc_wallet` hash before any authorization)
 
 **Why.** The record pins the SHA-256 of `Frameworks/dlc_wallet.framework/dlc_wallet` inside the unsigned **archive** that the `build` job makes with `flutter build ipa --release --no-codesign --flavor staging`
-and the `sign` job extracts. The proposed pin (`9a2d1d98…fc13`) was measured on **production** archives of 1.0.4; no staging archive existed. A mismatch stops a real delivery before any secret and, under
+and the `sign` job extracts. The first proposed pin (`9a2d1d98…fc13`) was measured on **production** archives of 1.0.4, because no staging archive existed; it was replaced by the staging value of section 10.1 once the preflight showed that it cannot match. A mismatch stops a real delivery before any secret and, under
 RELEASE_POLICY.md 7.3, consumes the build number of the promotion. The preflight finds out first, from the tip of `development`, with no credential.
 
 **Why not `ios-ci-validation.yml`.** It runs `flutter build ios`, whose product is a bare `Runner.app`, not an archive. The `dlc_wallet` binary of its run 45958826732 hashes to `65a0b90d…814b1`: not the pin, but also **not
@@ -207,6 +207,25 @@ and the artifact `ios-staging-preflight-evidence_<run>-<attempt>` (text: the has
 
 **Limit.** The same commands on the same pins are strong evidence, not a proof of byte equality: the runner image version of the day, and what Apple's tools do with it, are not under this repository's control (the
 production hash was equal in every build on two runner images, an observation). If a preflight and a later delivery ever disagree, the delivery's check decides and the cause is investigated before the next promotion.
+
+### 10.1 The first two preflight runs: the staging value is the proposed pin
+
+| | Run 1 | Run 2 |
+|---|---|---|
+| Run | [45967581978](https://github.com/CadenaBitcoin/signer_app/actions/runs/45967581978) | [45969558826](https://github.com/CadenaBitcoin/signer_app/actions/runs/45969558826) |
+| Source | `development` `2aac65d2b3ee33918f4a636c7442d52e139abdec`, tree `a94a58588209aaa57233a916b0217bdf08aa3bcb`, `1.0.5+10005001` | the same |
+| Build | `flutter build ipa --release --no-codesign --flavor staging --dart-define-from-file=config/build/staging.json` | the same |
+| Toolchain | runner image `macos15 20261118.0550.1`, macOS 15.8.2, Xcode 26.3 (17C529), SDK 26.2, Flutter 3.35.3, Dart 3.9.2, CocoaPods 1.17.0, Rust library `203dcd7a…949b` | identical |
+| `dlc_wallet` SHA-256 | `92231f38c71864833cd6bcdf03c4849c72e6e0a7d66bd59b826dd2798680646d` | identical |
+| Archive tar SHA-256 | `d288829b…500b` | `d13a735b…20e5` (the tar differs, the framework does not) |
+
+Both runs reported `DIFFERENT` because the record then still carried the production value; that was the expected, visible failure, not a defect.
+
+**The staging value is therefore the proposed authorization pin** (`G2S-STAGING-DLC-WALLET-SHA256` in the record, with its provenance in the record's section 2.1). It is evidence supporting decision C2, **not the CTO's approval of C2**.
+
+**Why the production value cannot be reused.** The framework embeds Xcode's object-file paths, which carry the flavor and the build action: `ArchiveIntermediates/production/…/Pods.build/Release-production-iphoneos/dlc_wallet.build/…` in the production archive, `…/Release-staging-iphoneos/dlc_wallet.build/…` in a staging build. After normalizing those four path strings the two binaries' string tables are identical (17,169 strings), the bytes are not. Any staging archive therefore differs from any production archive. (A staging `flutter build ios` binary, `65a0b90d…`, was identical across two sources, 1.0.4 and 1.0.5, which also shows that a version change alone does not move the hash.)
+
+**Limitation.** The two runs used one runner image, so equality across images is not shown. A change of Xcode, of the runner image's tools or paths, of the runner work directory, of the Pods build layout or of any compiler-generated path can change the hash. The delivery then stops before Xcode and before any secret, and the promotion's build number is consumed (RELEASE_POLICY.md 7.3). Run the preflight again on the final `development` tip, after the authorization pull request is merged and before the promotion; it must report `MATCH`.
 
 ## Appendix A. Harmless test: do secrets added during the wait reach the job?
 
