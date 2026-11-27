@@ -36,6 +36,11 @@ trap 'rm -rf "$tmp"' EXIT
 TEAM=SYNTH12345
 NOW="$(python3 -c "import datetime;print((datetime.datetime.now(datetime.timezone.utc)+datetime.timedelta(hours=1)).strftime('%Y-%m-%dT%H:%M:%SZ'))")"
 fx() { python3 -I "$fixture" "$@" >/dev/null; }
+# The build number of the application under test: read from pubspec.yaml by the same loader the fixture
+# (tool/ipa_fixture.py) uses for the synthetic Info.plist, so an expectation that names it follows every
+# reviewed version change and is never a literal.
+pub_build="$(python3 -I -c 'import sys; sys.path.insert(0, sys.argv[1]); import build_manifest as BM; print(BM.load_pubspec(sys.argv[2])[2])' "$root/tool" "$root" 2>/dev/null)"
+case "$pub_build" in ''|*[!0-9]*) echo "FAIL cannot read the build number of pubspec.yaml for the expectations below ('$pub_build')"; exit 1;; esac
 common=(--team-id "$TEAM" --issuer-cn "Synthetic Test Intermediate CA" --leaf-prefix "Synthetic Distribution:" --now "$NOW" --allow-synthetic)
 
 fx certs "$tmp/certs"
@@ -738,7 +743,7 @@ if grep -F "AIzaSy" <<<"$out" >/dev/null; then bad "an innocently named key's va
 cmpexpect "a long value of an unapproved key is reported by size only" \
   'd["CFBundleName"] = "n" * 300' "<string, 300 character(s), 300 byte(s) in UTF-8; value not shown>"
 cmpexpect "an approved key whose value is outside the approved form (too long) is not shown either" \
-  'd["CFBundleVersion"] = "9" * 200' "~ CFBundleVersion (string value): '1000035' ->" "<string, 200 character(s)"
+  'd["CFBundleVersion"] = "9" * 200' "~ CFBundleVersion (string value): '$pub_build' ->" "<string, 200 character(s)"
 cmpexpect "several differences are all listed (one added, one removed, one changed)" \
   'd["ZZAddedByTest"] = 1; del d["DTSDKName"]; d["CFBundleVersion"] = "2"' "+ ZZAddedByTest (integer) = <integer; value not shown>" "- DTSDKName (string)" "~ CFBundleVersion (string value)" "DIFFERENT CONTENT: 1 added, 1 removed, 1 changed"
 rm -rf "$tmp/cc_garbage" && mkdir -p "$tmp/cc_garbage" && cp -R "$tmp/staging/Runner.app" "$tmp/cc_garbage/Runner.app" && printf 'not a property list' > "$tmp/cc_garbage/Runner.app/Info.plist"
