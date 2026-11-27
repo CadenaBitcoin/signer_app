@@ -188,6 +188,7 @@ run can use an older commit's tools.
 |---|---|---|
 | **An installable Android staging APK of the current `development`** | *Actions → Android CI validation build → Run workflow*, workflow from `development` | a downloadable, debug-signed, labelled APK (14 days) plus a notice file with the commit SHA, marked **MANUALLY GENERATED** |
 | Compile validation of the variants, with manifests and evidence (no binary) | *Actions → Build variants → Run workflow* | verified evidence and manifests, marked **MANUALLY GENERATED** |
+| The `dlc_wallet` hash of the iOS **staging archive**, before any authorization (credential-free) | *Actions → iOS staging archive preflight → Run workflow*, branch `development` | `MATCH` or `DIFFERENT` against the staging record's proposed pin; text evidence only, nothing signed or uploaded ([IOS_STAGING_DELIVERY.md](IOS_STAGING_DELIVERY.md) section 10) |
 
 The first is the existing workflow that already publishes the APK of a staging merge
 ([ANDROID_CI.md](ANDROID_CI.md)); a manual run of it is the same build, verification and upload, with two

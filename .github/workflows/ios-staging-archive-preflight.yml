@@ -1,0 +1,291 @@
+# Manual, credential-free PREFLIGHT of the staging archive: what hash will the staging delivery see for the dlc_wallet framework?
+#
+# WHY. The staging authorization (docs/release-records/ios-staging-authorization.md) pins the SHA-256 of
+# Frameworks/dlc_wallet.framework/dlc_wallet inside the UNSIGNED ARCHIVE that the delivery's `build` job makes (`flutter build ipa --release
+# --no-codesign --flavor staging`) and its `sign` job extracts from the hand-over tar. The proposed pin comes from the PRODUCTION archives of
+# 1.0.4; no staging archive was ever made. A mismatch would stop a real delivery (before any secret) and, under RELEASE_POLICY.md 7.3, consume the
+# build number of the promotion. This workflow makes the SAME archive from the tip of `development`, with no credential, so that the hash is known
+# BEFORE anything is authorized. `ios-ci-validation.yml` cannot do it: it runs `flutter build ios`, whose product is not an archive, and the hash it
+# would give is not the one the gate compares (docs/IOS_STAGING_DELIVERY.md section 10).
+#
+# WHAT IT IS NOT. Not an authorization, not a delivery, not signing. It has no secret, no environment, no Apple name, no signing or upload command, and
+# it uploads no binary (text evidence only). It never reads the record's status; it only reads the proposed pin the same way the signing job does.
+# The delivery workflow (.github/workflows/ios-staging-delivery.yml, a bound blob of the record) is NOT changed by it.
+#
+# EQUIVALENCE (proved by tool/test_ios_staging_preflight.sh, not assumed): the environment pins, the toolchain, the dependency, configuration and
+# Rust checks, the ONE compile, the unsigned-app verification and the packing steps are the TEXT of the delivery's `build` job (the test compares
+# them, comments removed); the extraction and the hashed path are those of the delivery's `sign` job. What is NOT identical is the runner
+# image version of the day and whatever Apple's tools do with it: the production hash was equal in every build on two runner images, but that is
+# an observation. A preflight result is therefore strong evidence, and the delivery's own check before any secret stays the final one.
+#
+# HOW TO RUN (maintainer): Actions -> "iOS staging archive preflight" -> Run workflow, branch `development`. A run on any other ref, or on a commit
+# that is not the current tip of `development`, fails at once. Result: green and "MATCH" when the archive's framework equals the proposed pin;
+# red and "DIFFERENT" (with the real value in the log, the summary and the evidence) otherwise, so that no mismatch is a silent green.
+
+name: iOS staging archive preflight
+
+on:
+  workflow_dispatch:
+
+# Least privilege: the job only reads the repository. No release, no write access.
+permissions:
+  contents: read
+
+env:
+  BUILD_ENV: staging
+  BUILD_CONFIG_FILE: config/build/staging.json
+  BUNDLE_ID: com.app.cadenabitcoin.staging
+  DISPLAY_NAME: Cadena Signer STAGING
+  TEAM_ID: D65458CPDP
+  # The pins of ios-staging-delivery.yml, ios-ci-validation.yml and build-variants.yml.
+  XCODE_APP: /Applications/Xcode_26.3.app
+  EXPECTED_XCODE: "26.3"
+  EXPECTED_MIN_SDK_MAJOR: "26"
+  EXPECTED_COCOAPODS: "1.17.0"
+  EXPECTED_FLUTTER: "3.35.3"
+  EXPECTED_FLUTTER_REVISION: a402d9a437
+  EXPECTED_DART: "3.9.2"
+  RUST_LIB: flutter_plugin/flutter_plugin/ios/Classes/libdlcplazacryptlib.a
+  EXPECTED_RUST_LIB_SHA256: 203dcd7abe4187de0b756638a55f691b2d5c680b17d4fbfa7dda550ed703949b
+
+jobs:
+  preflight:
+    name: Unsigned staging archive of development and its dlc_wallet hash (no secret, no environment)
+    runs-on: macos-15
+    timeout-minutes: 90
+    steps:
+      # First, before any checkout: only a manual run on development.
+      - name: Refuse anything but a manual run on development
+        run: |
+          if [ "$GITHUB_EVENT_NAME" != "workflow_dispatch" ] || [ "$GITHUB_REF" != "refs/heads/development" ]; then
+            echo "::error::This preflight runs only as a manual run on the branch development (event '$GITHUB_EVENT_NAME', ref '$GITHUB_REF')."
+            exit 1
+          fi
+
+      - name: Checkout the commit of this run
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      - name: Verify the source (the current tip of development, clean tree)
+        run: |
+          set -uo pipefail
+          set +e
+          fail=0
+          head="$(git rev-parse HEAD)"
+          echo "HEAD=$head"
+          [ "$head" = "$GITHUB_SHA" ] || { echo "::error::HEAD is $head, expected $GITHUB_SHA."; fail=1; }
+          [ -z "$(git status --porcelain)" ] || { echo "::error::The working tree is not clean."; git status --short | head -n 20; fail=1; }
+          tip="$(git ls-remote "https://github.com/$GITHUB_REPOSITORY.git" refs/heads/development | awk '{print $1}')"
+          echo "development_tip=$tip"
+          [ "$tip" = "$head" ] || { echo "::error::$head is not the current tip of development ($tip). Run the preflight again on the tip."; fail=1; }
+          version="$(sed -n 's/^version:[[:space:]]*//p' pubspec.yaml | head -n1 | tr -d '[:space:]')"
+          echo "pubspec_version=$version"
+          [ "$fail" -eq 0 ] || exit 1
+          mkdir -p evidence
+          {
+            echo "source_commit=$head"
+            echo "tree=$(git rev-parse HEAD^{tree})"
+            echo "pubspec_version=$version"
+            echo "run=$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID (attempt $GITHUB_RUN_ATTEMPT)"
+          } > evidence/source.txt
+
+      # From here: the text of the delivery's `build` job.
+
+      - name: Select Xcode 26.3
+        run: |
+          sudo xcode-select -s "$XCODE_APP/Contents/Developer"
+          xcodebuild -version
+          actual="$(xcodebuild -version | sed -n '1s/^Xcode //p')"
+          if [ "$actual" != "$EXPECTED_XCODE" ]; then
+            echo "::error::Expected Xcode $EXPECTED_XCODE at $XCODE_APP but xcodebuild reports '$actual'."
+            exit 1
+          fi
+
+      - name: Set up Flutter 3.35.3
+        uses: subosito/flutter-action@1a449444c387b1966244ae4d4f8c696479add0b2 # v2
+        with:
+          flutter-version: "3.35.3"
+          channel: stable
+          cache: true
+
+      - name: Record and verify toolchain
+        run: |
+          arch="$(uname -m)"
+          iphoneos_sdk="$(xcrun --sdk iphoneos --show-sdk-version)"
+          pod_version="$(pod --version)"
+          flutter_json="$(flutter --version --machine)"
+          field() { printf '%s' "$flutter_json" | python3 -I -c "import sys,json; print(json.load(sys.stdin).get('$1',''))"; }
+          flutter_version="$(field frameworkVersion)"
+          flutter_revision="$(field frameworkRevision)"
+          dart_version="$(field dartSdkVersion | awk '{print $1}')"
+          {
+            echo "runner_image=${ImageOS:-unknown} ${ImageVersion:-unknown}"
+            echo "runner_arch=${arch}"
+            echo "macos=$(sw_vers -productVersion) ($(sw_vers -buildVersion))"
+            echo "xcode=$(xcodebuild -version | sed -n '1s/^Xcode //p') ($(xcodebuild -version | sed -n '2s/^Build version //p'))"
+            echo "iphoneos_sdk=${iphoneos_sdk}"
+            echo "flutter=${flutter_version} (revision ${flutter_revision:0:10})"
+            echo "dart=${dart_version}"
+            echo "cocoapods=${pod_version}"
+          } > evidence/toolchain.txt
+          cat evidence/toolchain.txt
+          fail=0
+          if [ "$arch" != "arm64" ]; then echo "::error::Runner architecture is '$arch', expected arm64."; fail=1; fi
+          if [ "$flutter_version" != "$EXPECTED_FLUTTER" ]; then echo "::error::Flutter is '$flutter_version', expected $EXPECTED_FLUTTER."; fail=1; fi
+          case "$flutter_revision" in
+            "$EXPECTED_FLUTTER_REVISION"*) ;;
+            *) echo "::error::Flutter revision is '$flutter_revision', expected $EXPECTED_FLUTTER_REVISION*."; fail=1 ;;
+          esac
+          if [ "$dart_version" != "$EXPECTED_DART" ]; then echo "::error::Dart is '$dart_version', expected $EXPECTED_DART."; fail=1; fi
+          case "${iphoneos_sdk%%.*}" in
+            ''|*[!0-9]*) echo "::error::Cannot read the iPhoneOS SDK version (got '$iphoneos_sdk')."; fail=1 ;;
+            *) if [ "${iphoneos_sdk%%.*}" -lt "$EXPECTED_MIN_SDK_MAJOR" ]; then echo "::error::Expected an iPhoneOS SDK $EXPECTED_MIN_SDK_MAJOR or later but Xcode $EXPECTED_XCODE provides $iphoneos_sdk."; fail=1; fi ;;
+          esac
+          if [ "$pod_version" != "$EXPECTED_COCOAPODS" ]; then echo "::error::CocoaPods is '$pod_version', expected $EXPECTED_COCOAPODS."; fail=1; fi
+          [ "$fail" -eq 0 ] || exit 1
+
+      - name: Resolve dependencies exactly as the lockfiles say
+        run: |
+          flutter pub get --enforce-lockfile
+          (cd flutter_plugin/flutter_plugin && flutter pub get)
+
+      - name: Repository checks (configuration, version wiring)
+        run: |
+          set -o pipefail
+          resolved="$(/bin/bash tool/verify_build_config.sh resolve "$BUILD_CONFIG_FILE" "$BUILD_ENV")"
+          echo "$resolved"
+          grep -qx "APP_ENV=$BUILD_ENV" <<<"$resolved" || { echo "::error::$BUILD_CONFIG_FILE does not resolve to APP_ENV=$BUILD_ENV"; exit 1; }
+          /bin/bash tool/verify_build_config.sh verify
+          /bin/bash tool/verify_version.sh 2>&1 | tee evidence/verify_version.txt
+
+      - name: Check that the prebuilt Rust static library is the audited one (not rebuilt)
+        id: rust
+        run: |
+          set -o pipefail
+          sha="$(shasum -a 256 "$RUST_LIB" | awk '{print $1}')"
+          {
+            echo "rust_lib=$RUST_LIB"
+            echo "rust_lib_sha256=$sha"
+            echo "rust_lib_expected_sha256=$EXPECTED_RUST_LIB_SHA256"
+          } | tee evidence/rust_lib.txt
+          if [ "$sha" != "$EXPECTED_RUST_LIB_SHA256" ]; then
+            echo "::error::$RUST_LIB has sha256 $sha, not the audited $EXPECTED_RUST_LIB_SHA256. Nothing was built."
+            exit 1
+          fi
+          echo "rust_lib_sha256=$sha" >> "$GITHUB_OUTPUT"
+
+      - name: Build the unsigned archive (flutter build ipa --no-codesign)
+        run: |
+          set -o pipefail
+          flutter build ipa --release --no-codesign --flavor "$BUILD_ENV" --dart-define-from-file="$BUILD_CONFIG_FILE" 2>&1 | tee "$RUNNER_TEMP/build-ipa.log"
+          archive=build/ios/archive/Runner.xcarchive
+          if [ ! -d "$archive/Products/Applications/Runner.app" ]; then
+            echo "::error::flutter build ipa --no-codesign produced no $archive/Products/Applications/Runner.app"
+            find build/ios/archive -maxdepth 4 2>/dev/null | head -n 40 || true
+            exit 1
+          fi
+          echo "ARCHIVE_PATH=$archive" >> "$GITHUB_ENV"
+          echo "ARCHIVE_APP=$archive/Products/Applications/Runner.app" >> "$GITHUB_ENV"
+          echo "build_command=flutter build ipa --release --no-codesign --flavor $BUILD_ENV --dart-define-from-file=$BUILD_CONFIG_FILE" > evidence/build.txt
+
+      - name: Verify the unsigned app (bundle ID, name, version, unsigned, environment) and the drift rule
+        run: |
+          /bin/bash tool/verify_artifact.sh selftest ios "$BUILD_ENV" "$ARCHIVE_APP" --min-sdk "$EXPECTED_MIN_SDK_MAJOR"
+          /bin/bash tool/verify_artifact.sh ios "$BUILD_ENV" "$ARCHIVE_APP" --min-sdk "$EXPECTED_MIN_SDK_MAJOR" --evidence evidence/verify_artifact_unsigned.txt
+          /bin/bash tool/check_build_drift.sh
+          # The archive must carry no signature, no profile and no entitlements: the signing job adds them.
+          { codesign -dv "$ARCHIVE_APP" 2>&1 | head -n 3; } > evidence/codesign-state.txt || true
+          grep -q 'not signed at all' evidence/codesign-state.txt || { echo "::error::The archived app is not 'not signed at all'."; cat evidence/codesign-state.txt; exit 1; }
+          [ ! -e "$ARCHIVE_APP/embedded.mobileprovision" ] && [ ! -e "$ARCHIVE_APP/_CodeSignature" ] || { echo "::error::The archived app carries a profile or a signature folder."; exit 1; }
+
+      - name: Pack the unsigned archive and fix its digest
+        id: pack
+        run: |
+          set -euo pipefail
+          COPYFILE_DISABLE=1 tar -C "$(dirname "$ARCHIVE_PATH")" -cf "$RUNNER_TEMP/Runner.xcarchive.tar" "$(basename "$ARCHIVE_PATH")"
+          mkdir -p handover
+          mv "$RUNNER_TEMP/Runner.xcarchive.tar" handover/Runner.xcarchive.tar
+          sha="$(shasum -a 256 handover/Runner.xcarchive.tar | awk '{print $1}')"
+          echo "archive_sha256=$sha" >> "$GITHUB_OUTPUT"
+          { echo "archive_tar_sha256=$sha"; echo "archive_tar_size=$(stat -f%z handover/Runner.xcarchive.tar)"; } >> evidence/build.txt
+          cat evidence/build.txt
+
+      # The delivery's `sign` job extracts the hand-over tar exactly like this (member list before, tree after, no script of the archive is run),
+      # reads the pin with the gate script, and hashes this path. No secret exists in this workflow.
+      - name: Extract the archive as the signing job does, and compare the dlc_wallet framework hash with the proposed pin
+        run: |
+          set -uo pipefail
+          isexact() { case "$1" in *$'\n'*|*$'\r'*) return 1 ;; esac; [[ "$1" =~ $2 ]]; }
+          re_hex64='^[0-9a-f]{64}$'
+          [ "$(ls handover | wc -l | tr -d ' ')" = "1" ] && [ -f handover/Runner.xcarchive.tar ] && [ ! -L handover/Runner.xcarchive.tar ] || { echo "::error::The hand-over holds something other than the regular file Runner.xcarchive.tar."; exit 1; }
+          python3 -I tool/validate_handover_archive.py list handover/Runner.xcarchive.tar --top Runner.xcarchive | tee evidence/archive-validate-list.txt
+          [ "${PIPESTATUS[0]}" -eq 0 ] || { echo "::error::The archive's member list is refused. Nothing was extracted."; exit 1; }
+          mkdir -p "$RUNNER_TEMP/archive"
+          tar -xf handover/Runner.xcarchive.tar -C "$RUNNER_TEMP/archive" || { echo "::error::The archive could not be extracted."; exit 1; }
+          python3 -I tool/validate_handover_archive.py tree "$RUNNER_TEMP/archive" | tee evidence/archive-validate-tree.txt
+          [ "${PIPESTATUS[0]}" -eq 0 ] || { echo "::error::The extracted archive is refused."; exit 1; }
+          ARCHIVE="$RUNNER_TEMP/archive/Runner.xcarchive"
+          APP="$ARCHIVE/Products/Applications/Runner.app"
+          [ -d "$APP" ] && [ ! -L "$APP" ] || { echo "::error::No Runner.app in the archive."; exit 1; }
+          pbid="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$APP/Info.plist")"
+          pbname="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleDisplayName' "$APP/Info.plist")"
+          pbver="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$APP/Info.plist")"
+          pbbld="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' "$APP/Info.plist")"
+          pubspec_version="$(sed -n 's/^version:[[:space:]]*//p' pubspec.yaml | head -n1 | tr -d '[:space:]')"
+          [ "$pbid" = "$BUNDLE_ID" ] && [ "$pbname" = "$DISPLAY_NAME" ] && [ "$pbver+$pbbld" = "$pubspec_version" ] || { echo "::error::The archived app says $pbid / $pbname / $pbver+$pbbld, expected $BUNDLE_ID / $DISPLAY_NAME / $pubspec_version."; exit 1; }
+          fw="$ARCHIVE/Products/Applications/Runner.app/Frameworks/dlc_wallet.framework/dlc_wallet"
+          [ -f "$fw" ] && [ ! -L "$fw" ] || { echo "::error::The archive has no regular file Frameworks/dlc_wallet.framework/dlc_wallet."; exit 1; }
+          actual="$(shasum -a 256 "$fw" | awk '{print $1}')"
+          proposed="$(bash tool/check_staging_authorization.sh --print-field G2S-STAGING-DLC-WALLET-SHA256 --record docs/release-records/ios-staging-authorization.md --tools-root .)"; rc=$?
+          if [ "$rc" -ne 0 ] || ! isexact "$proposed" "$re_hex64"; then echo "::error::The staging record carries no single, valid G2S-STAGING-DLC-WALLET-SHA256 line."; exit 1; fi
+          isexact "$actual" "$re_hex64" || { echo "::error::The framework hash could not be computed."; exit 1; }
+          if [ "$actual" = "$proposed" ]; then result=MATCH; else result=DIFFERENT; fi
+          {
+            echo "preflight_result=$result"
+            echo "dlc_wallet_archive_binary_sha256=$actual"
+            echo "dlc_wallet_proposed_pin_sha256=$proposed"
+            echo "bundle_id=$pbid"
+            echo "display_name=$pbname"
+            echo "version=$pbver+$pbbld"
+            echo "rust_lib_sha256=$(shasum -a 256 "$RUST_LIB" | awk '{print $1}')"
+            echo "archive_tar_sha256=$(shasum -a 256 handover/Runner.xcarchive.tar | awk '{print $1}')"
+            echo "note=Evidence only. This run authorizes nothing; the delivery's own check before any secret is the final one."
+          } > evidence/dlc-wallet-preflight.txt
+          cat evidence/dlc-wallet-preflight.txt
+          {
+            echo "### iOS staging archive preflight: $result"
+            echo ""
+            echo "| | |"
+            echo "|---|---|"
+            echo "| Source | \`$(git rev-parse HEAD)\` (tip of development) |"
+            echo "| Application | $pbid, $pbname, $pbver+$pbbld |"
+            echo "| dlc_wallet SHA-256 (this archive) | \`$actual\` |"
+            echo "| Proposed pin in the staging record | \`$proposed\` |"
+            echo ""
+            echo "Evidence only. Nothing was signed, uploaded or authorized."
+          } >> "$GITHUB_STEP_SUMMARY"
+          if [ "$result" != "MATCH" ]; then
+            echo "::error::The dlc_wallet framework of the staging archive is $actual, not the proposed pin $proposed. A delivery would stop before any secret."
+            exit 1
+          fi
+
+      - name: Seal the evidence (text only)
+        if: always()
+        run: |
+          set -uo pipefail
+          set +e
+          [ -d evidence ] || exit 0
+          bad="$(find evidence -type f | while IFS= read -r f; do [ -s "$f" ] || continue; enc="$(file -b --mime-encoding "$f")"; [ "$enc" = "binary" ] && echo "$f"; done)"
+          if [ -n "$bad" ]; then echo "::error::Binary file(s) in the evidence; refusing to keep them:"; echo "$bad"; rm -f $bad; fi
+          ( cd evidence && find . -type f ! -name SHA256SUMS.txt -print0 | xargs -0 shasum -a 256 | sort -k2 > SHA256SUMS.txt )
+
+      - name: Upload the evidence (text only; no archive, no binary)
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: ios-staging-preflight-evidence_${{ github.run_id }}-${{ github.run_attempt }}
+          path: evidence/
+          if-no-files-found: warn
+          retention-days: 30
