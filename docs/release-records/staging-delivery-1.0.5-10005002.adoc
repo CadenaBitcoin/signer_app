@@ -1,0 +1,235 @@
+= Staging delivery 1.0.5+10005002: delivery record
+:description: Durable, non-sensitive record of the first successful merge-triggered staging delivery (Android APK and iOS upload to App Store Connect).
+:revdate: 2026-11-27
+:issue: https://github.com/CadenaBitcoin/signer_app/issues/71
+
+// Documentation format: AsciiDoc is the canonical format decided by the CTO (2026-11-27). This page is written as an
+// independent, include-able module; migration of the existing Markdown documents is separate work. The staging
+// authorization record stays Markdown because tool/check_staging_authorization.sh parses it.
+
+This page records what the first successful automatic staging delivery did and what evidence supports each statement.
+It contains no credential and no secret value. GitHub Actions artifacts expire (see <<artifacts>>); this page and
+`docs/release-records/ios-staging-authorization.md` are the durable copy.
+
+== Status: what is verified and what is not
+
+[cols="2,1,3",options="header"]
+|===
+| Statement | State | Evidence
+
+| The merge `development` into `staging` started all five workflows and each finished with success
+| VERIFIED
+| <<runs>>
+
+| The unsigned iOS archive was built from the promotion commit and its `dlc_wallet` framework equalled the authorized pin
+| VERIFIED
+| <<build>>
+
+| The IPA was signed with the pinned Apple Distribution certificate and passed verification V1 to V9
+| VERIFIED
+| <<signing>>
+
+| Apple validated the IPA and accepted the upload of the same IPA (delivery UUID recorded)
+| VERIFIED
+| <<upload>>
+
+| The Android debug-signed staging validation APK for the same commit was built, verified and kept as an Actions artifact
+| VERIFIED
+| <<android>>
+
+| The three temporary Apple secrets were removed and no secret exists at any level
+| VERIFIED by API read after the run
+| <<credentials>>
+
+| Apple finished processing the build in App Store Connect / TestFlight
+| CTO-REPORTED
+| <<testflight>> (the CTO verified it personally in App Store Connect; nothing in the repository or the workflow reads App Store Connect, so it cannot be re-verified from here)
+
+| The build is assigned to the internal testing group and its TestFlight status is "Testing"
+| CTO-REPORTED
+| <<testflight>>
+
+| Export compliance questionnaire, including the France-specific questions
+| CTO-REPORTED
+| <<testflight>> (the verifier had warned that `ITSAppUsesNonExemptEncryption` is absent, so the question was expected)
+
+| App Privacy answers for the staging application
+| NOT CONFIRMED
+| not part of the CTO's report; not required to be reported by this page's evidence
+
+| An internal tester installed the application through TestFlight, launched it, completed the initial application setup and logged in successfully
+| CTO-REPORTED
+| <<smoke>>
+
+| The Dashboard shows `1.0.5 (10005002)`
+| NOT REPORTED
+| the report does not mention it; the CTO decided that no further tester confirmation is required for this milestone
+
+| Comprehensive wallet and DLC functionality (wallet creation and recovery, pairing, manual and automatic signing, notifications, and so on)
+| NOT TESTED
+| outside this milestone; a successful login is not a functional test of the wallet or of DLC signing
+|===
+
+Technical delivery to Apple succeeded. The CTO reports that processing, export compliance and the internal group assignment are complete and that a tester installed the build and logged in. The CTO considers the basic end-to-end iOS staging delivery acceptance criteria satisfied. Comprehensive wallet and DLC testing has not been done.
+
+[[testflight]]
+== TestFlight status (reported by the CTO, 2026-11-27)
+
+The CTO personally verified in App Store Connect (a human observation; it is recorded here as reported, not as repository-verified evidence):
+
+* application "Cadena Signer STAGING", version `1.0.5`, build `10005002`;
+* Apple build processing: completed;
+* export compliance questionnaire, including the France-specific questions: completed;
+* internal testing group assignment: confirmed;
+* TestFlight status: "Testing"; remaining TestFlight validity of the build: 90 days.
+
+The two internal testers named in `docs/IOS_STAGING_DELIVERY.md` section 5 were instructed to install the new, separate staging application.
+
+[[smoke]]
+== Installation and basic smoke test (reported by the CTO, 2026-11-27)
+
+The CTO reports that one of the internal testers (Kevin) installed the new "Cadena Signer STAGING" application through TestFlight, launched it, completed the initial application setup and logged in successfully. On that basis the CTO declares the basic end-to-end iOS staging delivery acceptance criteria satisfied and requires no further tester confirmation for this deployment milestone.
+
+This is a basic smoke test, not a test of wallet or DLC functionality. It shows that the delivered build installs, starts and can authenticate against the backend it was configured for. It does not cover wallet creation or recovery, device pairing, manual or automatic signing of funding, refund and CET transactions, notifications, upgrade from an earlier build, or any behaviour under load. The known pairing defect reported against the production-configured 1.0.4 build (issue #136) has not been re-tested. The report is a human observation: it is not backed by a log or screenshot in this repository, and it does not state what the Dashboard displayed.
+
+== Identity and source
+
+[cols="1,3"]
+|===
+| Product version, build | `1.0.5`, `10005002` (`pubspec.yaml`, the only version source)
+| Application | "Cadena Signer STAGING", iOS bundle ID `com.app.cadenabitcoin.staging`, Android application ID `com.cadenabitcoin.mobile.signer.staging`
+| Apple | team `D65458CPDP`, App Store Connect application (Apple ID) `6839776198`
+| Configuration | `config/build/staging.json`: `APP_ENV` `staging`, network `signet`, `USE_TESTNET` true, backend `https://staging.purabitcoin.com/app`
+| Promotion | pull request #152, merge commit `f31e5980446e284158906afe8a719a95056b61c7`, merged by `CadenaWizard` at 2026-11-27 13:15:49 UTC
+| Promoted `development` | `1463041bd14126ed70a9f6aef9336df7ce62607c` (pull request #151); the merge result's tree equals the `development` tree
+| Authorization | the CTO's decisions of 2026-11-27: {issue}#issuecomment-7216580141 (S1 to S4, C1 to C4) and the recovery decision {issue}#issuecomment-7218186057 (R1 to R3)
+| Implementation bound by the record | workflow blob `0336bf49730851b0bda8bb7dffbeba1fee943809`, gate blob `46483dff8204a2cbfb98d6c2b670cedd4242d049`; the seven tool blobs are listed in the record and were equal to the checkout
+|===
+
+[[history]]
+== Attempt history
+
+[cols="1,1,3",options="header"]
+|===
+| Version | Run | Outcome
+
+| `1.0.5+10005001`
+| https://github.com/CadenaBitcoin/signer_app/actions/runs/45995314041[45995314041] (`staging` `a6ed42f`, pull request #150)
+| Failed before signing: no Apple secret existed for the `sign` job (`A secret of the environment ios-hosted-signing-stg is missing`). Nothing was exported, signed or uploaded. The number is consumed. See {issue}#issuecomment-7217999694.
+
+| `1.0.5+10005002`
+| https://github.com/CadenaBitcoin/signer_app/actions/runs/46005605593[46005605593]
+| Succeeded: signed, verified and uploaded. The three secrets had been provisioned and checked by name and count before the merge; the environment approval came about 72 seconds after `sign` began waiting.
+|===
+
+[[runs]]
+== Workflow runs started by pull request #152 (`staging` `f31e598`)
+
+[cols="2,1,1,2",options="header"]
+|===
+| Workflow | Run | Result | Window (UTC)
+
+| iOS staging delivery | 46005605593 | success | 13:15:52 to 13:24:48 (`authorize` 13:15:54 to 13:16:01, `build` 13:16:03 to 13:20:30, `sign` 13:21:45 to 13:24:48)
+| Android CI validation build | 46005605759 | success | 13:15:52 to 13:24:32
+| iOS CI validation build | 46005605708 | success | 13:15:52 to 13:20:13
+| Build variants (compile validation) | 46005605591 | success | 13:15:52 to 13:25:47
+| CodeQL | 46005605681 | success | 13:15:52 to 13:18:22
+|===
+
+All run URLs have the form `https://github.com/CadenaBitcoin/signer_app/actions/runs/<run>`.
+
+[[build]]
+== Unsigned archive
+
+* Command: `flutter build ipa --release --no-codesign --flavor staging --dart-define-from-file=config/build/staging.json`.
+* Toolchain: Xcode 26.3 (17C529), iPhoneOS SDK 26.2, Flutter 3.35.3, Dart 3.9.2, CocoaPods 1.17.0 on a `macos-15` runner.
+* `tool/verify_version.sh`: Android `versionName` 1.0.5 and `versionCode` 10005002; iOS `CFBundleShortVersionString` 1.0.5 and `CFBundleVersion` 10005002.
+* Archive tar: SHA-256 `390bd13b195cf4fff47425a7d7f058fcec061ede5af1f7480dbfa0a253412cda`, 214,053,376 bytes (one-day artifact, expired by 2026-11-28).
+* `dlc_wallet` framework of the archive: SHA-256 `92231f38c71864833cd6bcdf03c4849c72e6e0a7d66bd59b826dd2798680646d`, equal to the authorized pin; pinned Rust library `203dcd7abe4187de0b756638a55f691b2d5c680b17d4fbfa7dda550ed703949b`. The same framework hash was observed five times: three credential-free preflight runs, the check of the failed first delivery attempt, and this delivery.
+* Runner state before signing: 0 valid code-signing identities, 0 installed provisioning profiles.
+
+[[signing]]
+== Signing and verification
+
+The `sign` job exported the archive with Apple's cloud-managed Distribution signing, then verified the exported IPA before any upload.
+
+[cols="1,1,4",options="header"]
+|===
+| Check | Result | Facts
+
+| Signed IPA
+| n/a
+| SHA-256 `b08cc7c2e759f2cae9f7d0ebd2d676f82476802609880e5b109a2d5240ab4f07`, 22,654,034 bytes; the digest was equal after export, after verification and at upload. The IPA itself is not retained by GitHub; Apple holds the uploaded copy.
+
+| V1 identity | pass | `CFBundleIdentifier` `com.app.cadenabitcoin.staging`, version `1.0.5`, build `10005002`, display name "Cadena Signer STAGING"
+| V2 seals | pass | `codesign`: valid on disk, satisfies its Designated Requirement
+| V3 certificate | pass | Apple Distribution: Cadena Bitcoin S.A. de C.V. (D65458CPDP); issuer Apple Worldwide Developer Relations CA (G3); serial `6e0b1fc31a51b362a9fc9378161167d6`; valid 2026-07-09 to 2027-07-09; SHA-256 `7ee3f6ce78eea83748e198102f6ab66527c626296baaea437c3a90db81ef418e` (equal to the recorded pin); SHA-1 `cd121c430bfeb3c650d3de75a6bb2bdd04a5d6f3`
+| V4 profile | pass | app-store profile "iOS Team Store Provisioning Profile: com.app.cadenabitcoin.staging", UUID `10b13b18-bf3a-46fa-82ee-70ee06b7b71e`, expires 2027-07-09, no devices, `get-task-allow` false
+| V5 entitlements | pass | `application-identifier`, `beta-reports-active`, `com.apple.developer.team-identifier`, `get-task-allow` false; no `aps-environment`
+| V6 environment | pass | the staging URL occurs once in `App.framework`, the production URL 0 times
+| V7 repository verifier, pinned on the certificate | pass | 59 passed, 0 failed, 3 warnings; minimum OS 14.0; SDK `iphoneos26.2`; 16 nested code objects; 110 sealed resources checked
+| V8 "signatures only" comparison | pass | 17 executables identical apart from the signature, 81 other files byte-identical, the top-level `Info.plist` re-serialized with identical content and types; the IPA adds only the profile and signatures
+| V9 native library | pass | exactly the nine expected exports, 0 forbidden names; signed `dlc_wallet` binary SHA-256 `8fcac08e0f7bc20b07b169c4d78d03d25c0cb2c291dab8c0b7d518cb72d0bc71`
+|===
+
+[[upload]]
+== Upload to App Store Connect
+
+* The upload tool `altool` ran its validation (`validate_exit` 0) and then the upload (`upload_exit` 0) of the same IPA (digest re-checked immediately before). The authorization gate ran again before the first step that holds secrets, and once more at 13:22:37 UTC before the upload step.
+* Apple's validate and upload both reported "succeeded with no errors, 2 warnings".
+* Delivery UUID: `4baabc47-2809-445c-a7ec-4cd24998923b`, 22,654,034 bytes transferred, finished 2026-11-27 13:24:42 UTC.
+
+=== Warnings
+
+[cols="1,3",options="header"]
+|===
+| Source | Warning
+
+| Apple 90068 | Deployment target too low: the app targets iOS 14.0. Starting in April 2027 iOS apps must target 15.0 or later to be uploaded or submitted. (The `Podfile` declares 15.5; the Runner project declares 14.0; six frameworks already require 15.5.)
+| Apple 90725 | SDK version issue: the app was built with the iOS 26.2 SDK. Starting April 2027 apps must be built with the iOS 27 SDK or later (Xcode 27 or later).
+| Verifier | no trust anchors, so the certificate chain to an Apple root was not verified; revocation is never checked
+| Verifier | `Info.plist` has no `ITSAppUsesNonExemptEncryption`: App Store Connect will ask the export-compliance question
+| Verifier | the `remote-notification` background mode is declared but the app has no `aps-environment` entitlement (push notification work is tracked separately, #110)
+| V9 | the known `create_deterministic_nonce` export is present (#22; the library is not rebuilt) and the `dlc_wallet` framework has no privacy manifest (decision X2 open)
+|===
+
+None of these blocked the delivery. The two Apple warnings have a date (April 2027).
+
+[[credentials]]
+== Credentials
+
+* Only the three secrets of the environment `ios-hosted-signing-stg` were used, in the two steps designed for them. They had been provisioned by the maintainer before the merge (CTO decision R2) and verified by name and count only.
+* The key file was removed, and this was recorded both before the verification steps and after the upload step (`key_file_removed` yes, `key_file_removed_after_upload_step` yes).
+* After the run the maintainer removed the three secrets. A read of the GitHub API afterwards (names and counts only, never values) showed 0 secrets in `ios-hosted-signing-stg`, 0 in `ios-hosted-signing`, 0 repository Actions secrets, 0 Dependabot secrets and 0 organization secrets visible to the repository.
+* The Apple Admin API key itself was **not revoked** by this; revoking it is a separate CTO decision.
+* The CodeQL alert about the diagnostics workflow was dismissed by the CTO as "won't fix" before the first attempt; no workflow file or cache configuration changed afterwards.
+
+[[android]]
+== Android staging APK
+
+* Workflow `Android CI validation build`, run 46005605759, on the merge commit `f31e5980446e284158906afe8a719a95056b61c7`.
+* Artifact `CI-VALIDATION-NOT-APPROVED-FOR-PUBLIC-DISTRIBUTION_cadena-signer_v1.0.5+10005002_staging_f31e598_run12-1`: 109,850,658 bytes zipped, kept until 2026-12-11.
+* APK: SHA-256 `0935b88c948634c583e504b25d4d6ba288013271ade4815905a7e2e73d4cfd50`, 205,544,114 bytes (the value in the artifact's notice file, recomputed from the downloaded APK). Application ID `com.cadenabitcoin.mobile.signer.staging`, version `1.0.5+10005002`, staging configuration (Signet).
+* Debug-signed with an ephemeral CI key, a Flutter debug-mode build: it is a validation build, not a release; it cannot update an APK of another run; the repository is public, so any GitHub account can download the artifact. These limits were accepted for this delivery by the CTO.
+
+[[artifacts]]
+== Actions artifacts and their retention
+
+[cols="3,1,1,3",options="header"]
+|===
+| Artifact | Bytes | Expires | SHA-256 reported by GitHub
+
+| `ios-staging-unsigned-archive_46005605593-1` | 68,380,934 | 2026-11-28 | `26ba6ea5b630629e900a476ce97033e2cced64e895444a94d9ffafd3086cc5fd`
+| `ios-staging-build-evidence_46005605593-1` | 5,278 | 2026-12-27 | `b7aeaaa4b894f2502168c904ce4f02d3bf474a616626797efacee7dd985e52ff`
+| `ios-staging-delivery-evidence_46005605593-1` | 92,108 | 2026-12-27 | `498d27f5d77ff5b1b95336bbfb20b1651122ec6a4e420879792bb4c7f48182bb`
+| Android APK artifact (run 46005605759) | 109,850,658 | 2026-12-11 | `4bd82971bf0c69959024cbc7abdc69677251368449455757fe0d162f9b64b126`
+|===
+
+The two text evidence artifacts hold the files this page summarizes (`delivery-record.txt`, `upload-result.txt`, `v1-identity.txt` to `v9-native.txt`, `dlc-wallet-hash.txt` and the sealed `SHA256SUMS.txt`). They contain no secret (the job scans them before sealing). Copy them to a durable store before their expiry if the evidence beyond this page is needed.
+
+== Remaining work after this record
+
+. Comprehensive wallet and DLC functional testing of the staging application is separate work with its own plan and issue; this milestone does not require it. The TestFlight build is valid for 90 days from the CTO's report; a later build needs a new version, a reviewed pull request and a new CTO decision.
+. The staging authorization record is withdrawn by the pull request that adds this page (decision S3); a new delivery needs a new version, a reviewed pull request and a new CTO decision.
+. Deferred by the CTO until after this delivery: reconciliation of the release-policy documents (`RELEASE_POLICY.md` 2.3, 3.1, 7.1 to 7.4; `IOS_SIGNING.md` section 6).
+. Open technical follow-ups, none blocking: the iOS deployment target and SDK warnings (April 2027), the CodeQL alert premise (`cache: false` in the diagnostics workflow), an optional off-GitHub copy of the evidence.

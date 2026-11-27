@@ -1,7 +1,7 @@
 # Staging authorization record: automatic iOS staging delivery (TestFlight)
 
-> **Status: AUTHORIZED for one delivery: version `1.0.5+10005002`, on the CTO's written decisions of 2026-11-27 (section 3) and the recovery decision named by `G2S-STAGING-AUTHORIZATION`. The first attempt, `1.0.5+10005001`, failed before signing and its number is consumed (section 5).**
-> It authorizes only what section 1 says, for that version; it is withdrawn again by a reviewed pull request after the first delivery (section 4). The staging delivery workflow
+> **Status: WITHDRAWN (after the successful delivery of `1.0.5+10005002`, run `46005605593`, 2026-11-27).** The lines below keep the authorization that was given for that one delivery as history (the CTO's decisions of 2026-11-27, section 3, and the recovery decision named by `G2S-STAGING-AUTHORIZATION`); with the status `WITHDRAWN` they authorize nothing. The first attempt, `1.0.5+10005001`, failed before signing and its number is consumed; the second, `1.0.5+10005002`, succeeded (section 5). A new delivery needs a new version, a reviewed pull request and a new CTO decision.
+> The staging delivery workflow
 > (`.github/workflows/ios-staging-delivery.yml`) reads this file, and `tool/check_staging_authorization.sh` refuses to let it sign or upload unless it says `AUTHORIZED` and
 > binds the version, the implementation and the source of the run. Design, prerequisites and the meaning of every line: [docs/IOS_STAGING_DELIVERY.md](../IOS_STAGING_DELIVERY.md).
 
@@ -28,10 +28,10 @@ merge of `development` into `staging`.
 ## 2. The authorization lines
 
 Each line is read by the production gate's strict parser: at column 0, exactly once, LF only, outside code blocks and comments. The values below are the
-state **AUTHORIZED** for version `1.0.5+10005002` on the CTO's decisions (section 3) and the recovery decision named by `G2S-STAGING-AUTHORIZATION`. The certificate value is the one observed in the production runs
+state **WITHDRAWN**; every other line is the authorization that was given for version `1.0.5+10005002` (the CTO's decisions, section 3, and the recovery decision named by `G2S-STAGING-AUTHORIZATION`), kept as history. The certificate value is the one observed in the production runs
 (decision C1: accepted with that provenance, corroborated by the attributes of Apple's certificate records but not by a fingerprint comparison), and the native-library value is the STAGING archive's own hash (section 2.1; decision C2).
 
-G2S-STAGING-STATUS: AUTHORIZED
+G2S-STAGING-STATUS: WITHDRAWN
 G2S-STAGING-OPERATION: sign-verify-and-upload
 G2S-STAGING-VERSION: 1.0.5+10005002
 G2S-STAGING-BUNDLE-ID: com.app.cadenabitcoin.staging
@@ -101,7 +101,7 @@ C1 to C4 in that comment on 2026-11-27; the table below is the content of S1 to 
    `bash tool/check_staging_authorization.sh --print-expected --tools-root .`; and only then set `G2S-STAGING-STATUS` to `AUTHORIZED`.
 4. `tool/test_check_staging_authorization.sh` refuses an AUTHORIZED record whose blobs are not those of the checkout.
 
-**Withdraw** (immediately effective for every later run): a pull request into `development` that sets `G2S-STAGING-STATUS` to `WITHDRAWN`. The gate reads this file on the
+**Withdraw** (done after the delivery of `1.0.5+10005002`; immediately effective for every later run): a pull request into `development` that sets `G2S-STAGING-STATUS` to `WITHDRAWN`. The gate reads this file on the
 **current tip of `development`** at run time, so a withdrawal there stops a delivery even if the promotion already carries `AUTHORIZED`. To stop at once without a merge:
 **reject** the waiting `sign` job, or do not provision the secrets (the environment holds none between deliveries); if they were already provisioned, remove them.
 
@@ -113,4 +113,4 @@ build (the unsigned archive is kept one day), and removes the secrets after the 
 | Attempt | Version | Run | Outcome |
 |---|---|---|---|
 | 1 | `1.0.5+10005001` | https://github.com/CadenaBitcoin/signer_app/actions/runs/45995314041 (push of PR #150, `staging` at `a6ed42f`, 2026-11-27) | **Failed before signing.** `authorize` and `build` passed; the framework hash check passed on the real merge commit; `sign` was approved by `CadenaWizard` about 31 seconds after it began waiting and its step "Export and sign ... (the only step with secrets)" stopped with `A secret of the environment ios-hosted-signing-stg is missing`: all three secrets were empty in the step, and the environment, the production environment and the repository held none. No key file was written, nothing was exported, signed or uploaded. The number `10005001` is **consumed** (C3). Recorded on Issue #71: https://github.com/CadenaBitcoin/signer_app/issues/71#issuecomment-7217999694 |
-| 2 | `1.0.5+10005002` | not started | Authorized by the recovery decision named by `G2S-STAGING-AUTHORIZATION`. The three environment secrets are provisioned and their names and count (never values) checked **before** the merge into `staging`; the approval then confirms the deployment; the secrets are removed after the run. No workflow, gate or tool changed (the blob lines above are unchanged). |
+| 2 | `1.0.5+10005002` | https://github.com/CadenaBitcoin/signer_app/actions/runs/46005605593 (push of PR #152, `staging` at `f31e598`, 2026-11-27) | **Succeeded technically.** The three secrets had been provisioned and checked by name and count before the merge; the environment approval came about 72 seconds after `sign` began waiting. The `dlc_wallet` framework equalled the pin; the IPA was signed with the pinned certificate `7ee3f6ce…ef418e`; V1 to V9 passed; `altool` validated and uploaded the same IPA (SHA-256 `b08cc7c2…ab4f07`); delivery UUID `4baabc47-2809-445c-a7ec-4cd24998923b`; the key file was removed; the maintainer then removed the three secrets and the API showed 0 secrets everywhere. Apple's two warnings (deployment target 14.0, SDK 26.2; both dated April 2027) did not block. **CTO-reported afterwards (2026-11-27, verified by the CTO in App Store Connect):** processing completed, export compliance (including the France-specific questions) completed, internal group assignment confirmed, TestFlight status "Testing", 90 days remaining. **Also CTO-reported (2026-11-27):** an internal tester installed the build through TestFlight, launched it, completed the initial setup and logged in; the CTO considers the basic end-to-end acceptance satisfied. This is a basic smoke test, **not** a test of wallet or DLC functionality (not tested). Full record and checksums: [staging-delivery-1.0.5-10005002.adoc](staging-delivery-1.0.5-10005002.adoc). No workflow, gate or tool changed (the blob lines above are unchanged). |
