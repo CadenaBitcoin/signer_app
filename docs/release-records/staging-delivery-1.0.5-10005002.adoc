@@ -57,16 +57,20 @@ It contains no credential and no secret value. GitHub Actions artifacts expire (
 | NOT CONFIRMED
 | not part of the CTO's report; not required to be reported by this page's evidence
 
-| The application is installed on a tester device and shows `1.0.5 (10005002)` and the staging identity
-| NOT CONFIRMED
-| the testers have been instructed to install it; installation and functional verification are pending
+| An internal tester installed the application through TestFlight, launched it, completed the initial application setup and logged in successfully
+| CTO-REPORTED
+| <<smoke>>
 
-| The application works functionally against the staging backend on a device
-| NOT CONFIRMED
-| pending the testers' report
+| The Dashboard shows `1.0.5 (10005002)`
+| NOT REPORTED
+| the report does not mention it; the CTO decided that no further tester confirmation is required for this milestone
+
+| Comprehensive wallet and DLC functionality (wallet creation and recovery, pairing, manual and automatic signing, notifications, and so on)
+| NOT TESTED
+| outside this milestone; a successful login is not a functional test of the wallet or of DLC signing
 |===
 
-Technical delivery to Apple succeeded, and the CTO reports that processing, export compliance and the internal group assignment are complete. Device installation and functional verification remain pending.
+Technical delivery to Apple succeeded. The CTO reports that processing, export compliance and the internal group assignment are complete and that a tester installed the build and logged in. The CTO considers the basic end-to-end iOS staging delivery acceptance criteria satisfied. Comprehensive wallet and DLC testing has not been done.
 
 [[testflight]]
 == TestFlight status (reported by the CTO, 2026-11-27)
@@ -79,7 +83,14 @@ The CTO personally verified in App Store Connect (a human observation; it is rec
 * internal testing group assignment: confirmed;
 * TestFlight status: "Testing"; remaining TestFlight validity of the build: 90 days.
 
-The two internal testers named in `docs/IOS_STAGING_DELIVERY.md` section 5 have been instructed to install the new, separate staging application. Their installation and functional verification are **pending** and are not part of this page's verified claims.
+The two internal testers named in `docs/IOS_STAGING_DELIVERY.md` section 5 were instructed to install the new, separate staging application.
+
+[[smoke]]
+== Installation and basic smoke test (reported by the CTO, 2026-11-27)
+
+The CTO reports that one of the internal testers (Kevin) installed the new "Cadena Signer STAGING" application through TestFlight, launched it, completed the initial application setup and logged in successfully. On that basis the CTO declares the basic end-to-end iOS staging delivery acceptance criteria satisfied and requires no further tester confirmation for this deployment milestone.
+
+This is a basic smoke test, not a test of wallet or DLC functionality. It shows that the delivered build installs, starts and can authenticate against the backend it was configured for. It does not cover wallet creation or recovery, device pairing, manual or automatic signing of funding, refund and CET transactions, notifications, upgrade from an earlier build, or any behaviour under load. The known pairing defect reported against the production-configured 1.0.4 build (issue #136) has not been re-tested. The report is a human observation: it is not backed by a log or screenshot in this repository, and it does not state what the Dashboard displayed.
 
 == Identity and source
 
@@ -218,7 +229,7 @@ The two text evidence artifacts hold the files this page summarizes (`delivery-r
 
 == Remaining work after this record
 
-. The testers install the application on a device and report the Dashboard version `1.0.5 (10005002)`, the staging identity ("Cadena Signer STAGING", Signet, staging backend) and whether it works against the staging backend; add that result to this page. The TestFlight build is valid for 90 days from the CTO's report.
+. Comprehensive wallet and DLC functional testing of the staging application is separate work with its own plan and issue; this milestone does not require it. The TestFlight build is valid for 90 days from the CTO's report; a later build needs a new version, a reviewed pull request and a new CTO decision.
 . The staging authorization record is withdrawn by the pull request that adds this page (decision S3); a new delivery needs a new version, a reviewed pull request and a new CTO decision.
 . Deferred by the CTO until after this delivery: reconciliation of the release-policy documents (`RELEASE_POLICY.md` 2.3, 3.1, 7.1 to 7.4; `IOS_SIGNING.md` section 6).
 . Open technical follow-ups, none blocking: the iOS deployment target and SDK warnings (April 2027), the CodeQL alert premise (`cache: false` in the diagnostics workflow), an optional off-GitHub copy of the evidence.
