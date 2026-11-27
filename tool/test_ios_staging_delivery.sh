@@ -258,7 +258,9 @@ grep -F 'can change this hash' "$rec" >/dev/null && grep -F 'equality across ima
 grep -F 'measured three times, and matched the corrected pin once' "$rec" >/dev/null && grep -F '45976062284' "$rec" >/dev/null && grep -F 'accepted this value as decision C2 on 2026-11-27' "$rec" >/dev/null; chk "the record distinguishes three measurements from the single MATCH against the pin, and states the CTO's acceptance of C2" $?
 grep -F '### 10.1' "$doc" >/dev/null && grep -F '45967581978' "$doc" >/dev/null && grep -F '45969558826' "$doc" >/dev/null && grep -F "$STAGING_DLC" "$doc" >/dev/null; chk "the document records both runs and the staging hash (section 10.1)" $?
 ! grep -E "proposal is the production value|The proposed pin \(.9a2d1d98" "$doc" >/dev/null; chk "no sentence in the document calls the production value the expected staging hash" $?
-grep -E '^G2S-STAGING-VERSION: 1.0.5\+10005001$' "$rec" >/dev/null && grep -E '^version: 1.0.5\+10005001$' "$root/pubspec.yaml" >/dev/null; chk "the record authorizes exactly the version of pubspec.yaml (1.0.5+10005001), no other" $?
+grep -E '^G2S-STAGING-VERSION: 1.0.5\+10005002$' "$rec" >/dev/null && grep -E '^version: 1.0.5\+10005002$' "$root/pubspec.yaml" >/dev/null; chk "the record authorizes exactly the version of pubspec.yaml (1.0.5+10005002), no other" $?
+grep -F '45995314041' "$rec" >/dev/null && grep -F 'A secret of the environment ios-hosted-signing-stg is missing' "$rec" >/dev/null && grep -F '`10005001` is **consumed**' "$rec" >/dev/null && grep -F 'issuecomment-7217999694' "$rec" >/dev/null; chk "the record documents the failed first attempt (run, reason, consumed number, the Issue #71 comment)" $?
+grep -F '### 8.1' "$doc" >/dev/null && grep -F '45995314041' "$doc" >/dev/null && grep -F '**verified before the merge into `staging`**' "$doc" >/dev/null && grep -F 'the values are never read' "$doc" >/dev/null; chk "the document records the failed attempt and the second attempt's order (secrets verified before the merge, names and count only)" $?
 
 echo "ios-staging-delivery: $pass passed, $failed failed"
 [ "$failed" -eq 0 ]

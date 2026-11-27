@@ -1,6 +1,6 @@
 # Staging authorization record: automatic iOS staging delivery (TestFlight)
 
-> **Status: AUTHORIZED for one delivery: version `1.0.5+10005001`, on the CTO's written decision of 2026-11-27 (the comment named by `G2S-STAGING-AUTHORIZATION`).**
+> **Status: AUTHORIZED for one delivery: version `1.0.5+10005002`, on the CTO's written decisions of 2026-11-27 (section 3) and the recovery decision named by `G2S-STAGING-AUTHORIZATION`. The first attempt, `1.0.5+10005001`, failed before signing and its number is consumed (section 5).**
 > It authorizes only what section 1 says, for that version; it is withdrawn again by a reviewed pull request after the first delivery (section 4). The staging delivery workflow
 > (`.github/workflows/ios-staging-delivery.yml`) reads this file, and `tool/check_staging_authorization.sh` refuses to let it sign or upload unless it says `AUTHORIZED` and
 > binds the version, the implementation and the source of the run. Design, prerequisites and the meaning of every line: [docs/IOS_STAGING_DELIVERY.md](../IOS_STAGING_DELIVERY.md).
@@ -28,12 +28,12 @@ merge of `development` into `staging`.
 ## 2. The authorization lines
 
 Each line is read by the production gate's strict parser: at column 0, exactly once, LF only, outside code blocks and comments. The values below are the
-state **AUTHORIZED** for version `1.0.5+10005001` on the CTO's decision of 2026-11-27 (section 3). The certificate value is the one observed in the production runs
+state **AUTHORIZED** for version `1.0.5+10005002` on the CTO's decisions (section 3) and the recovery decision named by `G2S-STAGING-AUTHORIZATION`. The certificate value is the one observed in the production runs
 (decision C1: accepted with that provenance, corroborated by the attributes of Apple's certificate records but not by a fingerprint comparison), and the native-library value is the STAGING archive's own hash (section 2.1; decision C2).
 
 G2S-STAGING-STATUS: AUTHORIZED
 G2S-STAGING-OPERATION: sign-verify-and-upload
-G2S-STAGING-VERSION: 1.0.5+10005001
+G2S-STAGING-VERSION: 1.0.5+10005002
 G2S-STAGING-BUNDLE-ID: com.app.cadenabitcoin.staging
 G2S-STAGING-TEAM-ID: D65458CPDP
 G2S-STAGING-APP-APPLE-ID: 6839776198
@@ -42,7 +42,7 @@ G2S-STAGING-DLC-WALLET-SHA256: 92231f38c71864833cd6bcdf03c4849c72e6e0a7d66bd59b8
 G2S-STAGING-WORKFLOW-BLOB: 0336bf49730851b0bda8bb7dffbeba1fee943809
 G2S-STAGING-GATE-BLOB: 46483dff8204a2cbfb98d6c2b670cedd4242d049
 G2S-STAGING-TOOL-BLOBS: tool/build_manifest.py=3041c560adcac9ad2f3b052378825762518df30e,tool/check_signing_authorization.sh=fe841d2d5eb5b533551f28608e294ca3165f1ac0,tool/ipa_inspect.py=20b7efc972d55b40a23276c5ed29a0e4b281269b,tool/validate_handover_archive.py=ef4ce2c686e2ae7c3eacb61d078764f8c5b71c3d,tool/verify_artifact.sh=b9d81a3aa171d4e3d900137f3a0c68fb8441fde4,tool/verify_build_config.sh=0e1bce96d68ade109ffb961258008b13a15beec4,tool/verify_ipa.py=7d31b621efa82448384f08f67ee119e765eb9338
-G2S-STAGING-AUTHORIZATION: https://github.com/CadenaBitcoin/signer_app/issues/71#issuecomment-7216580141
+G2S-STAGING-AUTHORIZATION: https://github.com/CadenaBitcoin/signer_app/issues/71#issuecomment-7218186057
 G2S-STAGING-DECISION-S1: Decided by CadenaWizard on 2026-11-27
 G2S-STAGING-DECISION-S2: Decided by CadenaWizard on 2026-11-27
 G2S-STAGING-DECISION-S3: Decided by CadenaWizard on 2026-11-27
@@ -77,13 +77,19 @@ C1 to C4 in that comment on 2026-11-27; the table below is the content of S1 to 
 
 - **C1** The certificate with SHA-256 `G2S-STAGING-CERT-SHA256` is accepted on its provenance from the previously signed production IPAs. On 2026-11-27 the CTO inspected the Apple Developer certificate records and found: name Cadena Bitcoin S.A. de C.V., type Distribution Managed, expiration 2027-07-09, automatic rotation 2027-04-10, and only one managed distribution certificate listed; these corroborate the certificate seen in the production signing runs. Direct fingerprint verification was not possible in Apple's interface; the CTO accepted that limitation. A certificate fingerprint mismatch prevents the upload.
 - **C2** The framework hash `G2S-STAGING-DLC-WALLET-SHA256` (section 2.1) and the Rust library hash are accepted; the toolchain and runner-image limitation is acknowledged; a hash mismatch stops the delivery.
-- **C3** Build number `10005001` is consumed when the promotion reaches `staging`, whatever the outcome. After a failure the next attempt is a reviewed pull request with a new number; reruns and reuse are prohibited.
+- **C3** Build number `10005001` is consumed when the promotion reaches `staging`, whatever the outcome. After a failure the next attempt is a reviewed pull request with a new number; reruns and reuse are prohibited. Applied once: `10005001` failed (section 5), the next attempt is `10005002`.
 - **C4** This delivery has no `-rc.N` identifier and no Git tag; traceability is the version, the build number, the commit, this record and the workflow run.
 - The debug-signed Android staging validation APK is accepted for this delivery (public retrievability through Actions and an ephemeral signing key acknowledged).
 - No separate experiment on the timing of environment secrets is required: GitHub's documented lifecycle is accepted, this exact sequence being not yet exercised here. If it fails, the secrets are removed and the next reviewed attempt may provision them before the promotion.
 - No further credential-free preflight is required while the build content (`lib`, `ios`, `flutter_plugin`, `pubspec.yaml`, `pubspec.lock`, `config/build`, `android`) and the bound implementation files stay unchanged and no concrete technical reason arises.
 - Reconciliation of the release-policy documents (RELEASE_POLICY.md 2.3, 3.1, 7.1 to 7.4; IOS_SIGNING.md section 6) is deferred until after the first successful staging delivery; the deviations are authorized for this delivery only.
 - Not authorized: production delivery, public release, external TestFlight distribution, tester assignment by this record.
+
+**Recovery decision of 2026-11-27 for `1.0.5+10005002`** (https://github.com/CadenaBitcoin/signer_app/issues/71#issuecomment-7218186057, the line `G2S-STAGING-AUTHORIZATION`; failure evidence: https://github.com/CadenaBitcoin/signer_app/issues/71#issuecomment-7217999694):
+
+- **R1** One merge-triggered delivery of `1.0.5+10005002` under S1 to S4 and C1 to C4, subject to R2 and R3; identities, certificate fingerprint, native-library hashes and security controls unchanged. The CodeQL alert #1 risk acceptance is extended to this delivery while the relevant workflow, cache configuration and assessed security conditions stay unchanged. All other restrictions and temporary policy exceptions of the first authorization remain in effect.
+- **R2** The three secrets `APPLE_API_KEY_P8`, `APPLE_API_KEY_ID`, `APPLE_API_ISSUER_ID` are provisioned in `ios-hosted-signing-stg` **before** the merge into `staging` (preferably immediately before it, after review and CI), and their existence is verified by name and count before the promotion. The increased credential-exposure window is accepted. The environment approval remains mandatory; the secrets are removed immediately after completion, failure or cancellation. This amends S2 for this delivery only.
+- **R3** No additional preflight is required solely because of the build-number increment; other changed build-relevant inputs or bound files require reassessment.
 
 ## 4. How to authorize, and how to withdraw
 
@@ -99,5 +105,12 @@ C1 to C4 in that comment on 2026-11-27; the table below is the content of S1 to 
 **current tip of `development`** at run time, so a withdrawal there stops a delivery even if the promotion already carries `AUTHORIZED`. To stop at once without a merge:
 **reject** the waiting `sign` job, or do not provision the secrets (the environment holds none between deliveries); if they were already provisioned, remove them.
 
-**Per delivery** (not part of this record's lines; docs/IOS_STAGING_DELIVERY.md section 1.1): the run waits at the environment approval; the CTO provisions the three secrets, approves within one day of the
+**Per delivery** (not part of this record's lines; docs/IOS_STAGING_DELIVERY.md section 1.1; for `10005002` the three secrets are provisioned and checked **before** the merge, section 5): the run waits at the environment approval; the CTO provisions the three secrets, approves within one day of the
 build (the unsigned archive is kept one day), and removes the secrets after the run.
+
+## 5. Delivery history
+
+| Attempt | Version | Run | Outcome |
+|---|---|---|---|
+| 1 | `1.0.5+10005001` | https://github.com/CadenaBitcoin/signer_app/actions/runs/45995314041 (push of PR #150, `staging` at `a6ed42f`, 2026-11-27) | **Failed before signing.** `authorize` and `build` passed; the framework hash check passed on the real merge commit; `sign` was approved by `CadenaWizard` about 31 seconds after it began waiting and its step "Export and sign ... (the only step with secrets)" stopped with `A secret of the environment ios-hosted-signing-stg is missing`: all three secrets were empty in the step, and the environment, the production environment and the repository held none. No key file was written, nothing was exported, signed or uploaded. The number `10005001` is **consumed** (C3). Recorded on Issue #71: https://github.com/CadenaBitcoin/signer_app/issues/71#issuecomment-7217999694 |
+| 2 | `1.0.5+10005002` | not started | Authorized by the recovery decision named by `G2S-STAGING-AUTHORIZATION`. The three environment secrets are provisioned and their names and count (never values) checked **before** the merge into `staging`; the approval then confirms the deployment; the secrets are removed after the run. No workflow, gate or tool changed (the blob lines above are unchanged). |
