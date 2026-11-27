@@ -3,9 +3,10 @@
 Issues #54 (parent), #57, #69, #71. Workflow: `.github/workflows/ios-staging-delivery.yml`. Gate: `tool/check_staging_authorization.sh`.
 Record: `docs/release-records/ios-staging-authorization.md`. Tests: `tool/test_check_staging_authorization.sh`, `tool/test_ios_staging_delivery.sh`.
 
-**Status: implemented and statically tested; never run.** Nothing here has been executed on a macOS runner or against Apple. It is **not operational** until the
-prerequisites of section 5 exist and the CTO's authorization is merged (section 4). The committed record is `WITHDRAWN`, so a merge into `staging` today
-makes this workflow fail visibly at its first job and sign nothing.
+**Status: implemented and statically tested; never run.** Nothing here has been executed against Apple. The CTO authorized the first delivery, version `1.0.5+10005001`, on 2026-11-27
+(Issue #71; decisions S1 to S4 and C1 to C4); the committed record is `AUTHORIZED` for that version only and is withdrawn again by a reviewed pull request after the first
+delivery (section 4). The delivery is still not complete until a promotion merge, the temporary credential, the environment approval and the upload have actually happened. The record states
+its own default: a record that is not `AUTHORIZED` for the exact version of the commit makes this workflow fail visibly at its first job and sign nothing.
 
 **Credential model (CTO decision on Issue #71, 2026-11-26, revising the first design of this pull request).** The original temporary provisioning of the Admin-level App Store
 Connect API key is **preserved**: the key is **never stored permanently in GitHub**. The merge starts the workflow; the credential-free jobs run by themselves; the signing job
@@ -75,7 +76,7 @@ version, environment and source commit). `tool/test_ios_staging_delivery.sh` pin
 |---|---|
 | The production signing steps, **as text**: export and sign (the first step with the key), upload (the second), the upload-tool probe, the key-file checks, the hand-over validation, V1 to V9, the evidence seal | `ios-staging-delivery.yml` (trigger, authorization and source steps, the V6 call, the delivery record) |
 | `tool/verify_ipa.py` (already supports `staging`), `ipa_inspect.py`, `validate_handover_archive.py`, `verify_artifact.sh`, `build_manifest.py`, `verify_build_config.sh check-binary` | `tool/check_staging_authorization.sh` and its test |
-| The production gate's strict record parser (`check_signing_authorization.sh --print-field`) | `docs/release-records/ios-staging-authorization.md` (WITHDRAWN) |
+| The production gate's strict record parser (`check_signing_authorization.sh --print-field`) | `docs/release-records/ios-staging-authorization.md` (AUTHORIZED for 1.0.5+10005001) |
 | The Apple team, the cloud-managed Distribution certificate, `altool` | the GitHub environment `ios-hosted-signing-stg` (a GitHub setting) |
 
 `ios-hosted-signing.yml`, `check_signing_authorization.sh`, the production record and every bound tool are **byte-identical**: `tool/test_ios_staging_delivery.sh` checks the
@@ -101,7 +102,7 @@ CLAUDE.md and `GOVERNANCE.md` forbid weakening a signing gate. The two are recon
    merge**, its merged side is an **ancestor of the current `development`**, and the application content under the same paths as the production workflow's `CONTENT_PATHS` equals that side.
 3. **A live kill switch**: the same record on the **current tip of `development`** must still say `AUTHORIZED`. A withdrawal merged on `development` stops the next delivery, even for a promotion that
    already carries `AUTHORIZED`, and even for a run already in progress (the gate runs again before the key is touched and again before the upload).
-4. **Default closed**: the committed record is `WITHDRAWN`; a missing, repeated, indented, fenced, commented or malformed line refuses.
+4. **Default closed**: a record that is not `AUTHORIZED` for this version refuses (the designed default is `WITHDRAWN`); a missing, repeated, indented, fenced, commented or malformed line refuses.
 5. **Fail closed**: if the remote cannot be read, or `development` has no record, nothing is authorized.
 
 **What is NOT bound, and why that is the residual risk.** The record cannot name the merge commit, so the human review of the pull request (a Maintainers approval; no bypass actors) is what
@@ -151,7 +152,7 @@ the resulting file has the git blob `13c9efdd...` that the runner printed. The l
 
 ## 7. Versions
 
-`pubspec.yaml` is the only source; no workflow writes or overrides it. The authorization binds `X.Y.Z+N`. See the proposal in the pull request description / report: next staging **1.0.5+1000036**.
+`pubspec.yaml` is the only source; no workflow writes or overrides it. The authorization binds `X.Y.Z+N`: the first staging delivery is **1.0.5+10005001** (approved on Issue #54, PR #146; authorized on Issue #71 on 2026-11-27). After a failed delivery the next attempt carries the next number (`10005002`, ...).
 
 ## 8. Failure handling
 
@@ -178,9 +179,10 @@ whether Apple's cloud signing creates the staging App ID and profile on its own 
 before any secret and prints the real value); and the Podfile.lock regeneration of section 6. Expect one or two corrective pull requests on the first real run; each stops safely.
 
 **Also not proven: that a secret added while the job waits is available when it starts.** GitHub documents that a job cannot access environment secrets until the required reviewers approve it, which points
-the right way, but nothing in this repository shows a secret being added during the wait (the production authorizations added theirs before dispatch). The operational order of section 1.1 depends on it. Appendix A
-is a harmless test with a dummy value that settles it, to be run **once by the CTO** before the first real delivery; it was **not run** (an agent may not change secrets or environments). If it fails, the fallback is to
-provision the secrets before the merge (they would then exist in the environment while the run waits, which is the production sequence) and the approval still gates their use.
+the right way, but nothing in this repository shows a secret being added during the wait (the production authorizations added theirs before dispatch). The operational order of section 1.1 depends on it.
+**CTO decision of 2026-11-27: no separate experiment is required**; the documented GitHub lifecycle is accepted, with this exact sequence not yet exercised. Appendix A remains available as an optional harmless test and was **not run**. If the order does not hold,
+`sign` stops at its first secret step ("A secret ... is missing") before it writes a key file; nothing is signed; the secrets are removed, the build number is consumed, and the next reviewed attempt provisions the secrets
+before the merge (they would then exist in the environment while the run waits, which is the production sequence) and the approval still gates their use.
 
 ## 10. Credential-free preflight of the staging archive (the `dlc_wallet` hash before any authorization)
 
