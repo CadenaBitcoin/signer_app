@@ -175,12 +175,38 @@ the resulting file has the git blob `13c9efdd...` that the runner printed. The l
 
 The new workflow's secret-bearing steps are the production steps' text, but: the staging archive and `flutter build ipa --flavor staging` have only been compiled as an unsigned `.app` by CI before;
 whether Apple's cloud signing creates the staging App ID and profile on its own (A1 removes the doubt); the framework hash of a staging archive (the record's proposal is the production value; a mismatch stops the run
-before any secret and prints the real value); and the Podfile.lock regeneration of section 6. Expect one or two corrective pull requests on the first real run; each stops safely.
+before any secret and prints the real value; section 10 is the credential-free preflight that shows it beforehand); and the Podfile.lock regeneration of section 6. Expect one or two corrective pull requests on the first real run; each stops safely.
 
 **Also not proven: that a secret added while the job waits is available when it starts.** GitHub documents that a job cannot access environment secrets until the required reviewers approve it, which points
 the right way, but nothing in this repository shows a secret being added during the wait (the production authorizations added theirs before dispatch). The operational order of section 1.1 depends on it. Appendix A
 is a harmless test with a dummy value that settles it, to be run **once by the CTO** before the first real delivery; it was **not run** (an agent may not change secrets or environments). If it fails, the fallback is to
 provision the secrets before the merge (they would then exist in the environment while the run waits, which is the production sequence) and the approval still gates their use.
+
+## 10. Credential-free preflight of the staging archive (the `dlc_wallet` hash before any authorization)
+
+**Why.** The record pins the SHA-256 of `Frameworks/dlc_wallet.framework/dlc_wallet` inside the unsigned **archive** that the `build` job makes with `flutter build ipa --release --no-codesign --flavor staging`
+and the `sign` job extracts. The proposed pin (`9a2d1d98…fc13`) was measured on **production** archives of 1.0.4; no staging archive existed. A mismatch stops a real delivery before any secret and, under
+RELEASE_POLICY.md 7.3, consumes the build number of the promotion. The preflight finds out first, from the tip of `development`, with no credential.
+
+**Why not `ios-ci-validation.yml`.** It runs `flutter build ios`, whose product is a bare `Runner.app`, not an archive. The `dlc_wallet` binary of its run 45958826732 hashes to `65a0b90d…814b1`: not the pin, but also **not
+comparable** (a different build action, flavor and version than the production archives), so the difference proves nothing either way. Nothing here treats that hash as equivalent.
+
+**What it is.** `.github/workflows/ios-staging-archive-preflight.yml` (manual only, `development` only, `contents: read`, no secret, no environment, no Apple name, no signing, export or upload command, no binary uploaded):
+the environment pins and the nine archive steps are the **text** of the delivery's `build` job, and the extraction, the pin read and the hashed path are those of its `sign` job; `tool/test_ios_staging_preflight.sh`
+proves that, comment-free, and exercises the comparison on a synthetic archive. It changes neither the delivery workflow nor the gate, so the blobs bound by the record stay valid. It reads the pin from the record
+the way the signing job does and **does not read the status**: it authorizes and consumes nothing.
+
+**Run it (maintainer).** *Actions, "iOS staging archive preflight", Run workflow, branch `development`.* A run on another ref, or on a commit that is not the current tip of `development`, fails at once. Read the job summary
+and the artifact `ios-staging-preflight-evidence_<run>-<attempt>` (text: the hash, the proposed pin, the identity and version of the archived app, the toolchain, `SHA256SUMS.txt`).
+
+| Result | Meaning | Next step |
+|---|---|---|
+| green, `preflight_result=MATCH` | the staging archive's framework equals the proposed pin, on today's runner image | C2 can be approved with this run as its evidence; the delivery's own check stays the final one |
+| red, `preflight_result=DIFFERENT` | the real value is in the log, summary and evidence | a reviewed pull request corrects `G2S-STAGING-DLC-WALLET-SHA256` after the CTO decides whether the new value is acceptable (no promotion happened, so no number is consumed) |
+| red before the hash | source, toolchain, dependency, configuration, Rust-library or identity failure | fix on `development`, run again |
+
+**Limit.** The same commands on the same pins are strong evidence, not a proof of byte equality: the runner image version of the day, and what Apple's tools do with it, are not under this repository's control (the
+production hash was equal in every build on two runner images, an observation). If a preflight and a later delivery ever disagree, the delivery's check decides and the cause is investigated before the next promotion.
 
 ## Appendix A. Harmless test: do secrets added during the wait reach the job?
 

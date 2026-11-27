@@ -133,6 +133,10 @@ jobs:
       - name: Test the staging delivery workflow, static rules, parity with the production workflow, and the Android staging APK delivery
         run: tool/test_ios_staging_delivery.sh
 
+      # The credential-free preflight of the staging archive (Issues #54, #71): no secret, no signing, no upload, and the same archive steps as the delivery's build job.
+      - name: Test the staging archive preflight (workflow shape, equivalence with the delivery build, comparison behaviour)
+        run: tool/test_ios_staging_preflight.sh
+
       # The IPA verifier (tool/verify_ipa.py, tool/ipa_inspect.py) is the tool that judges a signed IPA; its tests run here, on every pull
       # request, with synthetic IPAs and the real Apple cloud-signing CMS and embedded Info.plist fixtures of tool/fixtures/. Credential-free,
       # no network. The script SKIPS (exit 0) when openssl lacks the `cms` command, which must never pass silently in CI.
