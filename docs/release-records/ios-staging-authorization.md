@@ -28,8 +28,8 @@ merge of `development` into `staging`.
 ## 2. The authorization lines
 
 Each line is read by the production gate's strict parser: at column 0, exactly once, LF only, outside code blocks and comments. The values below are the
-committed default (**WITHDRAWN**). `PENDING` marks a value that only the human owner can supply; the candidate values for the certificate and the native library are the
-ones recorded for production and are **proposals** until the CTO accepts them.
+committed default (**WITHDRAWN**). `PENDING` marks a value that only the human owner can supply; the candidate certificate value is the one observed in the production runs, and the
+candidate native-library value is the STAGING archive's own hash (section 2.1); both are **proposals** until the CTO accepts them (decisions C1 and C2, not taken here).
 
 G2S-STAGING-STATUS: WITHDRAWN
 G2S-STAGING-OPERATION: sign-verify-and-upload
@@ -38,7 +38,7 @@ G2S-STAGING-BUNDLE-ID: com.app.cadenabitcoin.staging
 G2S-STAGING-TEAM-ID: D65458CPDP
 G2S-STAGING-APP-APPLE-ID: 6839776198
 G2S-STAGING-CERT-SHA256: 7ee3f6ce78eea83748e198102f6ab66527c626296baaea437c3a90db81ef418e
-G2S-STAGING-DLC-WALLET-SHA256: 9a2d1d98ee4cf7aa608a161cff3d57aa380fec227876ab9c4b2b93f3f381fc13
+G2S-STAGING-DLC-WALLET-SHA256: 92231f38c71864833cd6bcdf03c4849c72e6e0a7d66bd59b826dd2798680646d
 G2S-STAGING-WORKFLOW-BLOB: 0336bf49730851b0bda8bb7dffbeba1fee943809
 G2S-STAGING-GATE-BLOB: 46483dff8204a2cbfb98d6c2b670cedd4242d049
 G2S-STAGING-TOOL-BLOBS: tool/build_manifest.py=3041c560adcac9ad2f3b052378825762518df30e,tool/check_signing_authorization.sh=fe841d2d5eb5b533551f28608e294ca3165f1ac0,tool/ipa_inspect.py=20b7efc972d55b40a23276c5ed29a0e4b281269b,tool/validate_handover_archive.py=ef4ce2c686e2ae7c3eacb61d078764f8c5b71c3d,tool/verify_artifact.sh=b9d81a3aa171d4e3d900137f3a0c68fb8441fde4,tool/verify_build_config.sh=0e1bce96d68ade109ffb961258008b13a15beec4,tool/verify_ipa.py=7d31b621efa82448384f08f67ee119e765eb9338
@@ -47,6 +47,17 @@ G2S-STAGING-DECISION-S1: PENDING
 G2S-STAGING-DECISION-S2: PENDING
 G2S-STAGING-DECISION-S3: PENDING
 G2S-STAGING-DECISION-S4: PENDING
+
+### 2.1 Provenance of the native-library line (a proposal, not an approval)
+
+The line `G2S-STAGING-DLC-WALLET-SHA256` is the SHA-256 of `Frameworks/dlc_wallet.framework/dlc_wallet` inside the **unsigned staging archive**, the file the delivery's `sign` job hashes before any secret exists.
+
+- **Value:** `92231f38c71864833cd6bcdf03c4849c72e6e0a7d66bd59b826dd2798680646d`. It replaces the first proposal, the production archives' value `9a2d1d98ee4cf7aa608a161cff3d57aa380fec227876ab9c4b2b93f3f381fc13`, which stays the (unchanged) value of the production record.
+- **Measured by** two independent runs of the credential-free `iOS staging archive preflight`: `45967581978` and `45969558826` (https://github.com/CadenaBitcoin/signer_app/actions/runs/45967581978 and https://github.com/CadenaBitcoin/signer_app/actions/runs/45969558826), both on `development` commit `2aac65d2b3ee33918f4a636c7442d52e139abdec` (tree `a94a58588209aaa57233a916b0217bdf08aa3bcb`), version `1.0.5+10005001`, `flutter build ipa --release --no-codesign --flavor staging --dart-define-from-file=config/build/staging.json`, runner image `macos15 20261118.0550.1`, macOS 15.8.2, Xcode 26.3 (17C529), iPhoneOS SDK 26.2, Flutter 3.35.3, Dart 3.9.2, CocoaPods 1.17.0, Rust library `203dcd7abe4187de0b756638a55f691b2d5c680b17d4fbfa7dda550ed703949b`.
+- **Reproducibility:** both runs gave this exact hash although their archive tars differ (`d288829b…500b`, `d13a735b…20e5`), as the production archives' tars did while their framework stayed equal. Both used the same runner image, so equality across images is **not** shown here.
+- **Why the production value cannot be reused:** the compiled framework embeds Xcode's object-file paths, which carry the flavor and the build action (production archive: `…/ArchiveIntermediates/production/IntermediateBuildFilesPath/Pods.build/Release-production-iphoneos/dlc_wallet.build/…`; staging: `…/Release-staging-iphoneos/dlc_wallet.build/…`). With those four path strings normalized, the two binaries' string tables are identical; the bytes still differ. A staging archive can never equal the production hash.
+- **Limitation:** any change of Xcode, the runner image's tools or paths, the runner work directory, the Pods build layout or other compiler-generated paths can change this hash. The delivery then stops before Xcode and before any secret, and the promotion's build number is consumed (RELEASE_POLICY.md 7.3). Run the preflight again on the final `development` tip before the promotion.
+- This is evidence supporting decision C2. It is **not** the CTO's approval of it, and it authorizes nothing: the record stays `WITHDRAWN`.
 
 ## 3. The decisions that must be taken before `AUTHORIZED`
 
@@ -66,8 +77,7 @@ A decision line has the form `Decided by <name> on YYYY-MM-DD`. The gate checks 
 
 1. Complete the Apple and GitHub prerequisites of docs/IOS_STAGING_DELIVERY.md section 5 (they are not repository changes): the environment exists with the branch restriction and the required reviewers, and **holds no secret**.
 2. Take the decisions S1 to S4 in writing on Issue #71 (the CTO's revised credential decision of 2026-11-26 is the basis of S2 and S3; its comment URL goes into `G2S-STAGING-AUTHORIZATION`).
-3. In this file: set `G2S-STAGING-AUTHORIZATION` and the four decision lines (`G2S-STAGING-APP-APPLE-ID` is already the verified `6839776198`); confirm or correct the certificate and native-library lines
-   from the production evidence; set `G2S-STAGING-VERSION` to the version in `pubspec.yaml` of the same pull request; refresh the three blob lines with
+3. In this file: set `G2S-STAGING-AUTHORIZATION` and the four decision lines (`G2S-STAGING-APP-APPLE-ID` is already the verified `6839776198`); confirm or correct the certificate line from the production evidence and the native-library line from section 2.1 (and a fresh preflight on the final `development` tip); set `G2S-STAGING-VERSION` to the version in `pubspec.yaml` of the same pull request; refresh the three blob lines with
    `bash tool/check_staging_authorization.sh --print-expected --tools-root .`; and only then set `G2S-STAGING-STATUS` to `AUTHORIZED`.
 4. `tool/test_check_staging_authorization.sh` refuses an AUTHORIZED record whose blobs are not those of the checkout.
 

@@ -247,5 +247,18 @@ echo "== the staging environment is ios-hosted-signing-stg (the maintainer's Git
 grep -E '^    environment: ios-hosted-signing-stg$' "$wf" | wc -l | grep -qx 1; chk "exactly one job declares that environment" $?
 grep -F 'only `staging`' "$doc" >/dev/null && grep -F 'sziller' "$doc" >/dev/null && grep -F 'CadenaWizard' "$doc" >/dev/null; chk "the document keeps the staging-only branch restriction and the two required reviewers" $?
 
+echo "== the native-library pin is the STAGING archive's own hash (preflight runs 45967581978 and 45969558826), never the production value"
+STAGING_DLC="92231f38c71864833cd6bcdf03c4849c72e6e0a7d66bd59b826dd2798680646d"; PROD_DLC="9a2d1d98ee4cf7aa608a161cff3d57aa380fec227876ab9c4b2b93f3f381fc13"
+[ "$(grep -cE '^G2S-STAGING-DLC-WALLET-SHA256: ' "$rec")" -eq 1 ] && grep -E "^G2S-STAGING-DLC-WALLET-SHA256: $STAGING_DLC\$" "$rec" >/dev/null; chk "the staging record carries the staging archive's framework hash on its one line" $?
+! grep -E "^G2S-STAGING-DLC-WALLET-SHA256: $PROD_DLC" "$rec" >/dev/null; chk "and not the production value" $?
+grep -E "^G2S-DLC-WALLET-SHA256: $PROD_DLC\$" "$root/docs/release-records/ios-1.0.4-1000035.md" >/dev/null; chk "the production record's pin is unchanged" $?
+grep -F '45967581978' "$rec" >/dev/null && grep -F '45969558826' "$rec" >/dev/null && grep -F '2aac65d2b3ee33918f4a636c7442d52e139abdec' "$rec" >/dev/null && grep -F 'macos15 20261118.0550.1' "$rec" >/dev/null && grep -F 'Xcode 26.3 (17C529)' "$rec" >/dev/null; chk "the record documents both preflight runs, the source commit and the toolchain" $?
+grep -F 'Release-production-iphoneos' "$rec" >/dev/null && grep -F 'Release-staging-iphoneos' "$rec" >/dev/null && grep -F 'can never equal the production hash' "$rec" >/dev/null; chk "the record explains why the production hash cannot be reused" $?
+grep -F 'can change this hash' "$rec" >/dev/null && grep -F 'equality across images is **not** shown' "$rec" >/dev/null; chk "the record states the limitation (Xcode, runner image, paths; one image only)" $?
+grep -F 'evidence supporting decision C2. It is **not** the CTO' "$rec" >/dev/null; chk "the record says this is evidence for C2, not the CTO's approval" $?
+grep -F '### 10.1' "$doc" >/dev/null && grep -F '45967581978' "$doc" >/dev/null && grep -F '45969558826' "$doc" >/dev/null && grep -F "$STAGING_DLC" "$doc" >/dev/null; chk "the document records both runs and the staging hash (section 10.1)" $?
+! grep -E "proposal is the production value|The proposed pin \(.9a2d1d98" "$doc" >/dev/null; chk "no sentence in the document calls the production value the expected staging hash" $?
+grep -E '^G2S-STAGING-STATUS: WITHDRAWN$' "$rec" >/dev/null && [ "$(grep -cE '^G2S-STAGING-(AUTHORIZATION|DECISION-S[1-4]): PENDING$' "$rec")" -eq 5 ]; chk "the record is still WITHDRAWN and its authorization and four decisions are still PENDING" $?
+
 echo "ios-staging-delivery: $pass passed, $failed failed"
 [ "$failed" -eq 0 ]
