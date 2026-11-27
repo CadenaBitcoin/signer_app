@@ -3,7 +3,7 @@
 Issues #54 (parent), #57, #69, #71. Workflow: `.github/workflows/ios-staging-delivery.yml`. Gate: `tool/check_staging_authorization.sh`.
 Record: `docs/release-records/ios-staging-authorization.md`. Tests: `tool/test_check_staging_authorization.sh`, `tool/test_ios_staging_delivery.sh`.
 
-**Status: run once, failed before signing; no signing or upload has ever happened.** The first attempt, version `1.0.5+10005001` (run `45995314041`), failed at the secret check because no secret existed for the job (section 8.1); its number is consumed. The CTO authorized the delivery on 2026-11-27 (Issue #71; decisions S1 to S4 and C1 to C4) and authorized the next attempt, `1.0.5+10005002`, by the recovery decision named in the record; the committed record is `AUTHORIZED` for that version only and is withdrawn again by a reviewed pull request after the delivery (section 4). The delivery is not complete until a promotion merge, the credential, the environment approval and the upload have actually happened. The record states
+**Status: run twice; the second run delivered.** The first attempt, version `1.0.5+10005001` (run `45995314041`), failed at the secret check because no secret existed for the job (section 8.1); its number is consumed. The second, `1.0.5+10005002` (run `46005605593`, 2026-11-27), signed, verified (V1 to V9) and uploaded the IPA to the staging application (delivery UUID `4baabc47-2809-445c-a7ec-4cd24998923b`); the durable record is [release-records/staging-delivery-1.0.5-10005002.adoc](release-records/staging-delivery-1.0.5-10005002.adoc). The committed record is `WITHDRAWN` again (decision S3). TestFlight processing, tester availability and installation are not confirmed. The record states
 its own default: a record that is not `AUTHORIZED` for the exact version of the commit makes this workflow fail visibly at its first job and sign nothing.
 
 **Credential model (CTO decision on Issue #71, 2026-11-26, revising the first design of this pull request).** The original temporary provisioning of the Admin-level App Store
@@ -74,7 +74,7 @@ version, environment and source commit). `tool/test_ios_staging_delivery.sh` pin
 |---|---|
 | The production signing steps, **as text**: export and sign (the first step with the key), upload (the second), the upload-tool probe, the key-file checks, the hand-over validation, V1 to V9, the evidence seal | `ios-staging-delivery.yml` (trigger, authorization and source steps, the V6 call, the delivery record) |
 | `tool/verify_ipa.py` (already supports `staging`), `ipa_inspect.py`, `validate_handover_archive.py`, `verify_artifact.sh`, `build_manifest.py`, `verify_build_config.sh check-binary` | `tool/check_staging_authorization.sh` and its test |
-| The production gate's strict record parser (`check_signing_authorization.sh --print-field`) | `docs/release-records/ios-staging-authorization.md` (AUTHORIZED for 1.0.5+10005002) |
+| The production gate's strict record parser (`check_signing_authorization.sh --print-field`) | `docs/release-records/ios-staging-authorization.md` (WITHDRAWN after the delivery of 1.0.5+10005002) |
 | The Apple team, the cloud-managed Distribution certificate, `altool` | the GitHub environment `ios-hosted-signing-stg` (a GitHub setting) |
 
 `ios-hosted-signing.yml`, `check_signing_authorization.sh`, the production record and every bound tool are **byte-identical**: `tool/test_ios_staging_delivery.sh` checks the
@@ -170,7 +170,7 @@ the resulting file has the git blob `13c9efdd...` that the runner printed. The l
 | Another promotion is merged while a run waits (section 1.3) | the waiting run is stale: reject it; its gate would refuse it after the approval (the tip of `staging` moved) |
 | The secrets are still in the environment after a run | the standing "off" state is lost: remove them at once and check `total_count` is `0` (section 1.1, step 7); a leftover key can be used by the next run that is approved |
 
-### 8.1 The first attempt (`1.0.5+10005001`) and the second (`1.0.5+10005002`)
+### 8.1 The first attempt (`1.0.5+10005001`) and the second (`1.0.5+10005002`, succeeded)
 
 **What happened (run `45995314041`, `staging` at `a6ed42f`, 2026-11-27).** `authorize` and `build` passed, and the framework hash check passed on the real merge commit. `sign` waited for the approval, was approved by `CadenaWizard` about 31 seconds after it began waiting,
 and stopped at "Export and sign ... (the only step with secrets)" with `A secret of the environment ios-hosted-signing-stg is missing`: the three secrets were empty in the step (the environment, the production environment and the repository held none). No key file was written
@@ -179,6 +179,8 @@ and nothing was exported, signed or uploaded. The number `10005001` is consumed.
 **Second attempt (`10005002`): the order changes, the mechanisms do not.** The three secrets are provisioned in `ios-hosted-signing-stg` and **verified before the merge into `staging`**: `gh api repos/CadenaBitcoin/signer_app/environments/ios-hosted-signing-stg/secrets --jq '.total_count, [.secrets[].name]'`
 must print `3` and exactly `APPLE_API_KEY_ID`, `APPLE_API_ISSUER_ID`, `APPLE_API_KEY_P8` (names only; the values are never read). The secrets are still released to the job only after the environment approval and only on the branch `staging`; the approval, the gate runs, the one-day archive retention and the removal after the run
 (step 7 of section 1.1, `total_count` back to `0`) are unchanged. Do not add or approve anything else in the meantime; a failed attempt again needs a reviewed pull request with the next number.
+
+**Result of the second attempt.** It succeeded: every job passed, the framework hash and the certificate equalled the pins, V1 to V9 passed, Apple validated and accepted the upload, the key file was removed and the maintainer removed the secrets afterwards. The order "secrets provisioned and verified before the merge, approval after it" is therefore the one that has worked end to end. Whether a secret added **during** the wait reaches the job is still untested. Details and checksums: [release-records/staging-delivery-1.0.5-10005002.adoc](release-records/staging-delivery-1.0.5-10005002.adoc).
 
 ## 9. Not proven until the first real run
 

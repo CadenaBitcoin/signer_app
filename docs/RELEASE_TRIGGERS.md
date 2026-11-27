@@ -11,7 +11,7 @@ delivery are separate, separately authorized work (see
 
 **The one exception is a separate workflow, not `build-variants.yml`:** a push to `staging` also starts
 `ios-staging-delivery.yml`, which signs the iOS staging app and uploads it to the staging TestFlight application,
-but only when the staging authorization record says so (`AUTHORIZED` for one version, by the CTO's decision on Issue #71; the designed default is WITHDRAWN), and its signing job then waits for the
+but only when the staging authorization record says so (`AUTHORIZED` for one version only, by the CTO's decision on Issue #71, and `WITHDRAWN` again after its delivery; it is `WITHDRAWN` now), and its signing job then waits for the
 approval of the protected environment `ios-hosted-signing-stg`, whose credential the CTO provisions temporarily for that run. It is
 described, with its prerequisites and authorization, in [IOS_STAGING_DELIVERY.md](IOS_STAGING_DELIVERY.md); the workflows below
 remain credential-free.
