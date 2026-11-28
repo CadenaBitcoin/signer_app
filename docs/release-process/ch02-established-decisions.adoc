@@ -4,7 +4,7 @@
 
 *Scope:* Decisions already made, their implementation status, supporting evidence and necessary documentation reconciliation.
 
-*Status:* Proposal for review.
+*Status:* Adopted (revision 4). Decisions are authoritative; the implementation status of each is stated in its row and in `STA-01`.
 
 This register records established architectural and operational decisions.
 
@@ -246,7 +246,7 @@ Release evidence must not depend exclusively on expiring workflow artifacts, tem
 Verified facts, reported facts and unconfirmed statements must be distinguishable.
 | CTO direction of 2026-11-27.
 
-Extend `RELEASE_POLICY.md` section 9 and establish delivery record template `REC-01`.
+Extend `RELEASE_POLICY.md` section 9 and establish the delivery-record template (`docs/60-operations/templates/delivery-record.adoc`). The template has no identifier of its own; `REC-01` denotes only the reconciliation item of Chapter 4.
 
 Durable machine-readable records are governed by DEC-35.
 

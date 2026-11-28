@@ -4,7 +4,7 @@
 
 *Scope:* The requirements and implementation activities necessary to extend the demonstrated staging infrastructure into a controlled production delivery pipeline.
 
-*Status:* Proposal for review. Implementation and verification of the production pipeline do not constitute authorization of a production release.
+*Status:* Adopted (revision 4). Implementation and verification of the production pipeline do not constitute authorization of a production release.
 
 == Objective
 

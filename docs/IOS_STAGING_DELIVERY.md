@@ -8,7 +8,7 @@ its own default: a record that is not `AUTHORIZED` for the exact version of the 
 
 **Credential model (CTO decision on Issue #71, 2026-11-26, revising the first design of this pull request).** The original temporary provisioning of the Admin-level App Store
 Connect API key is **preserved**: the key is **never stored permanently in GitHub**. The merge starts the workflow; the credential-free jobs run by themselves; the signing job
-**waits for the approval of the protected environment `ios-hosted-signing-stg`**; the CTO provisions the three secrets for that window, approves, and removes them afterwards
+**waits for the approval of the protected environment `ios-hosted-signing-stg`**; the three secrets are provisioned and verified **before the promotion merge** (the order of DEC-28, which the second delivery demonstrated), the CTO approves, and removes them afterwards
 (section 1.1). Permanent storage of the Admin key is **not authorized**.
 
 ## 1. What happens on a merge into `staging`
@@ -30,19 +30,25 @@ are skipped, and no secret is read. If the gate passes, the `sign` job stops at 
 
 ### 1.1 The operational order of one delivery
 
-The record is already `AUTHORIZED` (merged before the promotion, section 4); the environment `ios-hosted-signing-stg` exists with **no secret** in it.
+The record is already `AUTHORIZED` (merged before the promotion, section 4). This is the sole credential-management sequence of the release framework (DEC-28), which supersedes the earlier order in which the secrets were provisioned while the signing job waited. Four states are kept apart:
+
+* *At rest*, the environment `ios-hosted-signing-stg` holds **no secret**.
+* *During one authorized delivery*, from step 2 to step 7, it holds the three secrets.
+* *Before the approval of step 5*, the signing job cannot read them, although they exist in the environment.
+* *After the delivery*, they are removed and their absence is verified (steps 7 and 8).
 
 | # | Who | What | Why here |
 |---|---|---|---|
-| 1 | Maintainers | A reviewed `development -> staging` merge carries the version advance and the `AUTHORIZED` record. The merge starts `ios-staging-delivery.yml`. | The authorization is the record, given before the promotion; nobody dispatches. |
-| 2 | GitHub | `authorize` (the gate, no secret) and `build` (one unsigned archive of the merge commit, no secret) run and finish. The archive is handed over as a **one-day** artifact. | Everything that runs third-party code finishes before any credential exists anywhere. |
-| 3 | GitHub | `sign` shows *Waiting*: the environment's required reviewers must approve. No secret is released to it and nothing runs. | The approval is the human moment before the credential is used. |
-| 4 | CTO | **Before approving**, checks the run (list below) and **provisions the three environment secrets** `APPLE_API_KEY_P8`, `APPLE_API_KEY_ID`, `APPLE_API_ISSUER_ID` of `ios-hosted-signing-stg` from the key held offline. | The key is in GitHub only from here until step 7. |
-| 5 | CTO | **Approves** the `sign` job. | The deployment is confirmed (see below: it does not replace the record). |
-| 6 | GitHub | `sign` runs: the gate runs again, the hand-over is validated, the framework hash is enforced (all before any secret is read), then export and signing, V1 to V9, the pre-upload re-check, and the upload of **the same IPA** to the staging application. | Unchanged from the tested production steps. |
-| 7 | CTO | **Removes the three secrets at once**, whatever the result, and checks that the environment holds none (`gh api repos/CadenaBitcoin/signer_app/environments/ios-hosted-signing-stg/secrets --jq .total_count` must print `0`; it lists names only). | Removing the secrets is what stops a further run. It does not revoke the Apple key (a separate CTO decision). |
+| 1 | Maintainers | Complete the readiness checks of the promotion pull request (DEC-22). The reviewed `development -> staging` pull request carries the version advance and the `AUTHORIZED` record. | The authorization is the record, given before the promotion; nobody dispatches. |
+| 2 | CTO | **Provisions the three environment secrets** `APPLE_API_KEY_P8`, `APPLE_API_KEY_ID`, `APPLE_API_ISSUER_ID` of `ios-hosted-signing-stg` from the key held offline. | The key is in GitHub only from here until step 7. Provisioning after the merge is not a supported alternative. |
+| 3 | CTO | **Verifies that all three are present**: `gh api repos/CadenaBitcoin/signer_app/environments/ios-hosted-signing-stg/secrets --jq '.total_count, [.secrets[].name]'` must print `3` and exactly the three names (names only; the values are never read). | A missing secret would stop the signing step after the approval (section 8.1). |
+| 4 | Maintainers | **Merge** the pull request into `staging`. The merge starts `ios-staging-delivery.yml`. `authorize` (the gate, no secret) and `build` (one unsigned archive of the merge commit, no secret) run and finish, and the archive is handed over as a **one-day** artifact. `sign` shows *Waiting*: the environment's required reviewers must approve, and no secret is released to it. | Everything that runs third-party code finishes before any secret is read. The approval is the human moment before the credential is used. |
+| 5 | CTO | **Approves** the `sign` job, after the checks below. GitHub then releases the secrets to it, on the branch `staging` only. `sign` runs: the gate runs again, the hand-over is validated, the framework hash is enforced (all before any secret is read), then export and signing, V1 to V9, the pre-upload re-check, and the upload of **the same IPA** to the staging application. | The deployment is confirmed (see below: it does not replace the record). The signing steps are unchanged from the tested production steps. |
+| 6 | CTO | **Establishes that the workflow has finished and verifies its outcome**, including a run that failed, was rejected or was cancelled. | A concluded run is the condition for removing the secrets. |
+| 7 | CTO | **Removes the three secrets at once**, whatever the result. | Removing the secrets is what stops a further run. It does not revoke the Apple key (a separate CTO decision). |
+| 8 | CTO | **Verifies that all three are absent**: the same command with `--jq .total_count` must print `0`. | The standing "off" state is restored and checked. |
 
-**Before approving (step 4)**, the approver checks that: the run belongs to the promotion just merged and is the **current tip of `staging`**; `authorize` and `build` succeeded with the authorized version
+**Before approving (step 5)**, the approver checks that: the run belongs to the promotion just merged and is the **current tip of `staging`**; `authorize` and `build` succeeded with the authorized version
 (`1.0.5+...` as recorded); no other run of this workflow is waiting (section 1.3); **the build finished less than a day ago (section 1.2)**; and nothing about the run is in doubt. A doubtful run is
 **rejected**, never approved "to see what happens". The approval **confirms the deployment only**: it is not the authorization (the record is), it adds no independence (the two reviewer accounts are one
 person, as for production) and it never replaces the gate, which runs again after the approval and before the key is read.
@@ -117,6 +123,8 @@ authorization (A to E; the CTO's D16 decision: "No indefinite GitHub credential 
 IOS_SIGNING.md section 6 says required reviewers are "not used". The CTO's decision on Issue #71 adds one human step **after** the merge for staging: the environment approval, together with the temporary credential.
 It is a deployment confirmation, the same role as for the production operations (D12), not a second authorization. Neither document is edited here.
 
+**Reconciled by the documentation step P1 (REC-01, REC-02, REC-03).** `RELEASE_POLICY.md` 2.3 and `IOS_SIGNING.md` section 6 now distinguish the release authorization from the deployment confirmation of the environment approval, and section 1.1 follows the credential order of DEC-28. The paragraph above is kept as the record of why the difference was found.
+
 ## 5. Prerequisites that are not repository changes (what the human must do)
 
 Apple-side evidence read in the repository (all coordinator- or CTO-reported, **not verified through Apple**): the Organization team `D65458CPDP`; a cloud-managed Apple Distribution certificate
@@ -190,6 +198,8 @@ before any secret and prints the real value); and the Podfile.lock regeneration 
 
 **Also not proven: that a secret added while the job waits is available when it starts.** GitHub documents that a job cannot access environment secrets until the required reviewers approve it, which points
 the right way, but nothing in this repository shows a secret being added during the wait (the production authorizations added theirs before dispatch). The operational order of section 1.1 depends on it.
+
+*Superseded by DEC-28.* Provisioning before the merge is now the only supported order, and it is the order the second delivery demonstrated. Whether a secret added during the wait reaches the job no longer affects the procedure; the question is kept as history.
 **CTO decision of 2026-11-27: no separate experiment is required**; the documented GitHub lifecycle is accepted, with this exact sequence not yet exercised. Appendix A remains available as an optional harmless test and was **not run**. If the order does not hold,
 `sign` stops at its first secret step ("A secret ... is missing") before it writes a key file; nothing is signed; the secrets are removed, the build number is consumed, and the next reviewed attempt provisions the secrets
 before the merge (they would then exist in the environment while the run waits, which is the production sequence) and the approval still gates their use.

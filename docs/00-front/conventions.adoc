@@ -1,0 +1,151 @@
+[[conv-conventions]]
+= Documentation conventions
+:description: How human-oriented documentation is written, cross-referenced and rendered in this repository, and how to verify it.
+ifndef::specdir[:specdir: ../release-process/]
+ifndef::docsdir[:docsdir: ../]
+
+*Scope:* The practical rules for writing and verifying native AsciiDoc pages under `docs/`, and the exact procedure that renders and checks them.
+
+*Status:* Current. The requirements behind these rules are `DOC-01` to `DOC-04` and DEC-25 in the specification. This page adds only what the specification leaves open; it does not restate the specification's own conventions.
+
+== What this page does not define
+
+The seven documentation conventions of the specification (standalone pages, anchors and `xref:` macros, one definition per identifier, machine-read formats, rendering without neighbors, native table cell styles, master assembly) are defined in xref:{specdir}ch01-scope-and-method.adoc#ch01[Chapter 1]. They apply to every page here.
+
+The hierarchy, the responsibilities of its parts and the migration rules are defined in xref:{specdir}ch06-document-hierarchy-and-mapping.adoc#ch06[Chapter 6].
+
+== Page skeleton
+
+Every substantive page starts as follows, in this order:
+
+[source,asciidoc]
+----
+[[prefix-name]]
+= Descriptive title
+:description: One sentence.
+ifndef::specdir[:specdir: ../release-process/]
+ifndef::docsdir[:docsdir: ../]
+
+*Scope:* What the page covers.
+
+*Status:* Current, approved target, or historical, with the date or revision.
+----
+
+It ends with a `== References` block. The two `ifndef` lines give the relative paths to the specification and to the `docs/` directory when the page is rendered alone. They are correct for a page one directory below `docs/`; a page two levels down (the templates) uses `../../release-process/` and `../../`. The master book defines both attributes itself, and the lines then have no effect.
+
+== Anchors
+
+* The chapters of the specification own anchors of the form `chNN`.
+* Every other page chooses one lowercase prefix and uses it for every anchor it defines: `conv-` (this page), `gloss-` (glossary), `sta-` (as-built page).
+* An anchor is defined once in the whole tree. A page that is copied from a template renames its anchors.
+
+== Cross-references
+
+* To the specification: `+xref:{specdir}ch04-exceptions-and-reconciliation.adoc#ch04[Chapter 4]+`.
+* To another page of `docs/`: `+xref:{docsdir}70-state/as-built.adoc#sta-as-built[...]+`.
+* Always give the file name and an anchor. Never use a bare anchor for a target in another file. The attributes make one reference correct both when the page is rendered alone and when it is included in the master book, where an included page's references are resolved from `docs/`.
+* Requirements, decisions and exceptions are cited by identifier (`DEC-28`, `EXC-08`) and located through the chapter that defines the family (Chapter 1, stable identifiers).
+
+The specification is a separate book. The master book does not include its chapters, because Asciidoctor resolves a cross-reference between included files as internal only when the target path equals the include path, and the chapters cite each other by bare file name. Including them from another directory would break their mutual references. They are included when the migration (P8) moves their content into the hierarchy.
+
+== Evidence and status labels
+
+Pages that report implementation state use the evidence labels of Chapter 1: VERIFIED, DOCUMENTED BUT NOT VERIFIED, INFERRED, UNKNOWN. They add one label for facts reported by a person: CTO-REPORTED (or REPORTED BY a named role). A page never turns a reported fact into a verified one.
+
+Implementation state uses these words, and only these, in the as-built page:
+
+[cols="1,3",options="header"]
+|===
+| State | Meaning
+
+| Current
+| The mechanism exists in the repository and its behavior is stated as it is.
+
+| Approved target
+| The CTO has decided it. It may not exist yet.
+
+| Under investigation
+| The mechanism is not chosen or its feasibility is not shown (an `FQ-NN` question).
+
+| Implemented, not verified
+| The mechanism exists, and no evidence of its behavior has been gathered.
+|===
+
+== Formats required by tools
+
+`CLAUDE.md`, `CONTRIBUTING.md`, `GOVERNANCE.md`, `SECURITY.md`, the pull request template, workflow files and every file under `config/` keep the format their consumer requires. They are not converted. A tool-required document refers to the AsciiDoc page that holds the authoritative content instead of copying it.
+
+A document that moved keeps a short stub only where a path is still referenced (Chapter 6, reference compatibility). Files read by the authorization gates, and the documents their comments cite, keep their paths until the planned change window.
+
+== Rendering and checking
+
+The reference renderer is AsciidoctorJ 2.5.13 (Asciidoctor 2.0.23). Rendering must succeed at failure level WARN.
+
+=== Installation, without administrator rights
+
+. Install a JDK 17. The project already requires JDK 17 for Android builds (`CLAUDE.md`, section 3). JDK 25 is not needed and is not used here.
+. Download `asciidoctorj-2.5.13-bin.zip` from Maven Central (`org/asciidoctor/asciidoctorj/2.5.13/`). Its SHA-1 published next to it is `a0b3efd43fa40a9467fcf0f6cf596888ceffd0b3`. Compare it before unpacking.
+. Unpack it below your home directory, for example `~/.local/opt/asciidoctorj-2.5.13/`.
+
+[source,bash]
+----
+export JAVA_HOME=/usr/lib/jvm/java-17-openjdk-amd64   # any JDK 17
+ADOC="$HOME/.local/opt/asciidoctorj-2.5.13/bin/asciidoctorj"
+"$ADOC" --version    # AsciidoctorJ 2.5.13 (Asciidoctor 2.0.23)
+----
+
+=== Render every page, and the book
+
+Run from the repository root. Each `.adoc` file below `docs/` is rendered on its own, and `docs/index.adoc` is the book. The output tree must keep the directory structure of `docs/`, which is what makes cross-document references work and keeps the two `index.adoc` files apart. The `-R` option of AsciidoctorJ 2.5.13 does not preserve the structure, so each directory is rendered into its own output directory. The output directory `build/` is ignored by Git.
+
+[source,bash]
+----
+rm -rf build/docs-html
+for d in $(find docs -name '*.adoc' -exec dirname {} \; | sort -u); do
+  "$ADOC" --failure-level WARN -D "build/docs-html${d#docs}" "$d"/*.adoc || exit 1
+done
+----
+
+=== Check anchors and references
+
+Asciidoctor reports an unresolved cross-reference only at a verbosity that does not affect the exit code. This check reads the rendered tree. It fails when an anchor appears twice in one rendered page, or when a link points to a missing page or to an anchor that does not exist in its target page. It reads files only.
+
+[source,bash]
+----
+python3 -I - build/docs-html <<'PY'
+import html.parser, pathlib, sys, urllib.parse
+root = pathlib.Path(sys.argv[1]).resolve()
+class Page(html.parser.HTMLParser):
+    def __init__(self):
+        super().__init__(); self.ids = []; self.links = []
+    def handle_starttag(self, tag, attrs):
+        a = dict(attrs)
+        if a.get("id"): self.ids.append(a["id"])
+        if tag == "a" and a.get("href"): self.links.append(a["href"])
+pages, bad = {}, []
+for f in sorted(root.rglob("*.html")):
+    p = Page(); p.feed(f.read_text(encoding="utf-8")); pages[f] = p
+    for i in {i for i in p.ids if p.ids.count(i) > 1}:
+        bad.append(f"{f.relative_to(root)}: duplicate id {i}")
+for f, p in pages.items():
+    for h in p.links:
+        u = urllib.parse.urlparse(h)
+        if u.scheme or u.netloc: continue
+        target = f if not u.path else (f.parent / urllib.parse.unquote(u.path)).resolve()
+        if u.path and target.suffix != ".html": continue
+        if target not in pages: bad.append(f"{f.relative_to(root)}: missing page {h}"); continue
+        frag = urllib.parse.unquote(u.fragment)
+        if frag and frag not in pages[target].ids:
+            bad.append(f"{f.relative_to(root)}: missing anchor {h}")
+print(f"{len(pages)} pages checked, {len(bad)} problems")
+print("\n".join(bad)); sys.exit(1 if bad else 0)
+PY
+----
+
+The check establishes reference integrity. It does not establish that a page is correct.
+
+== References
+
+* xref:{specdir}ch01-scope-and-method.adoc#ch01[Chapter 1]: scope, classification and the documentation conventions of the specification.
+* xref:{specdir}ch06-document-hierarchy-and-mapping.adoc#ch06[Chapter 6]: hierarchy, migration and the master book.
+* xref:{specdir}ch12-revision-history.adoc#ch12[Chapter 12]: revision 4 errata.

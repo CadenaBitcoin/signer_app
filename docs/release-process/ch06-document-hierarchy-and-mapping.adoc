@@ -4,7 +4,7 @@
 
 *Scope:* The organization of authoritative human-oriented documentation, its relationship to machine-readable information, and the migration of existing repository documents.
 
-*Status:* Proposal for review. No repository document has been moved or replaced through this specification.
+*Status:* Adopted (revision 4). The hierarchy is the approved target. Migration is incremental; the documents moved or replaced so far are listed in `STA-01`.
 
 == Objectives
 
@@ -381,7 +381,9 @@ The local operator tool is distinguished from the manual procedure until its imp
 
 The current-state documentation distinguishes implemented and verified behavior from approved but unimplemented requirements.
 
-`STA-01` identifies the principal maintained as-built overview.
+`STA-01` identifies the principal maintained as-built overview. It is the page `docs/70-state/as-built.adoc`.
+
+`STA-01` states, for each release mechanism, whether it is current (implemented), an approved target, under investigation, or implemented but not yet verified, and cites the evidence. Statements about implementation status live there and are referenced from other documents rather than repeated.
 
 The current-state documentation includes or references:
 
@@ -415,6 +417,8 @@ They may contain:
 * Accepted limitations and exceptions.
 
 Human-oriented release records do not replace authoritative machine-readable build evidence.
+
+The templates for new records are `docs/60-operations/templates/delivery-record.adoc` and `docs/60-operations/templates/authorization-decision.adoc`. Neither is machine-consumed. The authorization template documents the content of the CTO's written decision. The binding authorization remains the structured record read by the gate (xref:ch07-machine-readable-state.adoc#ch07[Chapter 7]).
 
 See DEC-23, DEC-35 and xref:ch07-machine-readable-state.adoc#ch07[Chapter 7].
 
@@ -685,6 +689,8 @@ Distinguish between:
 
 Each applicable property remains verified after migration.
 
+Some tests assert narrative wording of documents. The inventory at P1 (recorded in `STA-01`) found such assertions on `IOS_STAGING_DELIVERY.md`, `IOS_SIGNING.md`, `IOS_RELEASE.md` (the required-reason scan pattern) and the `.adoc` delivery record, and an absence assertion on `RELEASE_TRIGGERS.md`. A document change that touches asserted wording adapts the assertion to the underlying requirement in the same reviewed change.
+
 === Historical preservation
 
 Historical release evidence must remain attributable to its original source and operational event.
@@ -727,6 +733,8 @@ The master document should define common book-level attributes where appropriate
 * Include conventions.
 
 Individual pages must remain suitable for standalone rendering.
+
+Until the specification is migrated into the hierarchy (P8), `release-process/index.adoc` remains the entry point of the specification as its own book, and the master book refers to it by cross-reference instead of including its chapters. Asciidoctor resolves a cross-reference between included files as internal only when the target path equals the path of the include, and the chapters cite each other by bare file name. Including them from another directory would turn their mutual references into dead file links. Chapter anchors of the form `chNN` belong to the specification; every other page uses its own prefix. The conventions page (`docs/00-front/conventions.adoc`) states the anchor scheme, the cross-reference pattern and the rendering procedure.
 
 Common content must not be duplicated merely to support standalone and book rendering.
 

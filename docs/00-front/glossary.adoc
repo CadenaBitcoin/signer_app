@@ -1,0 +1,131 @@
+[[gloss-glossary]]
+= Glossary
+:description: Terms used across the release documentation, each with the page or chapter that defines the underlying requirement.
+ifndef::specdir[:specdir: ../release-process/]
+ifndef::docsdir[:docsdir: ../]
+
+*Scope:* The meaning of the terms that recur in the release documentation, so that one word does not mean two things.
+
+*Status:* Current. A term is explained here and defined where its requirement lives. If this page and the defining chapter differ, the defining chapter governs.
+
+== Authority and approval
+
+[cols="2,5,2",options="header"]
+|===
+| Term | Meaning | Defined in
+
+| Release authorization
+| The CTO's written, version-bound decision that one specific build may be signed and delivered. Today it takes effect through a reviewed record in the repository that the delivery gate reads. It is not given by a merge alone, by an environment approval, or by possession of a credential.
+| xref:{specdir}ch01-scope-and-method.adoc#ch01[Chapter 1], `DEC-05`
+
+| Deployment confirmation
+| The approval of the protected signing environment (`ios-hosted-signing-stg` for staging, `ios-hosted-signing` for production). It confirms the deployment of an already authorized release. It creates no authorization, and by itself it is not an independent review.
+| `DEC-08`, `EXC-08`
+
+| Pipeline implementation and verification
+| Building, testing and dry-running delivery machinery without releasing anything. It needs engineering review and no production credential. It never authorizes a release.
+| xref:{specdir}ch01-scope-and-method.adoc#ch01[Chapter 1]
+
+| Authorization record
+| The structured, machine-read record of a release authorization. Today it is the set of `G2S-*` lines inside a Markdown file under `docs/release-records/`. Its resting state is `WITHDRAWN`.
+| `DEC-05`, `DEC-14`, `DEC-21`, xref:{specdir}ch07-machine-readable-state.adoc#ch07[Chapter 7]
+
+| Authorization decision
+| The human-readable content of the CTO's written decision. It is a different thing from the authorization record, which the gate reads. See the template.
+| xref:{docsdir}60-operations/templates/authorization-decision.adoc#tpl-authorization-decision[Template]
+
+| Authorization-bound file
+| A workflow, gate or tool whose exact Git blob an authorization record names. Changing it invalidates the authorization. The gates print the bound set with `--print-expected`. The set is not repeated here.
+| xref:{specdir}ch09-migration-sequence.adoc#ch09[Chapter 9]
+
+| Change window (`W1` to `W4`)
+| A planned stage at which authorization-bound files may change, with the authorization withdrawn. A planning reference, not an authorization mechanism.
+| xref:{specdir}ch09-migration-sequence.adoc#ch09[Chapter 9]
+|===
+
+== Building and versions
+
+[cols="2,5,2",options="header"]
+|===
+| Term | Meaning | Defined in
+
+| Application version
+| `X.Y.Z`. Today it is the first part of `version:` in `pubspec.yaml`.
+| `DEC-02`
+
+| Build number
+| The integer after `+` in `version:`. Both platforms carry the same value today. A store rejects a repeated number for the same application.
+| `DEC-02`, `DEC-13`
+
+| Consumed number
+| A build number that a release attempt used. It is never reused for another attempt for the same store application, whatever the outcome. Under the target architecture a number is consumed when it is allocated.
+| `DEC-13`, `DEC-32`
+
+| Magic
+| The approved manually started Android staging build that will allocate the build number and produce the staging APK. *Approved target. It does not exist yet.*
+| `DEC-32`
+
+| Inheritance
+| A later delivery takes its version information from a specifically identified earlier build instead of generating it. *Approved target.*
+| `DEC-31`, `DEC-38`
+
+| Promotion
+| A reviewed pull request that merges `development` into `staging`, or `staging` into `production`. Promotion is forward only.
+| `DEC-01`
+
+| Staging and production applications
+| Separate applications on both platforms with different identities, backends and networks. Staging uses Bitcoin Signet.
+| `DEC-03`, `DEC-15`
+|===
+
+== Credentials
+
+[cols="2,5,2",options="header"]
+|===
+| Term | Meaning | Defined in
+
+| Temporary Apple credentials
+| The three secrets of the protected signing environment (`APPLE_API_KEY_P8`, `APPLE_API_KEY_ID`, `APPLE_API_ISSUER_ID`), provisioned for one authorized delivery and removed afterwards. Nothing keeps them in GitHub at rest.
+| `DEC-09`, `DEC-28`
+
+| Credential-management sequence
+| The one approved eight-step order: checks, upload the three credentials, verify they are present, merge the promotion, approve the signing job, verify the outcome, remove the credentials, verify they are absent. Uploading after the merge is not supported.
+| `DEC-28`, xref:{specdir}ch08-operator-credential-tool.adoc#ch08[Chapter 8]
+
+| Credential-free job
+| A job that executes third-party build code and receives no signing secret.
+| `DEC-10`
+|===
+
+== Documentation
+
+[cols="2,5,2",options="header"]
+|===
+| Term | Meaning | Defined in
+
+| As-built page (`STA-01`)
+| The maintained statement of what the repository implements today, set against the approved target.
+| xref:{docsdir}70-state/as-built.adoc#sta-as-built[As-built page]
+
+| Specification
+| The adopted release-framework book under `docs/release-process/`. It is authoritative for decisions and requirements, not for implementation state.
+| xref:{specdir}index.adoc#ch01[Specification]
+
+| Classes A to F
+| The classification of a statement as decided and implemented, decided but not reflected, insufficiently enforced, improvement, temporary exception, or unresolved.
+| xref:{specdir}ch01-scope-and-method.adoc#ch01[Chapter 1]
+
+| Temporary exception, accepted limitation
+| An exception is a deviation accepted for a stated scope until a stated condition. An accepted limitation arises from an established decision and stays visible. A staging exception never extends to production.
+| xref:{specdir}ch04-exceptions-and-reconciliation.adoc#ch04[Chapter 4]
+
+| Delivery record
+| The durable, human-readable account of one delivery, with evidence labels. It does not replace machine-readable build evidence.
+| `DEC-23`, `EVD-02`, `EVD-03`
+|===
+
+== References
+
+* xref:{specdir}ch01-scope-and-method.adoc#ch01[Chapter 1]: classification and stable identifiers.
+* xref:{specdir}ch02-established-decisions.adoc#ch02[Chapter 2]: established decisions.
+* xref:{docsdir}00-front/conventions.adoc#conv-conventions[Documentation conventions].

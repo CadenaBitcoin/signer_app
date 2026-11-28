@@ -4,7 +4,7 @@
 
 *Scope:* The organization, ownership, persistence and consumption of machine-readable release information.
 
-*Status:* Proposal for review. The target data architecture is not yet implemented.
+*Status:* Adopted (revision 4). The target data architecture is approved and is not yet implemented.
 
 == Objective
 

@@ -204,13 +204,17 @@ arch_step="$(step_of "$build" 'Upload the unsigned archive')"
 printf '%s\n' "$arch_step" | grep -E '^          retention-days: 1$' >/dev/null && printf '%s\n' "$arch_step" | grep -E 'handover/Runner\.xcarchive\.tar' >/dev/null; chk "the unsigned archive handed to the signing job is kept exactly ONE day" $?
 grep -F '### 1.2 The one-day retention constraint' "$doc" >/dev/null && grep -F 'retention-days: 1' "$doc" >/dev/null && grep -F 'before any secret is read' "$doc" >/dev/null; chk "the document states the one-day retention constraint and its consequence" $?
 order_ok=0; prev=0
-for k in '| 1 | Maintainers |' '| 2 | GitHub |' '| 3 | GitHub |' '| 4 | CTO |' '| 5 | CTO |' '| 6 | GitHub |' '| 7 | CTO |'; do
+# DEC-28, the sole credential-management sequence: checks, provision, verify present, merge, approve, verify the outcome, remove, verify absent.
+for k in '| 1 | Maintainers |' '| 2 | CTO |' '| 3 | CTO |' '| 4 | Maintainers |' '| 5 | CTO |' '| 6 | CTO |' '| 7 | CTO |' '| 8 | CTO |'; do
   n="$(grep -nF -- "$k" "$doc" | head -n1 | cut -d: -f1)"
   if [ -n "$n" ] && [ "$n" -gt "$prev" ]; then prev="$n"; else order_ok=1; fi
 done
-[ "$order_ok" -eq 0 ]; chk "the document lists the seven steps of one delivery in order (merge, checks, wait, provision, approve, sign and upload, remove)" $?
-step3="$(grep -F '| 3 | GitHub |' "$doc")"; step4="$(grep -F '| 4 | CTO |' "$doc")"; step7="$(grep -F '| 7 | CTO |' "$doc")"
-printf '%s\n' "$step3" | grep -F 'Waiting' >/dev/null && printf '%s\n' "$step4" | grep -F 'APPLE_API_KEY_P8' >/dev/null && printf '%s\n' "$step7" | grep -F 'Removes the three secrets' >/dev/null; chk "waiting precedes provisioning, and removal is the last step" $?
+[ "$order_ok" -eq 0 ]; chk "the document lists the eight steps of one delivery in the DEC-28 order (checks, provision, verify present, merge, approve, verify outcome, remove, verify absent)" $?
+step2="$(grep -F '| 2 | CTO |' "$doc")"; step3="$(grep -F '| 3 | CTO |' "$doc")"; step4="$(grep -F '| 4 | Maintainers |' "$doc")"; step5="$(grep -F '| 5 | CTO |' "$doc")"; step7="$(grep -F '| 7 | CTO |' "$doc")"; step8="$(grep -F '| 8 | CTO |' "$doc")"
+printf '%s\n' "$step2" | grep -F 'APPLE_API_KEY_P8' >/dev/null && printf '%s\n' "$step2" | grep -F 'Provisioning after the merge is not a supported alternative' >/dev/null && printf '%s\n' "$step3" | grep -F 'must print `3`' >/dev/null; chk "the credentials are provisioned and verified present BEFORE the merge, and provisioning after the merge is not offered" $?
+printf '%s\n' "$step4" | grep -F 'Waiting' >/dev/null && printf '%s\n' "$step4" | grep -F 'no secret is released to it' >/dev/null && printf '%s\n' "$step5" | grep -F 'Approves' >/dev/null && printf '%s\n' "$step5" | grep -F 'before any secret is read' >/dev/null; chk "the signing job waits at the environment approval with no secret released to it, and only the approval (step 5) releases them" $?
+printf '%s\n' "$step7" | grep -F 'Removes the three secrets' >/dev/null && printf '%s\n' "$step7" | grep -F 'whatever the result' >/dev/null && printf '%s\n' "$step8" | grep -F 'must print `0`' >/dev/null && [ "$(grep -cE '^\| [0-9] \| ' <<<"$(sed -n '/^### 1.1 /,/^### 1.2 /p' "$doc")")" -eq 8 ]; chk "removal after every outcome and the check that all three are absent are the last two of exactly eight steps" $?
+grep -F 'At rest' "$doc" >/dev/null && grep -F 'Before the approval of step 5' "$doc" >/dev/null; chk "the document keeps apart: absence at rest, presence during one authorized delivery, inaccessibility before the approval, verified removal" $?
 bad_perm="$(grep -i 'permanent' "$doc" "$rec" "$wf" | grep -viE 'not authorized|never|NOT|no indefinite' || true)"
 [ -z "$bad_perm" ]; chk "no sentence asks for or allows permanent storage of the key (every mention is a prohibition)" $? "$bad_perm"
 ! grep -E 'No required reviewers|unattended signing|signs without a person' "$doc" "$rec" >/dev/null; chk "neither the document nor the record still says no reviewers or unattended signing" $?

@@ -4,7 +4,7 @@
 
 *Scope:* Decisions that remain open following the CTO reconciliation of 2026-11-27 and the subsequent documentation review.
 
-*Status:* Proposal for review.
+*Status:* Adopted (revision 4). The questions listed here remain open until a decision is recorded.
 
 This register identifies outstanding decisions requiring CTO authorization.
 

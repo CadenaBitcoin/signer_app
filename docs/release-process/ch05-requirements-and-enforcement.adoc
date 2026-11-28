@@ -4,7 +4,7 @@
 
 *Scope:* Governance, versioning, authorization, credentials, application builds, delivery, evidence, documentation and infrastructure requirements.
 
-*Status:* Proposal for review. The matrix distinguishes established requirements, existing implementation, incomplete enforcement and proposed mechanisms.
+*Status:* Adopted (revision 4). The requirements are authoritative; the enforcement columns state what exists today. The matrix distinguishes established requirements, existing implementation, incomplete enforcement and proposed mechanisms.
 
 == Reading the matrix
 
@@ -646,7 +646,7 @@ The existence of a successfully built or signed artifact does not establish auth
 | B
 | Existing delivery-record structure and manually maintained evidence.
 | PARTIAL
-| Establish consistent record conventions and verification: WP-B4, REC-01 template.
+| Establish consistent record conventions and verification: WP-B4, delivery-record template.
 
 | EVD-04
 | Artifacts subject to restricted retention or distribution must be protected according to their approved access policy. Where encrypted retention is required, only the designated recipients may access the artifact.
