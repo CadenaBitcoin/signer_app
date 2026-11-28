@@ -11,4 +11,56 @@ Contributions are welcome from the open-source community to improve security, re
 Join us in building a fully sovereign Bitcoin signer that empowers peer-to-peer financial freedom.
 ====
 
+== Requirements
+
+* Flutter 3.35.3 (stable), with its bundled Dart SDK.
+* Android Studio and Xcode for the platform builds.
+* The pinned toolchain versions are listed in link:CLAUDE.md[CLAUDE.md], section 3.
+
+== Running the project
+
+. Clone the repository.
+. Run `flutter pub get` in the repository root.
+. Run `flutter pub get` also inside `flutter_plugin/flutter_plugin` before running the app.
+. Start the application:
++
+[source,bash]
+----
+flutter run --flavor staging --dart-define-from-file=config/build/staging.json
+----
++
+Every build needs an explicit environment and the matching flavor, `staging` or `production`. See link:docs/BUILD_CONFIGURATION.md[docs/BUILD_CONFIGURATION.md].
+
+== Documentation
+
+The documentation entry point is link:docs/index.adoc[docs/index.adoc]. It leads to:
+
+* link:docs/70-state/as-built.adoc[The as-built overview]: what the release infrastructure implements today, set against the approved target.
+* link:docs/release-process/index.adoc[The release-framework specification]: the adopted decisions and requirements.
+* link:docs/00-front/conventions.adoc[Documentation conventions], including how to render and check the AsciiDoc pages.
+
+== Contributing and governance
+
+* link:CONTRIBUTING.md[CONTRIBUTING.md]: how to propose changes.
+* link:GOVERNANCE.md[GOVERNANCE.md]: branch model, authority levels, release and versioning policy.
+* link:SECURITY.md[SECURITY.md]: reporting vulnerabilities privately.
+* link:docs/RELEASE_POLICY.md[docs/RELEASE_POLICY.md]: release branches, application identity and versioning policy, with the link:docs/RELEASE_TRIGGERS.md[release-branch build triggers]. Its implementation status is in the as-built overview.
+* link:docs/ANDROID_RELEASE.md[docs/ANDROID_RELEASE.md]: Android release signing, the verifier and the local release procedure.
+* link:docs/IOS_RELEASE.md[docs/IOS_RELEASE.md]: the iOS release procedure for the Apple-side operator. link:docs/IOS_STAGING_DELIVERY.md[docs/IOS_STAGING_DELIVERY.md] describes the automatic staging delivery.
+* link:docs/RELEASE_VERSIONING.md[docs/RELEASE_VERSIONING.md]: how a build is tied to its source revision, version and run, and how published version codes are protected from reuse.
+
+== Security
+
+See link:docs/SECURITY_BOUNDARY.md[docs/SECURITY_BOUNDARY.md] for the backend transport (HTTPS-only) and runtime-logging rules.
+
+== CI
+
+See link:docs/ANDROID_CI.md[docs/ANDROID_CI.md] for the Android CI validation build and link:docs/IOS_CI.md[docs/IOS_CI.md] for the iOS one. Neither is for distribution.
+
+== Development with Claude Code
+
+Project rules for AI-assisted development are in link:CLAUDE.md[CLAUDE.md]. The workflow is described in link:docs/AI_DEVELOPMENT_WORKFLOW.md[docs/AI_DEVELOPMENT_WORKFLOW.md].
+
+== Contact
+
 For further information, collaboration, or security discussions, please contact sziller@cadenabitcoin.com

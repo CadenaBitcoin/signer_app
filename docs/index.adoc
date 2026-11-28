@@ -1,0 +1,82 @@
+[[docs-index]]
+= Cadena Signer documentation
+:description: Entry point of the human-oriented documentation of the Cadena Signer: conventions, terminology, the as-built overview, the release-framework specification and the existing operational documents.
+:doctype: book
+:toc: left
+:toclevels: 2
+:sectnums:
+:source-highlighter: rouge
+:specdir: release-process/
+:docsdir:
+
+// Master book. It includes the pages that sit in the documentation hierarchy (Chapter 6 of the specification) and refers to
+// the specification and to the existing documents by cross-reference. The specification chapters are not included, because
+// their mutual references resolve only when they are included from their own directory (see the conventions page).
+// Every page defines its own anchors with its own prefix, so the assembled book keeps unique anchors.
+
+[preface]
+== About this documentation
+
+This is the entry point of the documentation of the Cadena Signer, a non-custodial Flutter application (Android and iOS) that signs Discreet Log Contract transactions for the DLCPlaza backend. The documentation describes how a reviewed change becomes a verified build, and how a release is authorized, signed and delivered.
+
+It keeps three things apart:
+
+* *What is decided and required.* The adopted release-framework specification: xref:{specdir}index.adoc#ch01[open the specification book].
+* *What exists today.* The as-built overview (`STA-01`), in this book.
+* *How to write and check documentation.* The conventions, in this book.
+
+The documents under `docs/` that are not yet migrated stay where they are and remain in force for current behavior. They are listed below. Migration into the hierarchy of Chapter 6 is step P8 of the specification.
+
+:leveloffset: +1
+
+include::00-front/conventions.adoc[]
+
+include::00-front/glossary.adoc[]
+
+include::70-state/as-built.adoc[]
+
+:leveloffset: -1
+
+[[docs-existing]]
+== Existing operational documents
+
+These documents keep their paths. Authorization gates, workflows and tests cite several of them. Where one of them contradicts the specification or the as-built overview, those govern. Their status as of step P1 is stated in the as-built overview.
+
+[cols="2,4",options="header"]
+|===
+| Document | Subject
+
+| link:RELEASE_POLICY.md[RELEASE_POLICY.md]
+| Release branches, application identity, versioning and release policy, with marked amendments.
+
+| link:RELEASE_TRIGGERS.md[RELEASE_TRIGGERS.md], link:BUILD_CONFIGURATION.md[BUILD_CONFIGURATION.md]
+| Which builds a promotion starts, and how an environment is selected.
+
+| link:RELEASE_VERSIONING.md[RELEASE_VERSIONING.md]
+| Versioning and build evidence in the current implementation.
+
+| link:ANDROID_CI.md[ANDROID_CI.md], link:IOS_CI.md[IOS_CI.md], link:RETAINED_ARTIFACTS.md[RETAINED_ARTIFACTS.md]
+| Validation builds and encrypted artifact retention.
+
+| link:ANDROID_RELEASE.md[ANDROID_RELEASE.md]
+| Android release signing, verification and the local procedure.
+
+| link:IOS_STAGING_DELIVERY.md[IOS_STAGING_DELIVERY.md], link:IOS_HOSTED_SIGNING.md[IOS_HOSTED_SIGNING.md], link:IOS_RELEASE.md[IOS_RELEASE.md], link:IOS_SIGNING.md[IOS_SIGNING.md]
+| iOS staging delivery, hosted production signing, the Apple-side procedure and the signing analysis.
+
+| link:RELEASE_SIGNING_ARCHITECTURE.md[RELEASE_SIGNING_ARCHITECTURE.md], link:RELEASE_IMPLEMENTATION_PLAN.md[RELEASE_IMPLEMENTATION_PLAN.md]
+| Historical design and plan.
+
+| link:SECURITY_BOUNDARY.md[SECURITY_BOUNDARY.md], link:AI_DEVELOPMENT_WORKFLOW.md[AI_DEVELOPMENT_WORKFLOW.md], link:APPLE_ACCOUNT_QUESTIONNAIRE.md[APPLE_ACCOUNT_QUESTIONNAIRE.md]
+| Transport and logging rules, AI-assisted development, and the Apple account facts.
+
+| link:release-records/[release-records/]
+| Authorization records (machine-read) and delivery records.
+|===
+
+== Record templates
+
+* xref:60-operations/templates/delivery-record.adoc#tpl-delivery-record[Delivery-record template]
+* xref:60-operations/templates/authorization-decision.adoc#tpl-authorization-decision[Authorization-decision template]
+
+They are copied, not included, so their anchors are renamed in each copy.

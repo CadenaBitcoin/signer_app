@@ -1,5 +1,5 @@
 = Cadena Signer release framework: consolidated specification
-:description: The consolidated release framework specification extracted from the successful staging reference and the CTO's approved decisions. Proposal for review.
+:description: The consolidated release framework specification extracted from the successful staging reference and the CTO's approved decisions. Adopted, revision 4.
 :revdate: 2026-11-28
 :revnumber: 4
 :toc: left
@@ -7,7 +7,7 @@
 :sectnums:
 :doctype: book
 :source-highlighter: rouge
-:status: PROPOSAL FOR REVIEW. Nothing in this book is authoritative until the CTO accepts it and a reviewed pull request adopts it. It replaces no existing document.
+:status: ADOPTED (revision 4, pull request #155). This book is the authoritative statement of the release framework's decisions and requirements. It does not state that the described mechanisms exist: what is implemented and verified is maintained in the as-built page (STA-01). Existing documents remain in force for current behavior until their content is reconciled.
 
 // Each chapter is a standalone page with its own anchor, title, scope line, status line and references block.
 // It is included here with a level offset and can be included in any other Asciidoctor publication.

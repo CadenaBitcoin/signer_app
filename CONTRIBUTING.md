@@ -45,6 +45,23 @@ Historical or reference branches are not merge targets or starting points.
 - Do not change wallet derivation, signing or cryptographic behavior as collateral
   cleanup.
 
+## Documentation
+
+- Human-oriented documentation is written in native AsciiDoc under `docs/`
+  (decision DEC-25, requirement `DOC-01` of the
+  [release-framework specification](docs/release-process/index.adoc)). The conventions,
+  and the commands that render the pages and check their references, are in
+  [docs/00-front/conventions.adoc](docs/00-front/conventions.adoc). The entry point is
+  [docs/index.adoc](docs/index.adoc).
+- Cite a requirement by its identifier instead of copying it. State what is implemented
+  today in the [as-built overview](docs/70-state/as-built.adoc), not in policy documents.
+- Files that a tool or platform reads keep their format (`CLAUDE.md`, this file,
+  `GOVERNANCE.md`, `SECURITY.md`, the pull request template, workflow files, `config/`).
+- Some tests assert the wording of release documents, and the release gates cite some
+  documents and files. Run the credential-free tests (`tool/test_*.sh`) when you change a
+  release document, and do not change an authorization-bound file outside the change
+  windows of [Chapter 9](docs/release-process/ch09-migration-sequence.adoc).
+
 ## Verification
 
 The accepted baseline (see [CLAUDE.md](CLAUDE.md) for the pinned toolchain versions):

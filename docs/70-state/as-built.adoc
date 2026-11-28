@@ -1,0 +1,198 @@
+[[sta-as-built]]
+= As-built overview (STA-01)
+:description: What the repository implements today for building, authorizing, signing and delivering the Cadena Signer, set against the approved target architecture.
+ifndef::specdir[:specdir: ../release-process/]
+ifndef::docsdir[:docsdir: ../]
+
+*Scope:* The current state of the release framework: mechanisms, authorization state, exceptions, documentation dependencies and outstanding work. It states implementation status. It defines no requirement.
+
+*Status:* Current as of `development` `b4eabbf` plus step P1 (2026-11-28). Maintained with every change that alters a mechanism listed here. Normative requirements are in the specification (xref:{specdir}index.adoc#ch01[Chapter 1] and following). This page changes no decision.
+
+== How to read this page
+
+The specification states what the framework must be. This page states what exists. The two differ on purpose until the migration of xref:{specdir}ch09-migration-sequence.adoc#ch09[Chapter 9] is complete. The state words and evidence labels are those of the xref:{docsdir}00-front/conventions.adoc#conv-conventions[conventions page].
+
+*No target mechanism is active on any branch.* Magic, persistent allocation, the iOS-only staging promotion, version inheritance, persistent build records and the operator credential tool do not exist in the repository. A branch-by-branch activation table (Chapter 9, step P6) is not yet needed. It is added when the first of these reaches `development`.
+
+Where a row cites a decision (`DEC-NN`), the requirement is in Chapter 2. Where it cites an exception (`EXC-NN`), the disposition is in Chapter 4.
+
+== Mechanisms
+
+[cols="3,2,5,3",options="header"]
+|===
+| Mechanism | State | What exists and the evidence | Approved target
+
+| Branch model and protection
+| Current
+| `development` (default), `staging`, `production`. Promotion by reviewed pull request, merge method only, forward only (`GOVERNANCE.md`). The rulesets were VERIFIED by the release audit and are not re-verified by P1. Required status checks and mandatory signed-commit enforcement are reported as not active (`RELEASE_POLICY.md` 2.3, checked 2026-11-17; DOCUMENTED BUT NOT VERIFIED today).
+| Required checks and commit-signature enforcement: `BRN-03`, WP-A3.
+
+| Application version and build number
+| Current
+| One declaration, `version:` in `pubspec.yaml` (`1.0.5+10005002` at this commit). Both platforms carry the same values. A person advances the build number in a reviewed commit. `tool/verify_version.sh` checks the wiring and `tool/test_release_versioning.sh` the policy. VERIFIED by those tools in the P1 baseline run.
+| One allocated sequence and inherited version information: `DEC-30` to `DEC-32`, `DEC-37`, `DEC-38`. Not implemented. See <<sta-versioning>>.
+
+| Published-version floors
+| Current
+| `config/release/published_versions.json` records Android `1.0.3` (`1000034`) and `1.0.4` (`1000035`). It records no iOS floor. `tool/build_manifest.py` enforces that a new Android build number is above the recorded ones.
+| Safe historical initialization: `DEC-37`, `VER-13`, `VER-14`.
+
+| Consumption of build numbers
+| Current, human-controlled
+| A failed or interrupted delivery is recovered through a new build number, a new written decision and a new reviewed promotion (`DEC-13`). Nothing enforces it automatically (`VER-04`). Demonstrated by the recovery from `10005001` to `10005002`.
+| Allocation before compilation by Magic: `DEC-32`. Not implemented.
+
+| Release identifiers `vX.Y.Z-rc.N`
+| Current, superseded
+| The validation tools and their tests still accept and check `-rc.N` identifiers (`tool/verify_version.sh`, `tool/build_manifest.py`, `tool/test_release_versioning.sh`). `RELEASE_POLICY.md` 3.1 and 7.3 still describe them.
+| Ended by `DEC-29`. Removal belongs to the cutover (P6).
+
+| Build triggers
+| Current
+| A push to `staging` runs `build-variants` (`android-staging-apk`, `ios-staging`), `android-ci-validation`, `ios-ci-validation`, and `ios-staging-delivery` (which refuses unless its authorization record says `AUTHORIZED`). A push to `production` runs the three production variants of `build-variants`. `build-variants` and `android-ci-validation` can be started by hand. (`docs/RELEASE_TRIGGERS.md`; workflow `on:` blocks.)
+| Magic by hand; the staging promotion delivers iOS only; the production promotion builds three artifacts: `DEC-33` to `DEC-36`, `DEC-39`. Not implemented.
+
+| Android staging APK
+| Current
+| A debug-signed CI validation build, "not approved for public distribution" (`docs/ANDROID_CI.md`). It uses the staging flavor and `config/build/staging.json`. No persistent signing identity or access policy exists (`EXC-03`).
+| Magic as the sole routine staging APK mechanism, persistent storage, signing identity via `UNR-01 (a)`: `DEC-32`, `DEC-35`, `DEC-39`.
+
+| Retained artifacts
+| Current, inactive
+| The mechanism encrypts verified artifacts to public keys (`docs/RETAINED_ARTIFACTS.md`). `config/release/artifact_recipients.txt` contains no key, so routine retention is off. VERIFIED by reading the file.
+| Persistent APK availability and build records: `DEL-07`, `EVD-05`, WP-C3.
+
+| Android production release
+| Current, manual
+| Signing is explicit (`CADENA_SIGNING=release`) and local, by the upload-key holder (`docs/ANDROID_RELEASE.md`). Version `1.0.4+1000035` was published. No workflow signs or uploads an Android release.
+| Production APK, AAB and IPA from one source: `DEC-34`, WP production work at P9.
+
+| iOS staging delivery
+| Current, demonstrated once
+| Workflow `ios-staging-delivery.yml` has three jobs. `authorize` and `build` run without a secret. `sign` runs in the protected environment `ios-hosted-signing-stg`, whose required reviewers must approve, verifies the IPA (V1 to V9) and uploads it to the staging App Store Connect application. It delivered `1.0.5+10005002` (run `46005605593`, `staging` `f31e598`). Evidence: `docs/release-records/staging-delivery-1.0.5-10005002.adoc`. Installation and a basic smoke test are CTO-REPORTED. Wallet and DLC functionality were not validated (`EXC-12`).
+| Staging promotion inherits version information from a Magic build and reports source differences: `DEC-33`, `EVD-06`, `EXC-13`. Not implemented.
+
+| Release authorization (staging)
+| Current
+| The record `docs/release-records/ios-staging-authorization.md` binds the version, the application identity, the certificate, the native library and the exact blobs of the workflow, the gate and seven tools. `tool/check_staging_authorization.sh` refuses unless the record says `AUTHORIZED`, and it reads the record on the current tip of `development`. 48 gate scenarios pass in the baseline run. The status at this commit is `WITHDRAWN`.
+| Structured data separate from prose (P2): `DOC-03`, WP-A5.
+
+| Release authorization (production, iOS)
+| Current, withdrawn
+| The workflow `ios-hosted-signing.yml` runs only by hand. Its gate reads `docs/release-records/ios-1.0.4-1000035.md`, status `WITHDRAWN`. Upload exists behind the gate (PR #134); the workflow's name still says "no upload" (`REC-05`). The production pipeline is not operationally complete.
+| Production workflows and gate (W4, P9): `PRD-NN`.
+
+| Temporary Apple credentials
+| Current, manual
+| Three secrets, provisioned for one authorized delivery and removed afterwards. The `10005002` delivery provisioned and verified them before the promotion merge, which is the order `DEC-28` makes the only supported one. They were removed afterwards (the record). The Admin key itself was not revoked. External custody is not verified (`DEC-09`, `UNR-02`).
+| The local operator tool, interruption handling and absence checks: `CRD-05`, WP-A1. Not implemented. Until then the manual procedure of `IOS_STAGING_DELIVERY.md` section 8.1 and Chapter 8 applies.
+
+| Native `dlc_wallet` framework
+| Current
+| Pinned by hash in the record (`EXC-07`). Prebuilt binaries are committed. Their provenance and release process are not documented (`UNR-07`).
+| `UNR-07`.
+
+| Build and delivery evidence
+| Current, partial
+| `cadena-build-manifest/1` for each build. Delivery records are written by hand and version-controlled. There is no persistent record of allocations, failures or unpublished builds, and no source-comparison record.
+| `EVD-05` to `EVD-07`, WP-C3.
+
+| Read-only infrastructure verification, repository hardening
+| Not implemented
+| Settings and prerequisites are checked by a person (`DEC-22`). Secret scanning, push protection and the CodeQL exception `EXC-05` are open.
+| WP-A2, WP-A3.
+|===
+
+[[sta-versioning]]
+== Current and proposed versioning behavior
+
+Today the version is the one declaration in `pubspec.yaml`, advanced by a reviewed commit, with human-controlled consumption. Everything about allocation, the numerical encoding (`XX.YY.ZZ.RRR`), one shared sequence and inheritance is an approved target whose storage mechanism is under investigation (`FQ-01`, `FQ-02`, `FQ-03`, `FQ-12`).
+
+`docs/RELEASE_VERSIONING.md` documents the current behavior in its committed form. Its working copy in the owner's checkout is an unmerged rewrite, dated 2026-11-24, with staged and unstaged changes. It is preserved untouched and is not reflected here.
+
+== Authorization state
+
+[cols="2,2,3",options="header"]
+|===
+| Authorization | State at this commit | Source
+
+| iOS staging delivery
+| `WITHDRAWN`
+| `G2S-STAGING-STATUS` in `docs/release-records/ios-staging-authorization.md`. The live state is the record on the current tip of `development`.
+
+| iOS production signing
+| `WITHDRAWN`
+| `G2S-STATUS` in `docs/release-records/ios-1.0.4-1000035.md`.
+|===
+
+The authorization-bound files are those whose blobs the two records name. The gates print the expected values: `tool/check_staging_authorization.sh --print-expected --tools-root .` and `tool/check_signing_authorization.sh --print-expected --tools-root .`. At this commit they are, for staging, the workflow `ios-staging-delivery.yml`, the gate itself and seven tools, and for production, the workflow `ios-hosted-signing.yml`, the gate `check_signing_authorization.sh` and five tools. Step P1 changes none of them.
+
+== Statements known to be stale
+
+=== Inside authorization-bound files (corrected in their change window, not in P1)
+
+[cols="3,4,2",options="header"]
+|===
+| Location | Stale statement | Window
+
+| `.github/workflows/ios-hosted-signing.yml`, name and job name
+| "sign and verify only; no upload". Gated upload exists (`REC-05`).
+| W4
+
+| `.github/workflows/ios-hosted-signing.yml`, comment before `environment: ios-hosted-signing`
+| "No required reviewers". `docs/IOS_HOSTED_SIGNING.md` section 4 lists the required reviewers of that environment. The actual setting of the production environment is not verified by P1.
+| W4
+
+| `.github/workflows/ios-staging-delivery.yml`, version-format message
+| The example `1.0.5+1000036` is obsolete (`REC-12`).
+| W1
+
+| `.github/workflows/ios-staging-delivery.yml`, header paragraph "THE APPROVAL AND THE CREDENTIAL"
+| Says the CTO provisions the three secrets "by hand while the job waits". `DEC-28` requires provisioning and verification before the promotion merge, and that is the order of the delivery of `1.0.5+10005002`. The workflow's behavior is unaffected: its steps read the secrets only after the environment approval. `tool/test_ios_staging_delivery.sh` asserts only that the header states the approval and the temporary credential.
+| W1
+|===
+
+=== In documents, reconciled by P1
+
+* `RELEASE_POLICY.md`: the claim of no human step and no reviewer after the merge (2.3, principle 9 note, open decision 9, 8.1), the outdated status claims and tables (header, 2.3, 10), and the `-rc.N` and manual-advancement rules (3.1, 7.3), which now carry marked notes that separate the current mechanism from the approved target (`REC-01`, `REC-03`, `REC-06`, `REC-07`). The rules themselves are not deleted, because the validation tools still enforce them.
+* `GOVERNANCE.md`: release authority and the descriptions of `staging` and `production` (`REC-08`, `REC-09`).
+* `IOS_SIGNING.md` section 6 and decision row 11: "required reviewers are not used" (`REC-02`).
+* `IOS_STAGING_DELIVERY.md` section 1.1: the order of the seven steps put credential provisioning after the signing job waited. It now lists the eight steps of `DEC-28`, and section 9 records that the earlier question is superseded. `tool/test_ios_staging_delivery.sh` asserted the superseded order and now asserts the `DEC-28` order. No runtime assertion changed.
+* `RELEASE_SIGNING_ARCHITECTURE.md`, `RELEASE_IMPLEMENTATION_PLAN.md`: marked historical (`REC-04`). Their content is extracted at P8.
+* `README.md` removed and `README.adoc` consolidated: one root README (`REC-11`). `CONTRIBUTING.md` points to the documentation conventions (`DOC-01`).
+
+=== Not changed by P1
+
+* `RELEASE_TRIGGERS.md`, `ANDROID_CI.md`, `IOS_CI.md` describe the current staging builds accurately until cutover (`REC-13`, `REC-14`). They are changed at P6.
+* `IOS_SIGNING.md` sections 3 and 8 and the remaining sections of `RELEASE_POLICY.md` still describe superseded designs and proposals. They are reconciled with the migration (P8).
+
+== Documentation dependencies
+
+* *Machine-read records.* The two authorization records are parsed by the gates and by tests. They keep their paths and their content until P2.
+* *Documents cited by authorization-bound files.* `RELEASE_POLICY`, `RELEASE_TRIGGERS`, `RELEASE_VERSIONING`, `BUILD_CONFIGURATION`, `IOS_SIGNING`, `IOS_HOSTED_SIGNING`, `IOS_RELEASE`, `IOS_STAGING_DELIVERY` and the two records are cited in comments and messages. Their paths stay.
+* *Tests that assert narrative wording.* `tool/test_ios_staging_delivery.sh` (`IOS_STAGING_DELIVERY.md`, the staging record, the `.adoc` delivery record, `RELEASE_TRIGGERS.md`), `tool/test_ios_der_diagnostics.sh` (`IOS_SIGNING.md` sections 3.1b, 3.1c and 7), `tool/test_required_reason_scan.sh` (`IOS_RELEASE.md`). A change to asserted wording adapts the assertion in the same change.
+* *Entry points.* `CLAUDE.md`, `CONTRIBUTING.md`, `GOVERNANCE.md`, `SECURITY.md` and the pull request template keep their format and path.
+
+== Exceptions and limitations
+
+Open exceptions: `EXC-01`, `EXC-03`, `EXC-05`, `EXC-07`, `EXC-09` (this documentation reconciliation, partly performed by P1 and open until P8), `EXC-10`, `EXC-11`, `EXC-12`. Accepted limitations: `EXC-08`, `EXC-13`. Their conditions and dispositions are in xref:{specdir}ch04-exceptions-and-reconciliation.adoc#ch04[Chapter 4]. The maintainer arrangement is not claimed to be independent review (`DEC-16`, `EXC-08`).
+
+== Outstanding work
+
+Work is tracked in issue #54 and its children; this page does not duplicate that register. Open at this commit, in the order of Chapter 9:
+
+* P2: authorization data separate from prose (W1).
+* P3: operator credential tool, infrastructure checks, repository hardening.
+* P4 and P5: investigation, then implementation, of Magic and persistent storage (W2).
+* P6 and P7: staging cutover (W3), then the first delivery under the revised architecture.
+* P8: migration of the remaining documents into the hierarchy.
+* P9 and P10: production pipeline (W4), then a separate release authorization.
+
+*Owner reconciliation outstanding.* The owner of the working copy of `docs/RELEASE_VERSIONING.md` has not yet reconciled it with `DEC-30`, `DEC-31`, `DEC-37` and `DEC-38`. In particular its two-digit major component and per-application allocation conflict with `DEC-31` (`REC-10`, `SUP-07`). That reconciliation is not done and is not recorded as done anywhere.
+
+== References
+
+* xref:{specdir}ch04-exceptions-and-reconciliation.adoc#ch04[Chapter 4]: exceptions and reconciliation.
+* xref:{specdir}ch05-requirements-and-enforcement.adoc#ch05[Chapter 5]: requirements and the enforcement each has today.
+* xref:{specdir}ch09-migration-sequence.adoc#ch09[Chapter 9]: sequence, change windows and transitional rules.
+* xref:{docsdir}00-front/glossary.adoc#gloss-glossary[Glossary].

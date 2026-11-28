@@ -4,7 +4,7 @@
 
 *Scope:* Existing exceptions, accepted architectural limitations, reconciliation of historical documentation and preservation of superseded architectural decisions.
 
-*Status:* Proposal for review. Existing approved decisions remain applicable. Proposed exception dispositions require confirmation before implementation or extension of their scope.
+*Status:* Adopted (revision 4). Existing approved decisions remain applicable. Exception dispositions marked "proposed" require confirmation before implementation or extension of their scope.
 
 This chapter distinguishes between:
 

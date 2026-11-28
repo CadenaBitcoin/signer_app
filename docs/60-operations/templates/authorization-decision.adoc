@@ -1,0 +1,76 @@
+[[tpl-authorization-decision]]
+= Authorization decision: ENVIRONMENT VERSION+BUILD
+:description: Template for the content of the CTO's written, version-bound release decision. It is not the machine-read authorization record.
+:revdate: YYYY-MM-DD
+ifndef::specdir[:specdir: ../../release-process/]
+ifndef::docsdir[:docsdir: ../../]
+
+// TEMPLATE. Not machine-consumed. This page lists what a written release decision must name so that the authorization
+// record can be filled in without guessing. The binding authorization today is the structured record that the delivery
+// gate reads (the `G2S-STAGING-*` lines of docs/release-records/ios-staging-authorization.md for iOS staging; the
+// `G2S-*` lines of the production record for production). Nothing here is parsed, and filling in this page authorizes
+// nothing. Copy it into the issue comment or pull request that carries the decision, delete every comment, and rename
+// the anchor if the copy is kept under docs/.
+
+*Scope:* The content of one release authorization: which delivery, which build, which implementation, which conditions.
+
+*Status:* TEMPLATE. Authorization applies to one specifically identified delivery. After the delivery attempt the record returns to `WITHDRAWN` (`DEC-14`, `DEC-21`).
+
+== How the decision becomes binding today
+
+. The CTO states the decision in writing, naming everything in the next section. The decision is a dated comment on the umbrella issue.
+. A reviewed pull request puts the matching values into the authorization record, with the link to the comment. The record is read by the gate. The format is in `docs/IOS_STAGING_DELIVERY.md` section 4 and, for production, `docs/IOS_HOSTED_SIGNING.md` section 5.
+. The gate compares the record with independently established values. A record that is merely well-formed does not authorize a delivery.
+. After the delivery attempt, a reviewed pull request sets the record to `WITHDRAWN`.
+
+This sequence does not authorize a production release by pipeline readiness. Production release authorization is a separate decision (`PRD-NN`, step P10).
+
+== What the decision names
+
+[cols="2,4",options="header"]
+|===
+| Item | Content
+
+| Decision
+| Who decided, on what date, and the link to the written decision.
+
+| Delivery and operation
+| The environment, the operation (for example sign, verify and upload), and the one delivery it covers.
+
+| Application identity
+| The bundle or package ID and the store application identifier. A staging authorization names a staging application and can never name the production one.
+
+| Version and build number
+| `X.Y.Z+N`. State that the number is not consumed by an earlier attempt (`DEC-13`).
+
+| Source
+| The development commit that the promotion carries. The merge commit itself cannot be known beforehand and is checked structurally by the gate.
+
+| Implementation bound
+| The blobs of the authorization-bound workflow, gate and tools, as printed by `--print-expected` of the gate. They must be refreshed after any change to a bound file, with the authorization withdrawn meanwhile (`Chapter 9`, change conditions).
+
+| Identities to match
+| The signing certificate and the native library pins, each with its provenance label (`EXC-01`, `EXC-07`).
+
+| Credential arrangement
+| The sequence of `DEC-28`, and who provisions and removes the credentials.
+
+| Prerequisites verified
+| The readiness checks of `DEC-22` and their outcome.
+
+| Exceptions and accepted limitations relied upon
+| Each applicable identifier of Chapter 4, and whether it is accepted for this delivery. An exception accepted for staging does not extend to production.
+
+| Withdrawal
+| When and by which pull request the record returns to `WITHDRAWN`.
+|===
+
+== Additional content under the target architecture
+
+*Not applicable until Magic and version inheritance exist* (`DEC-32`, `DEC-33`, `DEC-38`): the selected successful Magic build, its evidence, the inherited version information, and the accepted source differences.
+
+== References
+
+* xref:{specdir}ch02-established-decisions.adoc#ch02[Chapter 2]: `DEC-05`, `DEC-13`, `DEC-14`, `DEC-21`, `DEC-22`, `DEC-28`.
+* xref:{specdir}ch07-machine-readable-state.adoc#ch07[Chapter 7]: authorization records and their separation from prose.
+* xref:{docsdir}60-operations/templates/delivery-record.adoc#tpl-delivery-record[Delivery-record template].

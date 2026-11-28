@@ -1,5 +1,11 @@
 # Release implementation plan
 
+> **Historical, in part superseded (documentation step P1, REC-04, 2026-11-28).** This implementation plan was written before the first staging delivery
+> (2026-11-27) and before the decisions of the adopted [release-framework specification](release-process/index.adoc). Statements below that
+> something is "not implemented" or "intended" are not a description of the present system: what exists is stated in the
+> [as-built overview (STA-01)](70-state/as-built.adoc), and decisions and requirements are in the specification. The text is kept unchanged.
+> Extraction of the still-applicable requirements, and archiving, belong to step P8.
+
 > **Status: plan for maintainer approval (parent issue #54).** It orders the work
 > needed to reach the five signed artifacts of [RELEASE_POLICY.md](RELEASE_POLICY.md)
 > and the signing design of

@@ -4,7 +4,7 @@
 
 *Scope:* Documentation adoption, technical investigations, implementation work packages, controlled changes to existing security mechanisms, staging cutover and production implementation.
 
-*Status:* Proposal for review. No implementation step is authorized merely through inclusion in this document.
+*Status:* Adopted (revision 4). The sequence is the approved order of work. No implementation step is authorized merely through inclusion in this document.
 
 == Objectives
 
@@ -456,6 +456,8 @@ Do not modify authorization-bound implementation files incidentally.
 Preserve the user's existing uncommitted versioning documentation.
 
 Its owner reconciles it with DEC-30, DEC-31, DEC-37 and DEC-38.
+
+*Scope clarification (revision 4 erratum).* In P1, current and proposed versioning behavior is stated in `STA-01` and by marked annotations in `RELEASE_POLICY.md`; `RELEASE_VERSIONING.md` itself is not edited. Of the reconciliation items, P1 performs REC-01, REC-02, REC-03, REC-06 and REC-07 (as annotations of current versus target), REC-08, REC-09 and REC-11, and confirms that REC-13 and REC-14 are accurate until cutover. REC-04 (extraction and archiving) belongs to P8. REC-05 and REC-12 concern authorization-bound files and follow W4 and W1. REC-10 awaits the owner. Statements inside authorization-bound files that are stale are recorded in `STA-01` and corrected in their window.
 
 *Completion condition:* Essential documentation distinguishes actual implemented behavior from the approved target architecture.
 

@@ -4,7 +4,7 @@
 
 *Scope:* What the framework covers, how statements are classified, which parts of the book are normative and the documentation conventions it follows.
 
-*Status:* Proposal for review. Nothing in this book is authoritative until the CTO accepts it and a reviewed pull request adopts it.
+*Status:* Adopted (revision 4, pull request #155). Authoritative as a statement of decisions and requirements; it does not mean the described mechanisms exist. Implementation state is maintained in the as-built page (`STA-01`).
 
 == Scope
 
@@ -57,6 +57,8 @@ Production pipeline work (xref:ch10-production-extensions.adoc#ch10[Chapter 10])
 Evidence labels from the audits are kept: VERIFIED, DOCUMENTED BUT NOT VERIFIED, INFERRED, UNKNOWN.
 
 An approved decision does not imply that its implementation exists, and an implementation does not imply that its behavior has been verified.
+
+The same distinction applies to this book. Its status "Adopted" means that the decisions and requirements it states are authoritative. It never means that a mechanism it describes is implemented or verified. That is stated by the requirement's own enforcement entry and by the as-built page (`STA-01`).
 
 == Normative and historical content
 
@@ -143,7 +145,7 @@ Each family has one defining chapter. Other chapters cite or summarize an identi
 
 | `RUN-NN`, `STA-01`
 | xref:ch06-document-hierarchy-and-mapping.adoc#ch06[Chapter 6]
-| Names of future documentation pages (runbooks and the as-built page). They are not defined inside this book.
+| Names of documentation pages: runbooks (future) and the as-built page (`STA-01`, `docs/70-state/as-built.adoc`, defined in the current-state section of Chapter 6). The pages themselves are not part of this book's chapters.
 |===
 
 Identifiers from outside this book keep their own meaning. The decision labels of the staging record (`S1` to `S4`, `C1` to `C4`, `R1` to `R3`) refer to `docs/release-records/ios-staging-authorization.md`. Finding identifiers of the Phase 1 audit (for example `REP-04`) refer to that audit. Where an audit identifier has the same form as a requirement identifier of this book, the identifier of this book is meant unless the text says "audit".

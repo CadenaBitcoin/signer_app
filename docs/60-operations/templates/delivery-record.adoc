@@ -1,0 +1,119 @@
+[[tpl-delivery-record]]
+= Delivery record: ENVIRONMENT VERSION+BUILD
+:description: Template for the durable, non-sensitive record of one delivery. Copy it, rename the anchor, replace every placeholder in capitals and delete this note and the comments.
+:revdate: YYYY-MM-DD
+ifndef::specdir[:specdir: ../../release-process/]
+ifndef::docsdir[:docsdir: ../../]
+
+// TEMPLATE. Not machine-consumed: no gate, workflow or test reads a delivery record.
+// To use it: copy this file to docs/release-records/<environment>-delivery-<version>-<build>.adoc, change the anchor
+// above (an anchor exists once in the whole tree), fill in every placeholder, delete every comment, and keep only the
+// sections that apply. The model is docs/release-records/staging-delivery-1.0.5-10005002.adoc.
+// A record contains no credential, key, token or other secret value (EVD-01). It states facts. It never turns a reported
+// fact into a verified one (EVD-03).
+
+*Scope:* What the delivery of ENVIRONMENT VERSION+BUILD did, and which evidence supports each statement.
+
+*Status:* TEMPLATE, to be replaced by DRAFT, then FINAL, with the date. A record is not rewritten when the system changes. A later fact or correction is added with its date and is attributable (`EVD-07`).
+
+Workflow artifacts expire. This page, together with the authorization record and any machine-readable build evidence, is the durable copy.
+
+== Status: what is verified and what is not
+
+Each statement carries one label: VERIFIED (checked in the repository, a run, or a tool output cited here), CTO-REPORTED (or REPORTED BY a named role: stated by a person, not checked here), or UNCONFIRMED.
+
+[cols="3,1,3",options="header"]
+|===
+| Statement | State | Evidence
+
+| The promotion merge started the intended workflows and each finished with the stated result
+| VERIFIED
+| Run identifiers below.
+
+| The delivered artifact carried the authorized application identity, certificate and native library
+| VERIFIED
+| Verification outputs below.
+
+| The artifact was installed and started
+| CTO-REPORTED
+| Who reported it, and when.
+
+| Wallet and DLC functionality
+| UNCONFIRMED
+| Not tested by this delivery. Do not write more than was done.
+|===
+
+== Identity and source
+
+[cols="2,4",options="header"]
+|===
+| Item | Value
+
+| Environment and application identity
+| Staging or production; bundle or package ID; store application identifier.
+
+| Application version and build number
+| `X.Y.Z` and `N`. State whether the number was consumed by an earlier attempt.
+
+| Source commit and promotion
+| Merge commit, promotion pull request, the development commit it carried.
+
+| Workflow runs
+| Workflow name, run number, run identifier, attempt, result.
+|===
+
+== Authorization
+
+* The CTO's written decision: link, date. (See the authorization-decision template.)
+* The reviewed pull request that carried the authorization record, and the record state before and after the delivery.
+* The pull request that returned the record to `WITHDRAWN`, with its date.
+
+== Credential sequence
+
+For the Apple credential-management sequence (`DEC-28`), state for each step whether it was done, by whom, and the evidence. Never record a value.
+
+[cols="1,3,3",options="header"]
+|===
+| Step | What | Result and evidence
+
+| 1 | Readiness checks of the promotion pull request | Outcome.
+| 2 | Upload of the three temporary credentials | Done, with date. Names only.
+| 3 | Verification that all three are present | Count and names.
+| 4 | Merge of the promotion | Time.
+| 5 | Approval of the protected signing job | Who and when.
+| 6 | Workflow finished, outcome verified | Result.
+| 7 | Removal of the three credentials | Done, with date.
+| 8 | Verification that all three are absent | Count.
+|===
+
+State separately whether the underlying Apple key was revoked.
+
+== Build, verification and delivery
+
+* The unsigned build: checksum, framework hash against the authorized pin.
+* The signed artifact: checksum, certificate identity, verification steps and their results (for iOS, V1 to V9).
+* The delivery outcome at the store or testing service: identifiers it returned, and warnings it reported, with their evidence.
+
+== Source comparison
+
+*Target architecture only* (`EVD-06`, `DEC-33`, `EXC-13`). Under the current architecture there is no preceding Magic build, so write "Not applicable under the current architecture". When Magic is operational, record the comparison between the application source of the selected Android build and the promoted source, any difference, and how it was reported.
+
+== Exceptions and accepted limitations
+
+List every open exception and accepted limitation of Chapter 4 that applies to this delivery, and say whether this delivery relies on it.
+
+== Evidence and retention
+
+* Which artifacts expire, and when.
+* Where the durable copy is.
+* Machine-readable build evidence, where it exists.
+
+== Remaining work
+
+What is left open by this delivery. Cite issues; do not keep a task list here.
+
+== References
+
+* xref:{specdir}ch05-requirements-and-enforcement.adoc#ch05[Chapter 5]: `EVD-01` to `EVD-07`.
+* xref:{specdir}ch08-operator-credential-tool.adoc#ch08[Chapter 8]: the credential sequence.
+* xref:{docsdir}60-operations/templates/authorization-decision.adoc#tpl-authorization-decision[Authorization-decision template].

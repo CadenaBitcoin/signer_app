@@ -33,6 +33,37 @@ The first merge-triggered staging delivery (run 46005605593, `staging` `f31e598`
 | Incorporates the CTO's chapter-by-chapter review of Chapters 2 to 11 as the authoritative architectural content. Those reviews reduced mandated mechanisms to invariants with investigations, made historical initialization acceptable through trustworthy numerical upper bounds, added the production-activation window W4 and branch-specific activation, and kept the eight-step credential sequence unchanged. Revision 4 reconciles Chapters 1 and 12 and the master index with them, applies native AsciiDoc cell styles in Chapter 2, unifies status terminology (resolved in principle) and renames this chapter to match its content.
 |===
 
+== Errata to revision 4
+
+The following corrections were made on 2026-11-28 during step P1, after the adoption of revision 4 (pull request #155). They correct statements that were unambiguous defects. They change no decision, requirement, classification or identifier meaning, so the revision number stays 4.
+
+[cols="1,3,4",options="header"]
+|===
+| Erratum | Chapters | Correction
+
+| E-01
+| Index, 1, 2, 3, 4, 5, 6, 7, 9, 10
+| The status declarations still read "Proposal for review" and "nothing is authoritative" after adoption. They now state that the book is adopted and authoritative as a statement of decisions and requirements, and that adoption does not mean the described mechanisms exist (Chapter 1, classification section).
+
+| E-02
+| 2, 5
+| The identifier `REC-01` denoted both the reconciliation item of Chapter 4 and "the delivery record template" (DEC-23, `EVD-03`). The template now has no identifier of its own and is named by its path. `REC-01` denotes only the reconciliation item.
+
+| E-03
+| 1, 6
+| `STA-01` was named but not defined. It is now identified as `docs/70-state/as-built.adoc` with its purpose stated in Chapter 6. The identifier table of Chapter 1 reflects this.
+
+| E-04
+| 6
+| Added the paths of the two record templates, the rule that until P8 the master book refers to the specification book by cross-reference (its chapters cannot be included from another directory without breaking their mutual references) with chapter anchors reserved to this book, and the finding that some tests assert narrative wording of documents.
+
+| E-05
+| 9
+| P1 named "the applicable initial parts of WP-B2" and "correct statements about versioning" while preserving `RELEASE_VERSIONING.md`. The scope clarification in P1 lists the reconciliation items P1 performs and where versioning corrections are made.
+|===
+
+The rendering procedure is not part of this book. It is recorded in `docs/00-front/conventions.adoc`.
+
 == Disposition of the audit findings of revision 3
 
 [cols="1,4,3",options="header"]

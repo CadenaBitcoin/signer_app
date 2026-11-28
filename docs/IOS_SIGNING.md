@@ -683,7 +683,7 @@ No application code was changed for any of these.
 | 8 | Internal tester list and who administers the tester group | Apple account owner |
 | 9 | Continuity signing custodians (no approval role; the release authority is the authorized merge, section 6) | project owners |
 | 10 | Release identifier scheme, in-app staging identifier, Signet XPUB/address validation (prerequisites of [RELEASE_POLICY.md](RELEASE_POLICY.md) 8.1) | maintainers; separate issues |
-| 11 | **Resolved (RELEASE_POLICY.md 2.3):** no reviewers; the merge is the authorization | CTO |
+| 11 | **Resolved (RELEASE_POLICY.md 2.3), as amended by P1:** the written, version-bound decision carried by the reviewed promotion is the authorization; the environment reviewers confirm the deployment only | CTO |
 | 12 | The effective minimum iOS version and its device testing | product decision; [IOS_CI.md](IOS_CI.md) |
 | 13 | **App Store Connect API access is disabled** for the Apple Developer organization (reported by Noah, 2026-11-08; not checked here). The Account Holder (Kevin) has been asked to enable it. Until it is on, no API key of any kind (team or individual, section 5) can be created, so the upload and status-reading half of the pipeline cannot be configured. An earlier note on #71 said the account might be held under a personal Apple ID, so item 1 (account type and ownership) is still open. | Account Holder |
 
@@ -749,14 +749,25 @@ chat, email, issues or the repository.
 
 ## 6. Authorization of production signing and delivery
 
-**The authorized merge into `production` is the authorization** to run the production pipeline,
-including signing and the configured delivery operations; the merge into `staging` is the same
-for staging (RELEASE_POLICY.md principle 9 and section 2.3). Nothing follows the merge.
+**The release authorization is the CTO's written, version-bound decision,** carried by the reviewed
+promotion into `production` (and into `staging`, for staging) and recorded in the authorization
+record that the gate reads (RELEASE_POLICY.md principle 9 and section 2.3, as amended by step P1;
+`DEC-05` and `DEC-08` of the release-framework specification). The merge executes it.
+
+> **Amended by P1 (REC-02, 2026-11-28).** The protected signing environments **do** require
+> reviewers: `ios-hosted-signing-stg` for staging (verified, `docs/IOS_STAGING_DELIVERY.md` section 1.1)
+> and, according to `docs/IOS_HOSTED_SIGNING.md` section 4, `ios-hosted-signing` for production
+> (the production setting is not re-verified by P1). Their approval **confirms the deployment** of an
+> already authorized release. It creates no authorization and is not an independent review. Temporary
+> credentials are provisioned and verified before the promotion merge and removed after the delivery
+> (`DEC-28`). The first and second bullets below record the earlier position and are superseded where
+> they say that required reviewers are not used.
 
 - The two `Maintainers` accounts (`sziller` prepares, `CadenaWizard` reviews and merges) are
   **the same person**. They are not, and the repository does not pretend they are, independent
   reviewers. A GitHub environment's "required reviewers" setting would therefore add no
-  independence and is **not used**.
+  independence. It was first planned as "not used"; it is now used as a deployment
+  confirmation only (see the amendment above).
 - What protects the release is automated and mandatory: protected, branch-restricted
   environments; GitHub-hosted ephemeral runners only; the two-job split; no recompilation while
   signing; `tool/verify_ipa.py` after signing; a failed verification stops delivery

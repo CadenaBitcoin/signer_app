@@ -4,13 +4,19 @@
 > project owners on 2026-10-12; the document itself still goes through the normal
 > pull-request review.
 >
-> **Nothing described here exists yet.** There is no `production` branch, no
-> signing credential, no signed build, no separate staging application, no
-> release workflow and no protected release environment. What exists today is
-> listed in [section 10](#10-what-exists-today). *Decided* marks requirements
-> fixed by the project owners on 2026-10-12; *Proposed* marks mechanisms that
-> are not decided; open points are in [section 11](#11-open-decisions).
+> **This document states policy, not implementation status.** Implementation status is maintained in the
+> [as-built overview (STA-01)](70-state/as-built.adoc); where a statement below says that something does
+> not exist, it was written before the first staging delivery (2026-11-27) and the as-built overview governs.
+> The decisions and requirements of the framework are consolidated in the adopted
+> [release-framework specification](release-process/index.adoc). *Decided* marks requirements fixed by the project
+> owners on 2026-10-12; *Proposed* marks mechanisms that are not decided; open points are in
+> [section 11](#11-open-decisions).
 >
+> **Amended by documentation step P1 (2026-11-28, reconciliation items REC-01, REC-03, REC-06, REC-07).**
+> The authorization wording of section 2.3 and open decision 9, the status tables of sections 2.3 and 10, and the
+> version and identifier rules of sections 3.1 and 7.3 carry marked notes that separate the current mechanism
+> from the approved target. The consolidation of this document into the new hierarchy is step P8.
+
 > **Revised for CTO review (Issue #54, CTO decisions of 2026-11-17, V1 to V6).** Principles 3 and 9, section 2.3 (authorization
 > architecture), section 2.4 (failure, retry and recovery) and 7.3 (version advancement) replace the earlier rules that production
 > signing and delivery need a second, independent human and that publication is a separate authorization. **The authorized merge into
@@ -68,6 +74,7 @@ Branch roles, merge authority and issue handling stay in
    verification that stops delivery on failure, strict provenance and auditable records. Which of
    these is active today is stated in
    [section 2.3](#23-authorization-architecture-decided-by-the-cto-2026-11-17) ("Verified implementation state").
+   *(Amended by P1: see the amendment in section 2.3. The authorization is the written, version-bound decision carried by the reviewed promotion; the environment approval only confirms the deployment.)*
 
 ## 2. Release branches and triggers
 
@@ -138,10 +145,19 @@ one-time exception approved by the owner (Issue #68).
 
 **The target branch is the authorization.** An authorized merge into `staging` or `production`
 is authorization to execute that branch's complete pipeline. After the merge there is **no
-additional manual step**: no approval prompt, no required reviewer on a signing or delivery
-environment, no manual release-intent flag, no change classification and **no file-path
-filter**. Every merge, including a documentation-only one, runs its branch's pipeline.
+further release authorization**: no manual release-intent flag, no change classification and **no
+file-path filter**. Every merge, including a documentation-only one, runs its branch's pipeline.
 (`development` is not a release branch: a merge into it builds nothing.)
+
+> **Amendment (P1, REC-01 and REC-08), recording what the project established after this decision.**
+> The release authorization is the CTO's written, version-bound decision, carried by the reviewed
+> promotion and, for iOS staging today, by the reviewed authorization record that the delivery gate
+> reads. The approval of the protected signing environment (required reviewers) **confirms the
+> deployment** of an already authorized release; it creates no authorization and is not an independent
+> review (`EXC-08`). Temporary Apple credentials are provisioned and verified **before** the promotion
+> merge and removed after the delivery (`DEC-28`); their possession authorizes nothing. The sentences of
+> this section that say no approval prompt or reviewer follows the merge are superseded by this
+> amendment. The lists below of what every merge must do are the earlier design; the approved build-trigger matrix is `DEC-36`, and the Android staging APK is no longer produced by the staging promotion under the approved target (see 3.1). See `DEC-05`, `DEC-08`, `DEC-20` and `DEC-28` in the specification.
 
 **Every successful merge into `staging`** must:
 
@@ -204,6 +220,8 @@ Cadena itself controls (Android upload and app-signing keys, an App Store Connec
 (2) Apple **cloud-managed** signing certificates, whose private key Apple holds and which Cadena
 cannot back up; (3) working copies of credentials stored in protected CI/CD environments. This
 policy creates and transfers none of them.
+
+> **Superseded snapshot (P1, REC-03).** The table below records the state of 2026-11-17 and is not maintained. Since then the first staging delivery took place (2026-11-27) and a protected signing environment with temporary credentials exists for iOS staging. The current state is in the [as-built overview (STA-01)](70-state/as-built.adoc).
 
 **Verified implementation state (checked 2026-11-17, GitHub API and repository).** The policy above
 is the intended architecture. These are **not** active, and nothing in this amendment activates
@@ -270,7 +288,7 @@ verification is an artifact failure, above. Run attempts are already identified 
 
 ## 3. The five signed artifacts
 
-Target state (**Decided**). None of these exists yet.
+Target state (**Decided**). What exists today is stated in the [as-built overview](70-state/as-built.adoc).
 
 ### 3.1 `staging` merge: two artifacts
 
@@ -287,6 +305,8 @@ Target state (**Decided**). None of these exists yet.
 | Signing | Cadena-authorized, staging context | Cadena-authorized, staging context |
 | Artifact | Signed APK | Signed iOS distribution build |
 | Distribution | Internal testing only; **never publicly distributed** (section 8.2) | **Restricted TestFlight only; mandatory** (section 8.1) |
+
+> **Current mechanism versus approved target (REC-06).** The identifier `vX.Y.Z-rc.N` and the signed Android staging APK above are the earlier design. The independent release-candidate counter is ended (`DEC-29`); a build is identified by application version, numerical build number, source commit and durable build evidence. The approved target is that Magic, a manually started Android build, is the sole routine mechanism that allocates build numbers and produces the staging APK, and that a staging promotion delivers iOS only (`DEC-32`, `DEC-33`, `DEC-36`, `DEC-39`). *None of this is implemented.* Today a staging push builds both a debug-signed Android validation APK and, when authorized, delivers iOS, and the validation tools still check `-rc.N`. The signing identity of the Android staging APK is open (`UNR-01`).
 
 ### 3.2 `production` merge: three artifacts
 
@@ -534,6 +554,8 @@ investigation report and approval before any code changes.
 - Android and iOS numbers are the same today; a platform-specific number remains permitted by
   this policy but is not built (above).
 
+> **Current mechanism versus approved target (REC-07).** The advancement procedure above is the current mechanism: a reviewed edit of `pubspec.yaml`, with consumption controlled by people, and the required check of this section is not implemented. The approved target replaces it with one shared allocation sequence and the encoding `XX.YY.ZZ.RRR`, allocated and recorded persistently by Magic before compilation, with inherited version information for later deliveries (`DEC-30` to `DEC-32`, `DEC-37`, `DEC-38`). Preserved requirements: the numerical encoding is validated, a consumed number is never reused, historical consumption is accounted for before the first allocation, and an unauthorized version override is rejected (`VER-08` to `VER-15`, `BRN-03`). The storage mechanism is under investigation (`FQ-01`, `FQ-02`). The alternative per-platform numbers of the first bullet are not part of the approved target (`DEC-31`).
+
 ### 7.4 Identifiers and tags
 
 - Staging merge → `vX.Y.Z-rc.N`, `N` ≥ 1, counting candidates of that version.
@@ -636,8 +658,7 @@ operation the CTO authorizes in writing (the iOS 1.0.4 procedure). Controlled si
 testing is also how the minimum-iOS runtime requirement of [IOS_CI.md](IOS_CI.md) is
 established. Details and status: [IOS_SIGNING.md](IOS_SIGNING.md).
 
-*Resolved by 2.3:* the TestFlight **upload** needs no additional approval; the merge
-authorizes it. The build is delivered through TestFlight only, and tester access stays restricted.
+*Resolved by 2.3, as amended by P1:* the TestFlight **upload** needs no additional release authorization; the authorized promotion carries it. The environment approval of the signing job confirms the deployment. The build is delivered through TestFlight only, and tester access stays restricted.
 
 ### 8.2 Signed Android staging APKs are not public
 
@@ -687,20 +708,7 @@ without a record, or from a commit that was not approved, is not official.
 
 ## 10. What exists today
 
-| Item | State |
-|---|---|
-| `development`, `staging` | Exist, protected |
-| `production` | Exists, protected (created at the adopted baseline `7b63c97`, Issue #68); compile-only builds only |
-| Android CI validation (debug-signed APK), iOS CI validation (unsigned `Runner.app`) | Working; unchanged; **not** among the five artifacts |
-| Retained build artifacts (Stage 2, issue #54): verified Android APK/AAB and unsigned iOS `.xcarchive`, kept **encrypted** to public keys, with checksums, manifests and evidence | Implemented for review ([RETAINED_ARTIFACTS.md](RETAINED_ARTIFACTS.md)); retention on promotions is off until `config/release/artifact_recipients.txt` lists a key |
-| Signing credentials, protected release environments, release workflows | **None** |
-| Tags, GitHub Releases | None |
-| Separate staging application ID / bundle ID / App Store Connect record | Android: the `staging` flavor builds `com.cadenabitcoin.mobile.signer.staging` (not registered in Google Play); iOS: the `staging` flavor builds `com.app.cadenabitcoin.staging` (not registered with Apple). No App Store Connect record |
-| Build-time configuration | Unfinished (Issue #57 B1, local branch only); committed constants are production |
-| iOS toolchain | Xcode 26.3 on `macos-15` with an iOS 26 SDK, pinned by Issue #70 (accepted hosted runs: [IOS_CI.md](IOS_CI.md#verification-status); compile and link only). App Store Connect uploads have required Xcode 26 and the iOS 26 SDK since 2026-04-28 ([Apple](https://developer.apple.com/news/upcoming-requirements/)) |
-| iOS signing, provisioning, App Store Connect integration, TestFlight delivery | **Not implemented** (Issue #71). Readiness record, questionnaire and operating-procedure skeleton: [IOS_SIGNING.md](IOS_SIGNING.md), [APPLE_ACCOUNT_QUESTIONNAIRE.md](APPLE_ACCOUNT_QUESTIONNAIRE.md) |
-| `tool/verify_version.sh` | Exists (this issue), read-only |
-| Merge-authorized pipelines (section 2.3) | **Not implemented.** Only compile-only workflows run on a release-branch merge; the activation preconditions of 2.3 are not met |
+Implementation status is maintained in the [as-built overview (STA-01)](70-state/as-built.adoc), which states what exists, what is an approved target and what is under investigation, with the evidence for each. This section no longer carries a status table. The earlier table, written at the start of Issue #54, remains available in the Git history.
 
 ## 11. Open decisions
 
@@ -720,8 +728,10 @@ without a record, or from a commit that was not approved, is not official.
    public (8.2). The mechanism itself is open.
 8. **Production display name** ("Cadena Signer" in the target; "Cadena Bitcoin"
    today).
-9. **Approvals: resolved (2.3).** The merge is the authorization for both pipelines; no
-   environment reviewer, no extra TestFlight approval, no separate publication approval.
+9. **Approvals: resolved (2.3), as amended by P1.** The reviewed promotion, carrying the CTO's written
+   version-bound decision, is the release authorization for both pipelines; there is no extra TestFlight
+   approval and no separate publication approval. The protected signing environment's reviewer approval
+   confirms the deployment and is not an authorization.
 10. **Independent builds and branding:** whether forks must change name and ID.
 11. **Support policy:** `SECURITY.md` still defers it; it should state that only
     the latest official release is supported.
