@@ -1,0 +1,674 @@
+[[ch02]]
+= Register of established decisions
+:description: Established architectural and operational decisions, their origin, implementation status and supporting evidence.
+
+*Scope:* Decisions already made, their implementation status, supporting evidence and necessary documentation reconciliation.
+
+*Status:* Proposal for review.
+
+This register records established architectural and operational decisions.
+
+A distinction is maintained between:
+
+* *Decided:* A requirement or architectural principle approved by the CTO.
+* *Implemented:* A mechanism that exists in the current system.
+* *Verified:* An implemented mechanism whose behavior has been demonstrated by appropriate evidence.
+
+An approved decision does not imply that its implementation exists or has been verified.
+
+Where older documents contradict a later approved decision, the documentation must be reconciled.
+
+Where an approved decision changes existing system behavior, the current implementation remains authoritative until the reviewed implementation change takes effect.
+
+== Class A: decided and implemented
+
+The following decisions describe mechanisms and architectural principles that exist in the current system.
+
+Limitations of the available verification evidence and approved changes to the current implementation are stated explicitly.
+
+[cols="1,4,3,3",options="header"]
+|===
+| ID
+| Decision
+| Source
+| Enforcement / evidence
+
+| DEC-01
+| Central governance: all source changes enter through reviewed pull requests; promotion is forward only, from `development` to `staging` to `production`; promotion uses merge commits; merge authority belongs to the `maintainers` team.
+| `GOVERNANCE.md`, policy 2; PR #144 and later.
+| Six rulesets and classic branch protection (VERIFIED).
+
+| DEC-02
+| Android and iOS share the same application version and numerical build number. In the current implementation, both values originate from `pubspec.yaml`.
+
+The approved target versioning architecture is described in DEC-30, DEC-31, DEC-32 and DEC-38. Its implementation is pending.
+| Policy 7.1 to 7.2 (CTO 2026-11-17, option A); #54 comment 7212406759.
+| `tool/verify_version.sh`, `test_release_versioning.sh` (VERIFIED for the current implementation).
+
+| DEC-03
+| Environment selection is explicit and fail-closed. The selected flavor must correspond to the selected configuration.
+
+Staging and production are separate applications on both platforms.
+| `CLAUDE.md` section 10, `BUILD_CONFIGURATION.md`, policy 5; #65.
+| `BuildConfig`, `verify_build_config.sh`, `verify_artifact.sh` (VERIFIED).
+
+| DEC-04
+| A merge into `staging` automatically triggers staging delivery and credential-free validation.
+
+The current implementation generates both Android and iOS staging artifacts.
+
+The approved target architecture removes automatic Android staging delivery from this trigger and retains automatic iOS staging delivery (DEC-33, DEC-36, DEC-39).
+| Policy 2.3; `RELEASE_TRIGGERS.md`; PRs #141, #144.
+| Staging delivery and validation workflows on `f31e598` (VERIFIED for the current implementation).
+
+The iOS-only delivery architecture is not yet implemented.
+
+| DEC-05
+| Release authorization is explicit and version-bound.
+
+The implemented staging authorization mechanism uses a reviewed record in the repository, based on the CTO's written decision.
+
+The record binds the authorization to the version, staging application identity, certificate, native library and exact workflow, gate and tool blobs.
+| #71 comments 7216580141, 7218186057; record `ios-staging-authorization.md`.
+| `tool/check_staging_authorization.sh`, 48 test scenarios (VERIFIED).
+
+| DEC-06
+| Release authorization can be withdrawn through a reviewed change on `development`.
+
+The staging authorization gate reads the record from the current tip of `development`. A withdrawn authorization prevents subsequent authorization checks from succeeding, even if the promoted commit contains an earlier `AUTHORIZED` record.
+
+Withdrawal alone does not guarantee termination of a delivery that has already passed its authorization checks. An active delivery may require explicit cancellation.
+| Authorization record section 4; staging authorization gate.
+| Gate test covering withdrawal on the current tip of `development` (VERIFIED).
+
+Cancellation of an active delivery is a separate operational procedure.
+
+| DEC-07
+| The delivered staging commit must be the current tip of `staging` and must be a reviewed two-parent promotion merge.
+
+The application content being delivered must correspond to the development revision authorized and promoted by that merge.
+
+The existing gate's current-tip and content-comparison restrictions remain in force until explicitly reconciled through a reviewed implementation change.
+| Staging authorization gate.
+| `check_staging_authorization.sh`, `commit_parents.sh` (VERIFIED).
+
+The relevant source revision and exact current-tip restrictions must be stated explicitly in the authorization requirements.
+
+| DEC-08
+| Signing takes place in a protected, branch-restricted environment with required reviewers.
+
+The environment approval confirms deployment of an already authorized release. It does not create release authorization and does not, by itself, constitute independent review.
+| Authorization record S3; `IOS_STAGING_DELIVERY.md` section 1.1.
+| Environment `ios-hosted-signing-stg` (VERIFIED).
+
+| DEC-09
+| The current Apple credential is an Admin-role App Store Connect team API key.
+
+The credential is not stored permanently in GitHub. It is provisioned temporarily, exposed only to the designated credential-consuming steps and removed after delivery.
+
+Custody of the original credential outside GitHub is required. Permanent custody, backup, recovery, privilege selection and rotation arrangements remain subject to UNR-02.
+| #71 description (CTO 2026-11-26); authorization record S2; recovery decision R2.
+| Step-level environment configuration, static tests and delivery runs (VERIFIED).
+
+Absence of GitHub secrets after delivery (VERIFIED).
+
+External credential custody arrangements are not independently verified.
+
+| DEC-10
+| Operations that execute third-party build code, including Flutter, CocoaPods and Xcode build operations, run in a credential-free job.
+
+The credential-bearing signing job executes only the designated repository scripts from the workflow's source commit and the necessary Apple tools.
+
+The archive is transferred between jobs as a one-day artifact accompanied by its digest.
+| Workflow design.
+| Workflow implementation, static tests and parity test (VERIFIED).
+
+| DEC-11
+| The signed IPA must carry the pinned Apple Distribution certificate and pass verification steps V1 to V9, including the comparison establishing that the signed application corresponds to the unsigned build with only permitted signing-related changes.
+
+The `dlc_wallet` framework and Rust library are pinned by hash.
+| Authorization record C1, C2; `IOS_RELEASE.md` section 9.
+| `verify_ipa.py`, `validate_handover_archive.py` (VERIFIED).
+
+| DEC-12
+| The verified staging IPA is uploaded exclusively to the designated staging application in App Store Connect.
+
+Staging delivery targets TestFlight internal testing only. It does not submit the application for App Review or public release.
+| Authorization record S1; policy 2.3, 8.1.
+| Artifact digest equality and authorization gate constants (VERIFIED).
+
+| DEC-13
+| A build number consumed by a release attempt must not be reused for another attempt targeting the same store application.
+
+A failed or interrupted delivery is recovered through a new build number, a new written CTO authorization and a new reviewed promotion.
+
+Re-running a failed delivery using the same consumed number is not the supported recovery procedure.
+
+The approved target architecture extends consumption to the initial allocation by Magic, before the build begins (DEC-32).
+| Policy 7.3; authorization record C3; #71 comment 7218186057.
+| Recovery from build `10005001` demonstrated the existing operational procedure.
+
+Current consumption enforcement is human-controlled (class C; `VER-04`).
+
+Automatic allocation and consumption enforcement are not yet implemented.
+
+| DEC-14
+| After an authorized delivery attempt has concluded, the release authorization is withdrawn again through a reviewed pull request.
+
+The default resting state is `WITHDRAWN`.
+| Authorization record S3.
+| PR #153 (VERIFIED).
+
+| DEC-15
+| Staging uses Bitcoin Signet, the staging backend and disposable test accounts.
+
+Mainnet funds must not be used for staging validation.
+| Authorization record S4.
+| `config/build/staging.json`, verification step V6 (VERIFIED).
+
+| DEC-16
+| Independent review is not claimed merely because the two maintainer accounts are distinct.
+| Policy 11.13 (withdrawn); authorization record S3.
+| No technical enforcement required. This is a limitation of the review process that must not be misrepresented.
+
+| DEC-17
+| The hash pin of the native `dlc_wallet` framework is established through a credential-free preflight on the archive of the target flavor, because the compiled framework embeds flavor-dependent build paths.
+| PRs #147, #148; #71 comment 7214670953.
+| `ios-staging-archive-preflight.yml` (VERIFIED).
+
+| DEC-18
+| The installed application must display its application version and numerical build number.
+
+The displayed values must correspond to the actual installed application artifact, not to an independent display-only declaration.
+| #142, PR #143; CTO versioning decisions of 2026-11-27.
+| Version display exists on the Dashboard (IMPLEMENTED).
+
+Correct display of both the application version and numerical build number remains to be explicitly verified on both platforms.
+
+Successful application launch and login alone do not constitute verification of the displayed version information.
+|===
+
+== Class B: decided, but not yet fully reflected in authoritative documentation
+
+The following decisions have been established but require reconciliation of the existing documentation.
+
+Where implementation is also incomplete, the corresponding implementation requirements remain applicable.
+
+[cols="1,4,4",options="header"]
+|===
+| ID
+| Decision
+| Documentation reconciliation
+
+| DEC-20
+| Human approval and temporary credentials are part of the Apple delivery architecture (DEC-08, DEC-09).
+| `RELEASE_POLICY.md` sections 2.3 and 11.9 and `IOS_SIGNING.md` section 6 contain statements that contradict the implemented approval mechanism.
+
+Amend these documents to distinguish release authorization from deployment confirmation.
+
+The reviewed promotion and version-bound record establish release authorization. The protected environment approval confirms deployment.
+
+Do not remove the existing approval mechanism.
+
+| DEC-21
+| The authorization record, its lifecycle and the binding of authorization to implementation blobs are normative requirements.
+
+The resting state is `WITHDRAWN`. Authorization applies to a specifically identified delivery. Following the delivery attempt, authorization returns to `WITHDRAWN`.
+| Currently documented principally in `IOS_STAGING_DELIVERY.md` and the authorization record.
+
+Consolidate the normative requirements into the authorization policy (`AUT-01` to `AUT-09`).
+
+| DEC-22
+a| Before provisioning temporary credentials and merging an iOS delivery promotion, the operator must establish that the promotion is ready.
+
+The checks include:
+
+* Authorization record state.
+* Bound implementation blobs.
+* Authorized application source.
+* Environment protection.
+* Absence of temporary credentials before provisioning.
+* Successful required CI checks.
+* Absence of conflicting or waiting delivery runs.
+* Build-number availability in App Store Connect.
+* Readiness of the intended tester group, where applicable.
+| The original checks exist in the CTO's execution authorization (#71 comment 7216580141) and pull request descriptions.
+
+Consolidate them into runbook `RUN-02` and the operator checker described in xref:ch08-operator-credential-tool.adoc#ch08[Chapter 8].
+
+Reconcile the checks with the sole credential-management sequence of DEC-28.
+
+| DEC-23
+| Release evidence must be durable, attributable to its source and protected against unauthorized modification.
+
+Release evidence must not depend exclusively on expiring workflow artifacts, temporary files or conversation history.
+
+Verified facts, reported facts and unconfirmed statements must be distinguishable.
+| CTO direction of 2026-11-27.
+
+Extend `RELEASE_POLICY.md` section 9 and establish delivery record template `REC-01`.
+
+Durable machine-readable records are governed by DEC-35.
+
+| DEC-24
+a| Under the approved target architecture, recovery from a failed staging delivery requires:
+
+. A new build-number allocation through Magic.
+. A successfully generated staging APK.
+. A new written CTO decision identifying the allocated version and corresponding Android build.
+. A reviewed pull request carrying the new authorization.
+. A new promotion.
+. Repetition of the credential-management sequence defined by DEC-28.
+
+A failed delivery is not re-run using its previously consumed build number.
+| `IOS_STAGING_DELIVERY.md` sections 8 and 8.1 describe the earlier procedure based on a reviewed manual edit of the build number.
+
+Reconcile runbook `RUN-05` with Magic when the new architecture takes effect.
+
+The historical rationale of recovery decisions R1 to R3 is preserved in xref:ch04-exceptions-and-reconciliation.adoc#ch04[Chapter 4].
+
+| DEC-25
+| Native AsciiDoc is the canonical format for human-oriented documentation.
+
+Machine-readable files retain the format required by their consuming tools.
+
+Documentation is modular and structured so that individual documents can be maintained and read independently and included in a larger documentation book.
+
+Tool-required or externally prescribed formats are retained where necessary.
+| CTO decision of 2026-11-27.
+
+Establish documentation convention `DOC-01` and reference it from `CONTRIBUTING.md` and other applicable contributor guidance.
+
+Avoid maintaining duplicate authoritative content in Markdown and AsciiDoc.
+
+| DEC-26
+| Staging validation before production is a requirement.
+
+Validation using the staging applications and Bitcoin Signet must precede the corresponding production release.
+
+The exact validation evidence required for production authorization, including the treatment of Android and iOS staging source discrepancies, remains subject to UNR-06.
+| #54 description: a future policy requirement, not an implemented enforcement mechanism.
+
+Record the requirement as `PRD-02`.
+
+Do not represent production validation enforcement as implemented.
+
+| DEC-27
+| The successfully demonstrated staging delivery infrastructure and the subsequently approved architectural decisions constitute the reference for production pipeline implementation.
+
+Temporary staging exceptions do not automatically become production policy.
+
+Every exception must be explicitly resolved, retired or separately accepted for its intended production scope.
+
+Production pipeline readiness and authorization of an actual production release are distinct objectives.
+| CTO Phase 2 direction.
+
+This specification establishes the reference architecture.
+
+xref:ch04-exceptions-and-reconciliation.adoc#ch04[Chapter 4] records the exceptions and their dispositions.
+
+xref:ch10-production-extensions.adoc#ch10[Chapter 10] identifies the requirements that cannot be satisfied by the staging reference alone.
+|===
+
+== Class B (continued): CTO architectural decisions of 2026-11-27
+
+The following decisions establish the approved target architecture.
+
+They are normative architectural requirements but must not be represented as implemented until the corresponding mechanisms exist and have been verified.
+
+Where they modify the demonstrated staging reference architecture, the modification is intentional.
+
+The superseded requirements and their rationale are preserved in the historical record of xref:ch04-exceptions-and-reconciliation.adoc#ch04[Chapter 4].
+
+[cols="1,4,3",options="header"]
+|===
+| ID
+| Decision
+| Consequence in this specification
+
+| DEC-28
+a| *Sole Apple credential-management sequence.*
+
+The following sequence applies to both staging and production iOS delivery:
+
+. Complete all checks establishing that the promotion pull request is ready to merge.
+. Upload the three temporary Apple credentials using the local operator-controlled credential-management script.
+. Verify that all three credentials are present.
+. Merge the approved promotion pull request.
+. Approve the protected signing job.
+. Establish that the delivery workflow has finished and verify its outcome.
+. Remove the temporary credentials, regardless of whether delivery succeeded, failed or was cancelled.
+. Verify that all three credentials are absent.
+
+Uploading credentials after the promotion merge is not a supported alternative.
+
+An abandoned or interrupted delivery must be brought to a safe conclusion, including cancellation where necessary and verified credential removal.
+
+Temporary credentials must not remain provisioned indefinitely while waiting for an operator action.
+| UNR-03: approved.
+
+xref:ch08-operator-credential-tool.adoc#ch08[Chapter 8].
+
+`CRD-04`, `CRD-07`, `CRD-08`, `CRD-09`.
+
+The sequence has been demonstrated manually. The operator tool and interruption-handling mechanisms remain to be implemented and verified.
+
+| DEC-29
+| *Release identification.*
+
+The separate release candidate counter `rc.N` is eliminated.
+
+The application version and numerical build number provide the authoritative version information.
+
+Git commit hashes and the associated build evidence identify the exact source used for a build.
+
+Git tags are not required as an independent version identification or release authorization mechanism.
+
+Automatically generated tags are permitted where required for GitHub Releases. They must be derived from existing authoritative information, introduce no independent version counter and require no routine manual administration.
+
+Existing historical tags, where present, are preserved.
+| UNR-04: resolved in principle.
+
+`VER-07`.
+
+| DEC-30
+a| *Build-number encoding.*
+
+The numerical build number encodes the application version and development revision using the structure `XX.YY.ZZ.RRR`.
+
+Starting from the least significant decimal digit:
+
+* Three digits represent the development revision.
+* Two digits represent the patch version.
+* Two digits represent the minor version.
+* The remaining digits represent the major version.
+
+For example, application version `2.1.34`, revision `65`, produces numerical build number `20134065`.
+
+The proposed encoding must be verified against platform limits, historical build-number constraints and overflow conditions before implementation.
+| UNR-05: resolved in principle.
+
+xref:ch11-build-and-release-architecture.adoc#ch11[Chapter 11].
+
+`VER-08`.
+
+No concrete incompatibility has been established. Complete platform compatibility remains to be verified.
+
+| DEC-31
+a| *One version sequence.*
+
+There shall be one shared numerical build-number allocation sequence.
+
+There shall be no independently maintained:
+
+* Platform-specific build-number counter.
+* Environment-specific build-number counter.
+* Release candidate counter.
+* Duplicate authoritative version counter.
+
+Subsequent delivery operations inherit version information rather than independently generating it.
+
+Version information is extracted from the applicable application artifacts and verified against durable build evidence.
+| `VER-09`, `VER-12`, `VER-15`.
+
+| DEC-32
+a| *Magic: manually triggered Android staging build.*
+
+Magic is the manually initiated Android build operation originating from `development`.
+
+Magic performs the following operations:
+
+. Determines the applicable application version.
+. Allocates and persistently records a new numerical build number.
+. Builds an Android APK using the staging application identity and configuration.
+. Verifies the resulting artifact.
+. Preserves the successful APK and its build evidence.
+
+Magic is the sole routine mechanism that increments the development revision counter.
+
+It may be executed as frequently as required during development, independently of branch promotions.
+
+Every allocated build number is consumed. A failed or interrupted invocation must not make an allocated number available for reuse.
+
+The APK generated by Magic is the staging APK. There is no separate routine DEV APK delivery mechanism.
+| xref:ch11-build-and-release-architecture.adoc#ch11[Chapter 11].
+
+`VER-10`, `VER-11`.
+
+WP-C1.
+
+The underlying APK build mechanism should be consolidated from existing implementations wherever practicable.
+
+| DEC-33
+| *Development-to-staging promotion.*
+
+A reviewed merge from `development` into `staging` automatically initiates iOS staging delivery.
+
+It does not generate another Android staging APK for delivery.
+
+The delivery operation identifies the applicable successful Magic build and retrieves its application version and numerical build number from the APK, verified against its build evidence.
+
+The application source used to generate the APK is compared with the application source being promoted.
+
+Any relevant source discrepancy must be detected, reported and preserved in the delivery evidence.
+
+The CTO accepts that the Android and iOS staging applications may share the same application version and build number while containing different application source revisions.
+
+Source differences alone do not prohibit staging delivery.
+
+No build-number increment occurs during the promotion.
+
+The association between the Android build, promoted source, iOS delivery and inherited version information must remain retrievable.
+| xref:ch11-build-and-release-architecture.adoc#ch11[Chapter 11].
+
+`DEL-05`, EXC-13.
+
+WP-C2.
+
+The implications of staging source discrepancies for subsequent production authorization remain subject to UNR-06.
+
+| DEC-34
+a| *Staging-to-production promotion.*
+
+A reviewed and authorized merge from `staging` into `production` initiates production delivery.
+
+The production delivery generates:
+
+* Production Android APK.
+* Production Android AAB.
+* Production iOS application.
+
+All production artifacts must originate from the same approved application source and carry identical inherited application version and numerical build-number information.
+
+Environment-specific configuration, platform-specific implementation and signing differences remain expected.
+
+The production delivery inherits the version information established by the specifically identified and accepted staging delivery.
+
+The current development version counter is not consulted as an authority for production version selection.
+
+No build-number increment occurs during production promotion.
+
+Production publication remains subject to the applicable release authorization, security, validation and distribution requirements.
+| xref:ch11-build-and-release-architecture.adoc#ch11[Chapter 11].
+
+xref:ch10-production-extensions.adoc#ch10[Chapter 10].
+
+`DEL-06`, `PRD-01`, `PRD-17`.
+
+UNR-09.
+
+| DEC-35
+a| *Persistent artifact availability and durable build records.*
+
+Following the initial successful publication, a production APK must remain persistently and publicly downloadable.
+
+GitHub Releases is the preferred production APK distribution mechanism.
+
+Staging APKs must also have persistent storage. Their access and distribution policy is decided separately.
+
+An existing successfully published APK remains available until its replacement has been successfully built, verified and published.
+
+Failed, interrupted or cancelled builds must not remove or replace the existing available APK.
+
+Expiring GitHub Actions artifacts alone are insufficient for persistent application distribution or durable release evidence.
+
+Machine-readable build records must enable subsequent workflows to retrieve and verify:
+
+* Application version.
+* Numerical build number.
+* Source commit or equivalent source identity.
+* Application environment.
+* Artifact checksum.
+* Build outcome.
+* Corresponding workflow execution.
+
+Production delivery must identify the specific accepted staging delivery rather than selecting an arbitrary latest artifact.
+
+The storage and protection mechanisms for durable build records remain subject to technical investigation.
+| xref:ch11-build-and-release-architecture.adoc#ch11[Chapter 11].
+
+`DEL-07`, `EVD-05`.
+
+WP-C3.
+
+Android signing identity and staging access policy remain subject to UNR-01.
+
+| DEC-36
+a| *Build-trigger matrix.*
+
+The approved delivery architecture consists of three principal operations:
+
+* Magic, manually initiated from `development`: builds the staging APK and increments the build number.
+* Development-to-staging promotion: builds and delivers the staging IPA without incrementing the build number.
+* Staging-to-production promotion: builds the production APK, AAB and IPA without incrementing the build number.
+
+Credential-free compilation, static analysis, regression testing and other validation operations remain separate from application delivery and may run automatically.
+| xref:ch11-build-and-release-architecture.adoc#ch11[Chapter 11] contains the authoritative build-trigger matrix.
+
+`DEL-01`.
+
+| DEC-37
+| *Historical build-number initialization.*
+
+Magic must be initialized in a manner that prevents allocation of any previously consumed build number.
+
+Initialization must account for relevant historical Android and iOS builds, including published builds, uploaded builds, failed delivery attempts and attempts whose outcome is indeterminate.
+
+Previously consumed numbers such as `10005001` and `10005002` must not be allocated again.
+
+A complete historical inventory is an acceptable initialization mechanism but is not mandatory where a trustworthy upper boundary for previously consumed numbers can be established instead.
+
+Any such boundary must account for all relevant application identities, the shared allocation sequence, platform monotonicity requirements and the approved build-number encoding.
+
+Magic must refuse to allocate a number when safe initialization cannot be established.
+
+The objective is reliable non-reuse of consumed numbers, not exhaustive reconstruction of historical build activity for its own sake.
+| CTO clarification of 2026-11-27; acceptance audit F-01; Chapter 2 review.
+
+`VER-13`, `VER-14`.
+
+WP-C1, FQ-12.
+
+| DEC-38
+| *Single source of truth and derived version information.*
+
+The application version and numerical build number must form one unambiguous, authoritative version declaration for each build.
+
+Magic is responsible for establishing and persistently recording the newly allocated build number.
+
+Subsequent delivery operations inherit the version information associated with the specifically identified preceding build or delivery.
+
+Application artifact fields, authorization records, delivery records, user interface displays and historical evidence may contain derived copies of authoritative version information.
+
+Such copies do not constitute independent sources of truth, provided that they are derived from or verified against the authoritative build information and cannot independently redefine it.
+
+No independently maintained duplicate version declaration or counter is permitted.
+
+The authoritative application version and allocation information may reside in one file or in coordinated storage structures, provided that their relationship is unambiguous and securely enforced.
+
+The exact storage mechanism, including the future role of `pubspec.yaml` and its build-number component, remains subject to technical investigation.
+
+No implementation-specific storage arrangement is established by this decision.
+| CTO clarification of 2026-11-27; acceptance audit F-04; Chapter 2 review.
+
+`VER-15`.
+
+xref:ch11-build-and-release-architecture.adoc#ch11[Chapter 11].
+
+FQ-01, FQ-02.
+
+| DEC-39
+a| *Magic is the sole routine staging APK delivery mechanism.*
+
+Automatic compilation, static analysis and regression testing may remain part of the continuous integration infrastructure.
+
+Such validation operations may generate temporary compilation outputs as required for testing.
+
+They must not:
+
+* Publish an alternative staging APK.
+* Retain an APK as an alternative installable staging deliverable.
+* Replace the staging APK generated by Magic.
+* Independently allocate a build number.
+
+The staging APK selected for delivery and subsequent version inheritance originates exclusively from the corresponding successful Magic invocation.
+| CTO clarification of 2026-11-27; acceptance audit F-05.
+
+`DEL-08`.
+
+WP-C1, WP-C2.
+|===
+
+== Reconciliation of current and target architecture
+
+The current implementation and the approved target architecture must remain explicitly distinguishable throughout the documentation.
+
+Until the target architecture takes effect:
+
+* The authoritative version information is obtained from the existing `pubspec.yaml` mechanism.
+* The development-to-staging promotion retains its existing Android and iOS delivery behavior.
+* The existing authorization and verification mechanisms remain in force.
+* Build-number consumption and delivery recovery follow the existing operational procedure.
+
+After the reviewed implementation change establishing the target architecture:
+
+* Magic becomes the sole routine build-number allocation mechanism.
+* Magic becomes the sole routine staging APK delivery mechanism.
+* Development-to-staging promotion delivers the iOS staging application using inherited version information.
+* Staging-to-production promotion inherits the accepted staging version information and generates the production artifacts from a consistent application source.
+
+There must be no transitional period during which multiple independent mechanisms are simultaneously authoritative for build-number allocation or selection.
+
+The implementation sequence and conditions for changing from the current architecture to the target architecture are defined in xref:ch09-migration-sequence.adoc#ch09[Chapter 9].
+
+== Reconciliation of historical documentation
+
+The following documents contain descriptions of system states that no longer correspond to the demonstrated staging infrastructure:
+
+* `RELEASE_POLICY.md` section 10.
+* `RELEASE_SIGNING_ARCHITECTURE.md`, introductory status statements.
+* `RELEASE_IMPLEMENTATION_PLAN.md`, implementation stages R1 to R10.
+* `IOS_SIGNING.md` sections 3 and 8.
+
+These documents must be reconciled with the implemented system and approved architectural decisions.
+
+Still-applicable normative requirements must be preserved and consolidated into the authoritative documentation.
+
+Outdated statements describing implementation status must be replaced by a maintained current-state document (`STA-01`).
+
+Superseded architectural proposals and implementation plans may be retained as clearly identified historical records.
+
+Historical documents must not remain competing sources of normative requirements.
+
+The permanent documentation hierarchy and archival procedure are described in xref:ch06-document-hierarchy-and-mapping.adoc#ch06[Chapter 6].
+
+== References
+
+* xref:ch03-unresolved-decisions.adoc#ch03[Chapter 3]: Unresolved decisions.
+* xref:ch04-exceptions-and-reconciliation.adoc#ch04[Chapter 4]: Exceptions, reconciliation and historical record.
+* xref:ch05-requirements-and-enforcement.adoc#ch05[Chapter 5]: Requirement-to-enforcement matrix.
+* xref:ch06-document-hierarchy-and-mapping.adoc#ch06[Chapter 6]: Documentation hierarchy and mapping.
+* xref:ch08-operator-credential-tool.adoc#ch08[Chapter 8]: Operator credential-management tool.
+* xref:ch09-migration-sequence.adoc#ch09[Chapter 9]: Migration and implementation sequence.
+* xref:ch10-production-extensions.adoc#ch10[Chapter 10]: Production extensions.
+* xref:ch11-build-and-release-architecture.adoc#ch11[Chapter 11]: Build and release architecture.

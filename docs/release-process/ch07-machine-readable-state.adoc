@@ -1,0 +1,588 @@
+[[ch07]]
+= Separating machine-readable state from prose
+:description: Separation of authorization data, version information, build records, infrastructure configuration and human-oriented documentation.
+
+*Scope:* The organization, ownership, persistence and consumption of machine-readable release information.
+
+*Status:* Proposal for review. The target data architecture is not yet implemented.
+
+== Objective
+
+Human-oriented documentation and machine-readable operational state serve different purposes.
+
+Documentation explains the architecture, its requirements, decisions and operational procedures.
+
+Machine-readable data provides the information required by workflows, authorization gates, build tools and verification mechanisms.
+
+The two must be maintained without introducing independently maintained duplicate authorities.
+
+Documentation changes must not unnecessarily require changes to security-critical implementation files or release authorization.
+
+== Existing problem
+
+The release infrastructure audit identified that the existing authorization records serve two purposes simultaneously:
+
+* Human-oriented documentation of release decisions and delivery history.
+* Machine-readable authorization data consumed by release gates.
+
+The authorization gates extract structured `G2S-*` declarations from narrative documents.
+
+This arrangement creates unnecessary dependencies:
+
+* Narrative changes and authorization changes affect the same file.
+* Tests depend on the current operational state of particular authorization records.
+* Documentation paths are embedded in authorization-bound implementation files.
+* Documentation reorganization may require changes to security-critical files and corresponding authorization bindings.
+
+These observations describe the existing implementation identified during the release audit.
+
+The objective is to remove unnecessary coupling without weakening existing authorization and verification guarantees.
+
+== Categories of information
+
+[cols="2,3,4",options="header"]
+|===
+| Category | Proposed location | Responsibility
+
+| Authorization and declared configuration
+| Reviewed repository files, principally under `config/release/`.
+| Records explicit release decisions, required configuration and applicable operational constraints.
+
+| Version allocation and build facts
+| Persistent storage within the repository infrastructure.
+| Records authoritative build-number allocations, application versions, artifact identities, build outcomes and delivery history.
+
+| Human-oriented documentation
+| Native AsciiDoc documents under `docs/`.
+| Explains architecture, policy, operational procedures, historical decisions and human-reported observations.
+|===
+
+The exact storage arrangement for version allocation and build facts remains subject to technical investigation.
+
+A single file or coordinated storage structures may be used, provided that the requirements established in DEC-38 are satisfied.
+
+No unnecessary separation of data into additional files or storage mechanisms is required.
+
+== Single source of truth
+
+Each authoritative declaration has one identifiable origin.
+
+Other representations may contain derived or verified copies.
+
+For example:
+
+* An application artifact contains its application version and build number.
+* An authorization record identifies the version and build selected for delivery.
+* A release record documents the version actually delivered.
+* The installed application displays its own version information.
+
+These representations do not constitute independent version authorities.
+
+Magic is the sole routine operation that allocates new build numbers.
+
+Subsequent delivery operations inherit the version information of a specifically identified preceding build or delivery.
+
+No independently maintained duplicate counter is permitted.
+
+A persistently stored authoritative counter is acceptable if its allocation, concurrency, history and failure behavior satisfy the architectural requirements.
+
+Alternatively, the next number may be derived from durable allocation records.
+
+The choice between these mechanisms is an implementation question.
+
+See DEC-31, DEC-37, DEC-38 and xref:ch11-build-and-release-architecture.adoc#ch11[Chapter 11].
+
+== Proposed repository data files
+
+The following files and structures are proposed as implementation candidates.
+
+Their names, formats and separation are not mandatory architectural decisions unless explicitly established elsewhere.
+
+Existing mechanisms should be reused wherever practicable.
+
+[cols="2,4,2",options="header"]
+|===
+| Proposed file | Content and purpose | Consumer
+
+| `authorization/staging.record`
+| Structured staging authorization data, separated from narrative documentation. Retain the existing `G2S-STAGING-*` declarations where practical. Under the target architecture, the authorization identifies the selected Magic build and its version information. The resting state remains `WITHDRAWN`.
+| Staging authorization gate, iOS staging delivery and applicable preflight checks.
+
+| `authorization/production.record`
+| Structured production authorization data identifying the specifically accepted staging delivery and applicable production requirements.
+| Production authorization gate and delivery workflow.
+
+| `infrastructure.json`
+| Optional declaration of required repository settings, environment protections, expected credential names and relevant non-secret external configuration.
+| Read-only infrastructure verification mechanism (WP-A2).
+
+| `requirements.json`
+| Optional machine-readable mapping between established requirement identifiers, implementation files and verification tests.
+| Enforcement-matrix generator and reference validation tests.
+
+| `build_history.json`
+| Optional historical initialization evidence identifying previously consumed numbers or trustworthy numerical upper boundaries.
+| Magic allocator and historical initialization verification.
+
+| `published_versions.json`
+| Existing recorded publication floors. Retain or consolidate as appropriate, provided that historical evidence remains preserved.
+| Existing version tools and future allocation verification.
+
+| `android_signing.json`
+| Existing Android signing configuration and non-secret verification information.
+| Existing and future Android signing tools.
+
+| `artifact_recipients.txt`
+| Existing encrypted artifact recipient configuration, where restricted artifact retention remains applicable.
+| Applicable artifact retention and distribution tools.
+|===
+
+All proposed paths are relative to `config/release/`.
+
+The implementation must establish whether each proposed file is necessary.
+
+Files must not be introduced solely because they appear in this proposal.
+
+=== Authorization records
+
+Authorization records must contain structured, unambiguous data suitable for strict machine validation.
+
+They must preserve:
+
+* Explicit authorization state.
+* Applicable version information.
+* The specifically authorized build or delivery.
+* Application identity.
+* Required certificate and native-library identities.
+* Required implementation bindings.
+* Reference to the written CTO decision.
+
+The existing strict parser should be reused or adapted where practical.
+
+Narrative explanations and historical commentary belong in human-oriented documentation.
+
+Changing the representation of the authorization record must not change its authority, scope or security properties.
+
+=== Infrastructure declarations
+
+The purpose of a machine-readable infrastructure declaration is to simplify verification of required infrastructure settings.
+
+It must distinguish between:
+
+* Required infrastructure configuration.
+* Actual configuration observed through the platform.
+* External prerequisites requiring human verification.
+
+GitHub and the applicable external services remain authoritative regarding their actual configuration.
+
+A repository declaration describes the required state; it does not establish that the actual state corresponds to it.
+
+The read-only checker compares required state with observed state.
+
+Infrastructure declarations must not contain credential values or private signing material.
+
+=== Requirement mappings
+
+A machine-readable requirement mapping may be introduced if it provides practical value for automated verification or documentation generation.
+
+Such a mapping may associate:
+
+* Requirement identifiers.
+* Relevant implementation files.
+* Verification scripts.
+* Automated tests.
+* Applicable implementation work packages.
+
+The requirement itself must retain one authoritative normative definition.
+
+A machine-readable mapping must not introduce a separately maintained competing definition of the same requirement.
+
+A test confirming that a referenced script or test exists establishes reference integrity only.
+
+It does not establish that the referenced mechanism adequately enforces the requirement.
+
+The authoritative requirements are defined in xref:ch05-requirements-and-enforcement.adoc#ch05[Chapter 5] and the applicable production requirements.
+
+== Historical build-number initialization
+
+Magic must be initialized safely before it allocates its first build number.
+
+The initialization evidence must prevent reuse of previously consumed numbers and preserve applicable numerical ordering.
+
+Acceptable mechanisms include:
+
+* A verified historical inventory.
+* Trustworthy historical numerical upper boundaries.
+* A combination of historical records and numerical boundaries.
+
+Historical evidence must account for relevant Android and iOS applications, including failed and indeterminate delivery attempts.
+
+A complete reconstruction of every historical development build is not mandatory where a sufficient numerical upper boundary can be established.
+
+The historical initialization information must be distinguishable from subsequent live allocation state.
+
+Previously established historical evidence must not be silently modified or discarded.
+
+Corrections require an attributable and appropriately reviewed change.
+
+Whether a separate history file is necessary remains part of `FQ-12`.
+
+Magic must refuse allocation when safe initialization cannot be established.
+
+See DEC-37, `VER-13`, `VER-14` and `INV-09`.
+
+== Persistent version allocation
+
+The authoritative allocation mechanism must establish and persist the numerical build number before application compilation begins.
+
+The allocated number must remain consumed even if:
+
+* Compilation fails.
+* Artifact verification fails.
+* Publication fails.
+* The workflow is cancelled.
+* The final build outcome is indeterminate.
+
+Concurrent executions must not allocate the same number.
+
+The allocation mechanism must preserve existing branch protection and repository governance.
+
+No workflow may bypass protected-branch review requirements merely to persist a new build number.
+
+The allocation mechanism must establish an unambiguous association between:
+
+* The application version.
+* The allocated numerical build number.
+* The applicable source revision.
+* The allocation operation.
+
+The exact role of `pubspec.yaml` and any additional persistent data structures remains subject to `FQ-01` and `FQ-02`.
+
+No separate allocation file, counter service, Git reference namespace or database is prescribed by this chapter.
+
+== Durable build and delivery records
+
+=== Purpose
+
+Build and delivery records preserve the facts established during allocation, compilation, verification, signing and publication.
+
+These facts become available during operational execution.
+
+They are therefore distinct from reviewed declarations established before execution.
+
+The existing `cadena-build-manifest/1` provides a starting point for the required build information.
+
+Prefer extending the existing mechanism over establishing an independent parallel record system.
+
+=== Allocation records
+
+Every allocated build number must remain identifiable and retrievable.
+
+This includes allocations that never produce a successful application artifact.
+
+The allocation evidence must establish that the number remains consumed independently of the eventual build outcome.
+
+=== Successful build records
+
+A successful build record contains the applicable information defined by `EVD-05`, including:
+
+* Application version and numerical build number.
+* Source commit and relevant application content identity.
+* Application environment.
+* Artifact checksum and verified identity.
+* Build outcome.
+* Workflow execution.
+* Applicable signing identity or status.
+* Applicable artifact access policy.
+
+The build record must remain associated with its corresponding artifact.
+
+Where the artifact is persistently published, its verified build evidence should be retrievable through the same distribution infrastructure wherever practical.
+
+=== Unsuccessful build records
+
+Failed, cancelled, indeterminate and unpublished builds must retain sufficient evidence to establish their allocation and outcome.
+
+Their record storage cannot depend on successful artifact publication.
+
+The exact storage mechanism remains subject to `FQ-13`.
+
+=== Delivery records
+
+A delivery that inherits version information identifies the preceding build or delivery from which that information originates.
+
+Inheritance is recorded by the inheriting delivery.
+
+It does not modify or redefine the preceding build record.
+
+Staging iOS delivery records the selected Magic build and the source comparison between the Android build and the promoted source.
+
+Production delivery records the specifically accepted staging delivery and the common source used for the production artifacts.
+
+=== Record protection
+
+Historical allocation, build and delivery facts must not be silently overwritten or removed.
+
+Subsequent state transitions, corrections and additional observations must remain attributable and traceable.
+
+An append-only event representation is one acceptable implementation.
+
+Other storage mechanisms are acceptable if they provide equivalent durability, integrity and traceability guarantees.
+
+Records must be protected against unauthorized creation, modification and deletion.
+
+A checksum alone is insufficient if an unauthorized actor can replace both the artifact and its checksum.
+
+The trust relationship between the source, workflow, allocation, artifact and durable record must be established.
+
+See `EVD-05`, `EVD-07`, `INF-05`, `FQ-05` and `FQ-13`.
+
+== Retrieval and verification
+
+A workflow requiring inherited version information retrieves the specifically identified preceding build or delivery.
+
+It does not silently select the latest available build.
+
+The authoritative version information may be retrieved from the corresponding artifact and its verified durable evidence.
+
+Where the original artifact is available, its version information and checksum are independently recomputed and compared with the applicable record.
+
+Where an original artifact is not persistently retained, the durable evidence must preserve the version information and artifact identity established during the original verification.
+
+This applies particularly to iOS delivery, where the signed IPA may no longer be available after temporary workflow artifacts expire.
+
+The absence of a permanently retained IPA must not by itself prevent production version inheritance, provided that the required trustworthy delivery evidence exists.
+
+The implementation must distinguish between:
+
+* Retrieving a recorded fact.
+* Verifying an available artifact.
+* Establishing the authenticity of the corresponding evidence.
+
+Missing, malformed, inconsistent or unverifiable evidence prevents authorized delivery.
+
+== Security properties of the transition
+
+The transition from narrative authorization records to structured operational data must preserve the existing security guarantees.
+
+=== Fail-closed behavior
+
+Authorization gates retain their applicable checks, including:
+
+* Authorization state.
+* Version and build identity.
+* Application identity and other required constants.
+* Implementation bindings.
+* Live authorization state on `development`.
+* Required promotion structure and source identity.
+
+Missing or malformed required data prevents authorization.
+
+A new storage format must not introduce a permissive fallback to an older authorization source.
+
+=== Authorization bindings
+
+Existing bindings to security-critical workflows, gates, scripts and configuration must remain effective.
+
+Moving authorization information into a separate file must preserve the integrity of the authorization record and the identity of the implementation it authorizes.
+
+The implementation must distinguish between:
+
+* Mutable authorization state.
+* Implementation and configuration identities bound by the authorization.
+* Historical evidence describing earlier authorization states.
+
+The authorization record does not need to bind its own Git blob through a self-referential declaration.
+
+Its integrity must instead be established through the applicable reviewed repository history and authorization mechanism.
+
+The exact binding scope must remain explicit and testable.
+
+=== Reviewed implementation changes
+
+Changes to authorization-bound files follow the reviewed implementation procedure established in xref:ch09-migration-sequence.adoc#ch09[Chapter 9].
+
+The corresponding authorization remains `WITHDRAWN` during the applicable change.
+
+No conflicting delivery may be in progress.
+
+Implementation bindings are refreshed as required.
+
+Existing verification scenarios and security assertions must remain applicable unless explicitly replaced by equivalent or stronger assertions.
+
+Tests are adapted where their assumptions concern the superseded implementation rather than the security property itself.
+
+=== No double authority
+
+During migration, every operational mechanism has one authoritative source for each required declaration.
+
+A gate must not accept either of two competing authorization records.
+
+A delivery must not accept either of two independently maintained version declarations.
+
+The transition must clearly identify when the new representation becomes authoritative.
+
+Historical representations remain available for traceability but must not remain competing operational authorities.
+
+=== State-independent tests
+
+Automated tests must validate security and structural properties rather than depend on incidental current operational facts.
+
+Tests should not require:
+
+* The live authorization record to remain permanently `WITHDRAWN`.
+* A specific historical delivery date.
+* A specific workflow execution identifier.
+* A particular build number unrelated to the behavior being tested.
+
+Use controlled fixtures to demonstrate both accepted and rejected authorization states.
+
+Verification must cover, where applicable:
+
+* Valid and invalid authorization structures.
+* Authorized and withdrawn states.
+* Version and artifact identity mismatches.
+* Missing or inconsistent implementation bindings.
+* Malformed authorization references.
+* Missing or unverifiable build evidence.
+* Incorrect promotion structure.
+* Previously consumed delivery numbers.
+
+An authorization record that is structurally valid is not necessarily sufficient to authorize a particular delivery.
+
+Authorization tests must compare the record with independently established expected values rather than merely verify its internal consistency.
+
+Historical facts may be tested separately where their preservation is itself a requirement.
+
+=== No weaker write path
+
+The target data architecture must preserve existing repository protection and review guarantees.
+
+Operationally generated state may require a different write mechanism from reviewed configuration.
+
+Such a mechanism must not introduce unauthorized writes to protected source branches.
+
+Any new privileged identity, workflow write permission or protection exception requires explicit review before implementation.
+
+See `BRN-04`, `BLD-05`, `INF-05` and `INV-03`.
+
+== Human-oriented documentation
+
+Native AsciiDoc remains the canonical human-oriented documentation format.
+
+Human-oriented documentation contains:
+
+* Architectural explanations.
+* Normative requirements.
+* CTO decisions.
+* Operational procedures.
+* Historical rationale.
+* Human-reported observations.
+* Interpretations of verified machine-readable evidence.
+
+Machine-readable operational declarations must not depend on parsing incidental narrative formatting.
+
+Human-oriented release records may reproduce relevant machine-readable facts for readability.
+
+Such representations are derived evidence, not independent operational declarations.
+
+Documentation generators may be introduced where they reduce duplication or manual administration.
+
+They are not mandatory merely because structured data exists.
+
+== Formats required by external tools
+
+Files consumed by development tools, workflows or external platforms retain the formats required by those consumers.
+
+Examples include:
+
+[cols="2,4",options="header"]
+|===
+| File or category | Reason
+
+| `CLAUDE.md`
+| Tool-specific repository guidance.
+
+| GitHub pull request templates
+| GitHub-supported template format.
+
+| `config/build/*.json`
+| Machine-readable application configuration.
+
+| `config/release/*.json`
+| Machine-readable release configuration and operational data.
+
+| GitHub Actions workflow files
+| Workflow execution format.
+
+| Structured authorization records
+| Strict machine-readable authorization representation.
+|===
+
+Tool-required formats are not exceptions to the AsciiDoc documentation architecture.
+
+They serve a different purpose.
+
+Where a tool-required document references human-oriented policy, prefer referencing the authoritative AsciiDoc document rather than duplicating its normative content.
+
+== Implementation sequence
+
+The existing authorization records and version declarations remain operational until their replacement mechanisms are ready.
+
+The transition proceeds through the applicable work packages:
+
+[cols="1,4",options="header"]
+|===
+| Work package | Responsibility
+
+| WP-A2
+| Read-only verification of required infrastructure settings and operational prerequisites.
+
+| WP-A5
+| Decouple authorization data from narrative documentation while preserving existing gate behavior and security guarantees.
+
+| WP-B4
+| Establish practical generation or maintenance of durable delivery records and requirement mappings where justified.
+
+| WP-C1
+| Establish Magic, authoritative version allocation and safe historical initialization.
+
+| WP-C2
+| Establish staging version inheritance and adapt the corresponding authorization and verification mechanisms.
+
+| WP-C3
+| Establish persistent artifact storage, protected build records and subsequent version retrieval.
+|===
+
+The implementation sequence must avoid simultaneous competing authorities.
+
+Existing verified delivery behavior remains in force until the reviewed cutover.
+
+The detailed transition and bound-file change procedure are defined in xref:ch09-migration-sequence.adoc#ch09[Chapter 9].
+
+== Implementation acceptance
+
+The target data architecture is accepted when the applicable mechanisms demonstrate that:
+
+* Operational data is unambiguous and machine-readable.
+* Narrative documentation can be maintained independently of incidental operational data.
+* Every required declaration has one identifiable authority.
+* Version allocation is persistent and concurrency-safe.
+* Historical build-number consumption remains verifiable.
+* Subsequent deliveries retrieve the correct inherited version information.
+* Build and delivery records remain durable and protected.
+* Missing or inconsistent required information causes refusal.
+* Existing authorization and repository protection guarantees remain intact.
+* Unnecessary data files, duplicate counters and additional storage services have not been introduced.
+
+Acceptance is based on demonstrated behavior, not the existence of the proposed files.
+
+== References
+
+* xref:ch02-established-decisions.adoc#ch02[Chapter 2]: Established decisions.
+* xref:ch03-unresolved-decisions.adoc#ch03[Chapter 3]: Unresolved decisions.
+* xref:ch05-requirements-and-enforcement.adoc#ch05[Chapter 5]: Requirements and enforcement.
+* xref:ch06-document-hierarchy-and-mapping.adoc#ch06[Chapter 6]: Documentation hierarchy.
+* xref:ch08-operator-credential-tool.adoc#ch08[Chapter 8]: Credential management.
+* xref:ch09-migration-sequence.adoc#ch09[Chapter 9]: Migration and implementation sequence.
+* xref:ch11-build-and-release-architecture.adoc#ch11[Chapter 11]: Build and release architecture.

@@ -1,0 +1,1409 @@
+[[ch11]]
+= Build, version and release architecture
+:description: Application build procedures, version management, environment promotions, artifact distribution and release evidence.
+
+*Scope:* The build-trigger matrix, version management, Magic, version inheritance, persistent application distribution and the technical investigations required for implementation.
+
+*Status:* Approved architectural direction of 2026-11-27, revised following the Chapter 2 review. Implementation of the target architecture is pending.
+
+The existing release infrastructure remains operational until the reviewed implementation change establishes the target architecture.
+
+Existing mechanisms are reused wherever practicable.
+
+== Build-trigger matrix
+
+[cols="3,1,1,1,2",options="header"]
+|===
+| Trigger | APK | IPA | AAB | Build-number increment
+
+| Manual development build (*Magic*)
+| STG
+| No
+| No
+| Yes
+
+| Development-to-staging merge
+| No
+| STG
+| No
+| No
+
+| Staging-to-production merge
+| PRD
+| PRD
+| PRD
+| No
+|===
+
+STG denotes the staging application identity and configuration.
+
+PRD denotes the production application identity and configuration.
+
+This matrix is the authoritative definition of application delivery triggers (`DEL-01`, DEC-36).
+
+Credential-free compilation, static analysis, regression testing and other validation procedures are independent of application delivery.
+
+Validation procedures:
+
+* May run automatically or manually.
+* Do not allocate build numbers.
+* Do not require production or staging delivery credentials.
+* May generate temporary compilation outputs.
+* Do not publish or retain alternative installable staging deliverables.
+* Do not create or replace application releases.
+
+Magic is the sole routine staging APK delivery mechanism (DEC-39, `DEL-08`).
+
+== Operational interpretations
+
+The following interpretations establish how the architectural decisions are applied.
+
+[cols="1,4,3",options="header"]
+|===
+| ID | Interpretation | Rationale
+
+| I-01
+| The successful Magic build selected for staging delivery is explicitly identified by the release authorization.
+
+Normally, this is the latest successful Magic build available when the authorization is prepared.
+
+If a newer successful build becomes available afterwards, the delivery reports this fact without silently changing the selected build.
+| Version-bound authorization requires a stable and unambiguous build reference.
+
+| I-02
+| Automatic validation may continue on pushes to `staging`, but must not publish or retain an alternative staging APK deliverable.
+| Validation and application delivery are separate responsibilities.
+
+| I-03
+| A build number is consumed when allocated by Magic.
+
+The same allocation may subsequently be inherited by the corresponding staging and production deliveries.
+
+Each store application may receive that number through at most one authorized delivery attempt.
+| One allocation sequence, with controlled inheritance and no number reuse.
+
+| I-04
+| Staging authorization identifies the application version, numerical build number and corresponding successful Magic build.
+| Authorization must identify exactly what is intended for delivery.
+
+| I-05
+| A failed or interrupted staging delivery requires a new Magic allocation, new authorization and new promotion.
+
+The existing prohibition against re-running a consumed delivery remains in force.
+
+Recovery from partial production delivery is additionally subject to UNR-09.
+| Recovery must preserve number uniqueness and explicit release authorization.
+|===
+
+No application source modification is required merely to initiate another Magic build.
+
+A new build number identifies a new build attempt, even if the underlying application source has not changed.
+
+== Version information
+
+=== Components and encoding
+
+Each application build is identified by:
+
+* Application version: `X.Y.Z`.
+* Numerical build number.
+* Application environment.
+* Source identity.
+
+The numerical build number encodes the application version and development revision.
+
+Its conceptual structure is:
+
+[source,text]
+----
+XX.YY.ZZ.RRR
+----
+
+The actual build number is a positive integer without separators.
+
+[source,python]
+----
+build_number = (
+    major * 10_000_000
+    + minor * 100_000
+    + patch * 1_000
+    + revision
+)
+----
+
+Starting from the least significant decimal digit:
+
+* Three digits represent the development revision.
+* Two digits represent the patch version.
+* Two digits represent the minor version.
+* All remaining digits represent the major version.
+
+[cols="2,2,2,3",options="header"]
+|===
+| Application version | Revision | Build number | Description
+
+| `2.1.34`
+| 65
+| `20134065`
+| Encoding example.
+
+| `12.3.45`
+| 678
+| `120345678`
+| Encoding example.
+
+| `1.0.5`
+| 2
+| `10005002`
+| Previously delivered staging build.
+
+| `1.0.4`
+| Legacy
+| `1000035`
+| Previously published production build using the earlier encoding.
+|===
+
+=== Versioning rules
+
+The application version is changed through a reviewed source change.
+
+The current project uses `pubspec.yaml` for this purpose.
+
+Magic is the sole routine mechanism that allocates new build numbers.
+
+There are no independently maintained:
+
+* Platform-specific build-number counters.
+* Environment-specific build-number counters.
+* Release candidate counters.
+* Duplicate authoritative version counters.
+
+For the current encoding:
+
+* The major version is positive.
+* The minor version is between 0 and 99.
+* The patch version is between 0 and 99.
+* The development revision is between 1 and 999.
+* The resulting integer must satisfy the applicable platform limits.
+
+For a newly introduced, higher application version, the revision starts at 1 unless historical consumption or applicable platform constraints require a higher value.
+
+A revision never wraps around and never increments the patch automatically.
+
+If revision 999 has been consumed, Magic refuses further allocation for that application version.
+
+A reviewed application version change is then required.
+
+The allocator must also reject a new allocation that would violate the required numerical ordering of builds.
+
+Forward-only branch promotion alone does not guarantee increasing numerical build numbers.
+
+Maintenance releases based on an older application version are not supported by the currently established allocation policy where they would violate numerical ordering.
+
+Supporting such releases would require a separate architectural decision.
+
+=== Platform compatibility
+
+The agreed numerical encoding remains unchanged.
+
+The following findings originate from the existing release audit and technical investigation.
+
+[cols="2,4,3",options="header"]
+|===
+| Constraint | Finding | Required treatment
+
+| Android version code
+| Google Play permits a maximum version code of `2100000000`.
+
+The existing `tool/build_manifest.py` reportedly enforces this limit through `MAX_ANDROID_VERSION_CODE`.
+| Enforce the applicable Android limit.
+
+Under the current encoding, major versions 1 through 209 have usable revision ranges.
+
+| Apple build number
+| The numerical build number `10005002` was successfully delivered to Apple.
+
+Acceptance of longer numerical representations has not yet been demonstrated.
+| Verify compatibility before relying on longer build numbers.
+
+Do not infer unlimited numerical capacity from one successful delivery.
+
+| Store uniqueness
+| Staging and production use separate application identities.
+
+The same numerical build number is intentionally inherited across the corresponding applications.
+| Prevent repeated delivery attempts using a consumed number within the same store application.
+
+Verify the applicable store-specific uniqueness and ordering requirements.
+
+| Historical build numbers
+| Existing published and attempted builds include both legacy and newly encoded numbers.
+| Initialize Magic safely against historical consumption.
+
+See the history initialization section.
+
+| Revision capacity
+| A maximum of 999 revisions is available for each application version.
+| Refuse allocation on exhaustion.
+
+No automatic wrap or carry.
+
+| Existing verification tools
+| The existing version checker and authorization gate reportedly accept positive numerical build numbers without verifying the new encoding.
+| Introduce explicit encoding and bounds validation (`VER-08`).
+
+Preserve rejection of unauthorized version overrides.
+
+| Existing versioning documentation
+| The working copy of `docs/RELEASE_VERSIONING.md` contains the same fundamental encoding but differs in its treatment of major-version capacity and per-application allocation.
+| Reconcile the document with DEC-30 and DEC-31.
+
+Preserve the existing uncommitted working copy until its owner performs the reconciliation.
+|===
+
+Technical verification of the platform-specific limits remains part of `FQ-03`.
+
+The successful use of an eight-digit Apple build number is evidence for that particular build, not for every longer numerical representation.
+
+Compatibility questions should be resolved before the first operational need for the affected number range.
+
+== Single source of truth
+
+The application version and numerical build number must form an unambiguous authoritative version declaration for each build (DEC-38).
+
+Magic establishes and persistently records the newly allocated build number.
+
+The preferred implementation maintains authoritative version information within the repository infrastructure.
+
+The exact storage arrangement remains subject to technical investigation.
+
+A single file or coordinated storage structures are acceptable, provided that:
+
+* There is no independently maintained duplicate counter.
+* The application version and numerical build number cannot become ambiguously associated.
+* Allocation is persistent and atomic.
+* Historical version information remains retrievable.
+* Existing repository governance and branch protection are preserved.
+* Subsequent deliveries inherit the version of a specifically identified preceding build.
+
+The implementation must distinguish between a declaration of version information and a derived representation of that information.
+
+[cols="2,3,3",options="header"]
+|===
+| Information | Authoritative origin | Derived representations
+
+| Application version
+| Reviewed application version declaration.
+| Android `versionName`, iOS `CFBundleShortVersionString`, build records and application UI.
+
+| Numerical build number
+| Allocation performed by Magic.
+| Android `versionCode`, iOS `CFBundleVersion`, authorization records, release names and application UI.
+
+| Build source identity
+| The exact source commit and applicable build inputs.
+| Build manifests, content-tree identities and delivery records.
+
+| Release authorization
+| The CTO's written decision and the reviewed authorization record.
+| Runtime authorization checks and delivery evidence.
+|===
+
+Derived representations are legitimate copies of authoritative information.
+
+They must not independently redefine that information.
+
+Historical records must not change when development advances.
+
+A subsequent delivery may use version information retrieved from a preceding artifact and its verified build record.
+
+Such inheritance does not introduce another version authority.
+
+The future role of `pubspec.yaml`, including its numerical component after `+`, remains part of `FQ-02`.
+
+No specific separation between `pubspec.yaml` and an external allocation record is prescribed by this architecture.
+
+== Magic: the manual Android build
+
+=== Purpose
+
+Magic is the working name of the manually triggered Android build operation originating from `development`.
+
+It combines:
+
+. Persistent allocation of a new build number.
+. Generation of the staging APK.
+
+Magic replaces the need for separate routine DEV and STG APK build procedures.
+
+The resulting application always uses the staging identity and configuration.
+
+The developer may initiate Magic as frequently as required during development.
+
+No branch promotion or Apple delivery operation is required.
+
+=== Execution sequence
+
+. Identify and validate the development source to be built.
+. Determine the applicable reviewed application version.
+. Verify that safe historical initialization has been established.
+. Atomically allocate and persist the next valid numerical build number.
+. Build the staging APK using the allocated version information.
+. Inspect the finished APK and verify its application identity, version name, numerical build number, configuration and signing status.
+. Generate and preserve the corresponding build evidence.
+. Persistently store the verified APK.
+. Make the successful build available for subsequent testing and staging authorization.
+
+The workflow must operate on reviewed application source from `development`.
+
+The source revision is fixed for the duration of the build.
+
+A subsequent development commit must not silently change the source used by an already running build.
+
+=== Allocation requirements
+
+[cols="2,4",options="header"]
+|===
+| Property | Requirement
+
+| Manual trigger
+| Magic is deliberately initiated by the developer.
+
+| Persistent allocation
+| The new number is durably recorded before application compilation begins.
+
+| Number consumption
+| An allocated number remains consumed even if the build fails or is cancelled.
+
+| Concurrency
+| Concurrent Magic executions cannot allocate the same number.
+
+| Source identity
+| Each build records its exact application source.
+
+| Environment
+| Magic produces the staging application, not a separate DEV application.
+
+| Signing
+| Production signing credentials are never available to Magic.
+
+The staging signing identity is established separately under UNR-01.
+
+| Artifact verification
+| The version information is extracted from the finished APK and verified against the authoritative allocation.
+
+| Persistent availability
+| A successful APK remains retrievable independently of expiring workflow artifacts.
+
+| Failure behavior
+| A failed or cancelled build does not replace the preceding successfully published APK.
+|===
+
+A failed build consumes its allocated number but does not become a successful staging delivery candidate.
+
+=== Build-record lifecycle
+
+The proposed logical lifecycle is:
+
+[source,text]
+----
+allocated
+    |
+  built
+    |
+ verified
+    |
+ published
+----
+
+A build may also terminate as:
+
+* `failed`
+* `cancelled`
+* `indeterminate`
+
+The allocated number remains consumed in every case.
+
+Lifecycle information must be preserved as durable, traceable evidence.
+
+An earlier recorded fact must not be silently overwritten by a subsequent state transition.
+
+A failed or cancelled build must have retrievable allocation evidence even when no APK was produced.
+
+The precise storage format and event representation are implementation questions (`FQ-13`).
+
+A successfully published build remains identifiable by its immutable build identity.
+
+=== Allocation storage
+
+The allocation mechanism must satisfy `INV-01` through `INV-05`.
+
+The following approaches are candidates for investigation.
+
+None has been adopted.
+
+[cols="3,4,3",options="header"]
+|===
+| Candidate | Consideration | Status
+
+| Reviewed update to a repository version file
+| Preserves normal repository governance.
+
+A separate reviewed pull request for every Magic invocation would introduce significant operational overhead.
+| Investigate only if it can satisfy the intended simple manual workflow.
+
+| Direct workflow commit to `development`
+| Could persist the allocation in a familiar repository file.
+
+May conflict with existing branch protection and review requirements.
+| Not acceptable if it requires weakening existing protection or adding a branch-protection bypass.
+
+| Repository variable
+| Simple persistent storage.
+
+An ordinary read-increment-write sequence is not inherently atomic.
+| Requires demonstrated concurrency and failure safety.
+
+| Automatically created Git reference
+| A uniquely named reference may provide atomic allocation through creation of a previously nonexistent identifier.
+
+The allocation history may itself provide the information required to determine the next number.
+| Candidate requiring verification of API behavior, access controls and reference protection.
+
+| GitHub Release
+| Suitable for persistent distribution of successful build artifacts.
+
+A release name alone does not establish atomic number allocation.
+| Publication mechanism; not an established allocator.
+
+| Dedicated allocation storage within repository infrastructure
+| May separate frequently changing allocation data from reviewed application source.
+| Candidate requiring demonstration of governance, durability and concurrency safety.
+|===
+
+The investigation must prefer the simplest mechanism that satisfies the architectural requirements.
+
+An additional storage service, privileged identity or repository namespace must not be introduced without demonstrating its necessity.
+
+Automatically generated allocation references, if adopted, are technical storage identifiers.
+
+They are not independent release version identifiers and introduce no additional version counter.
+
+=== Workflow permissions
+
+Allocation, compilation, signing and publication responsibilities must be separated according to their required permissions.
+
+A job that executes third-party build code must not receive unnecessary repository write permissions or release credentials.
+
+The APK build job should use read-only repository access.
+
+Allocation and publication jobs receive only the permissions necessary for their specific operations.
+
+Any new repository write permission or privileged identity must be explicitly identified and reviewed before implementation.
+
+Staging signing, if it requires credentials, must preserve the separation of credential-bearing operations from third-party build execution.
+
+The existing branch protection and authorization guarantees must not be weakened for operational convenience.
+
+== Development-to-staging promotion
+
+=== Purpose
+
+A reviewed merge from `development` into `staging` automatically initiates iOS staging delivery.
+
+The Android staging APK already exists as the output of Magic.
+
+The promotion does not allocate a build number and does not publish another Android staging APK.
+
+=== Preparation
+
+The developer normally performs Magic immediately before preparing the development-to-staging promotion.
+
+The corresponding successful APK becomes the intended Android staging build.
+
+The release authorization identifies that build and its version information.
+
+Development may continue between Magic and the promotion.
+
+Responsibility for minimizing unnecessary source discrepancies remains with the developer.
+
+The infrastructure detects and reports discrepancies rather than requiring a redundant Android build.
+
+=== Execution sequence
+
+. Read and validate the applicable release authorization.
+. Identify the successful Magic build named by the authorization.
+. Retrieve the corresponding APK and durable build evidence.
+. Extract the application version and numerical build number from the APK.
+. Verify the extracted values against the authoritative build evidence and authorization.
+. Verify the application identity, artifact checksum and build outcome.
+. Compare the APK's application source with the application source being promoted.
+. Report any relevant source discrepancy and the existence of a newer successful Magic build.
+. Build the staging iOS application using the inherited version information.
+. Sign and verify the iOS application through the protected delivery procedure.
+. Upload the verified application to the designated staging TestFlight application.
+. Preserve the corresponding delivery evidence.
+
+The version information is inherited from the selected successful Magic build.
+
+The delivery must not silently substitute values from the latest development counter or another successful build.
+
+Where a newer product version declaration exists in the promoted source, the discrepancy must be explicitly reported.
+
+The selected artifact's authorized version information remains the delivery input.
+
+No version declaration may silently override the authorized inherited version.
+
+=== Staging source consistency
+
+The staging APK and IPA may share the same application version and numerical build number while originating from different application source revisions.
+
+This is an explicitly accepted architectural compromise.
+
+The source comparison must distinguish between:
+
+* `IDENTICAL`: equivalent application source and relevant build inputs.
+* `DIFFERENT`: detected differences in application source or relevant build inputs.
+
+Different Git commit hashes alone do not establish different application content.
+
+A promotion merge can have a different commit hash while containing equivalent application source.
+
+The comparison should use the relevant source contents and build inputs.
+
+The existing authorization gate compares paths including:
+
+* `lib`
+* `ios`
+* `android`
+* `flutter_plugin`
+* `pubspec.yaml`
+* `pubspec.lock`
+* `config/build`
+
+The adequacy of these paths for complete application source comparison must be verified under `FQ-07`.
+
+The comparison must account for native dependencies and other build-relevant inputs where applicable.
+
+The comparison result is included in:
+
+* The workflow summary.
+* The durable staging delivery record.
+* The release evidence used for subsequent production authorization.
+
+A source difference alone does not prohibit staging delivery.
+
+Failure to establish the identity or integrity of the selected APK is not an accepted source discrepancy and must prevent delivery.
+
+=== Version-bound authorization
+
+The existing authorization guarantees remain applicable.
+
+The target mechanism changes how the authorized version is retrieved and verified, not the requirement for explicit authorization.
+
+[cols="3,4",options="header"]
+|===
+| Authorization property | Target behavior
+
+| Authorization state
+| The authorization must be valid on the applicable promoted commit and current authorization source.
+
+The resting state remains `WITHDRAWN`.
+
+| Version binding
+| The version and build number must correspond to the specifically identified successful Magic build.
+
+| Artifact identity
+| The referenced APK and its durable evidence must be retrievable and verifiable.
+
+| Implementation binding
+| Existing workflow, gate and tool blob binding remains applicable.
+
+| Source identity
+| The delivered staging commit must satisfy the existing promotion and current-tip restrictions.
+
+The source comparison refers to the development revision actually promoted.
+
+| Number consumption
+| A number previously consumed by an earlier iOS staging delivery attempt cannot be delivered again to that application.
+
+| Source discrepancy
+| A difference between the selected staging APK source and the promoted iOS source is reported.
+
+The difference alone does not prevent staging delivery.
+
+| Newer Magic build
+| Report its existence without changing the authorized build selection.
+
+| Missing or unverifiable evidence
+| Refuse delivery.
+|===
+
+The existing gate is modified only through the reviewed implementation procedure described in xref:ch09-migration-sequence.adoc#ch09[Chapter 9].
+
+A withdrawal prevents subsequent authorization checks from succeeding.
+
+An already running signing or upload operation may require explicit cancellation.
+
+The credential-management procedure remains governed by DEC-28 and xref:ch08-operator-credential-tool.adoc#ch08[Chapter 8].
+
+=== Staging delivery evidence
+
+The durable staging delivery record identifies:
+
+* The selected Magic build.
+* The staging APK checksum.
+* The Android source commit.
+* The development revision promoted into staging.
+* The staging promotion commit.
+* The iOS delivery workflow execution.
+* The inherited application version and numerical build number.
+* The source comparison result.
+* The iOS artifact checksum.
+* The delivery outcome.
+
+The record must distinguish successful delivery from subsequent staging validation and acceptance.
+
+Successful TestFlight upload does not establish successful functional testing.
+
+== Staging-to-production promotion
+
+=== Purpose
+
+A reviewed and authorized merge from `staging` into `production` initiates production application delivery.
+
+The production delivery generates:
+
+* Production Android APK.
+* Production Android AAB.
+* Production iOS application.
+
+All three artifacts originate from the same approved application source.
+
+All three carry the same inherited application version and numerical build number.
+
+Environment-specific configuration, platform-specific implementation and signing differences remain expected.
+
+=== Version inheritance
+
+Production inherits version information from the specifically identified and accepted staging delivery.
+
+It does not consult the latest development counter as a version authority.
+
+Development may already have advanced beyond the staging candidate.
+
+The production workflow retrieves and verifies the version information associated with the accepted staging delivery.
+
+The staging IPA's verified artifact information and durable delivery evidence establish the iOS staging version.
+
+The corresponding Magic APK provides the associated Android staging build information.
+
+Persistent delivery evidence must permit production version retrieval even when the original workflow artifacts have expired.
+
+No build-number increment takes place during production promotion.
+
+=== Production source consistency
+
+The promoted production application source must correspond to the source used for the accepted staging iOS delivery, subject to explicitly permitted environment-specific differences.
+
+All production build jobs must use the same fixed, authorized production source revision.
+
+No production build job may independently select a newer branch tip.
+
+The production APK, AAB and IPA must therefore be internally consistent with respect to:
+
+* Application version.
+* Numerical build number.
+* Approved application source.
+* Authorized production configuration.
+
+The exact source used by the earlier staging APK may differ from this source.
+
+Such a discrepancy must remain visible in the production authorization evidence.
+
+Whether additional Android validation is required before production authorization remains subject to UNR-06.
+
+Production artifact consistency does not, by itself, prove that every production feature was previously tested on Android.
+
+=== Production authorization
+
+The production authorization identifies the specific accepted staging delivery.
+
+The production gate verifies:
+
+* The staging delivery identity and outcome.
+* The associated staging version information.
+* The required staging validation and acceptance evidence.
+* The correspondence between staging and promoted production source.
+* The validity of the inherited numerical build number.
+* Absence of a conflicting or previously consumed production delivery attempt.
+* The applicable production signing and distribution requirements.
+
+The production pipeline must not interpret successful compilation or signing as authorization to publish.
+
+Production pipeline readiness and authorization of an actual production release are separate objectives.
+
+=== Outstanding production decisions
+
+The following remain open:
+
+* Android production signing and distribution (`UNR-01`).
+* Apple credential custody and privileges (`UNR-02`).
+* Required staging acceptance evidence (`UNR-06`).
+* Native-library provenance (`UNR-07`).
+* Production release acceptance criteria (`UNR-08`).
+* Partial production delivery and its recovery (`UNR-09`).
+
+These questions do not change the approved build-trigger matrix.
+
+== Persistent releases and artifact availability
+
+=== Availability requirements
+
+Following its initial successful publication, a production APK must remain persistently and publicly downloadable.
+
+This requirement is consistent with the public, open-source nature of the Signer App.
+
+GitHub Releases is the preferred production APK distribution mechanism.
+
+Successful staging APKs must also have persistent storage.
+
+Their access policy remains subject to UNR-01.
+
+An existing published APK remains available until its replacement has been:
+
+. Successfully built.
+. Successfully verified.
+. Successfully published.
+
+A failed, cancelled or interrupted replacement must not remove the preceding successfully published APK.
+
+Previously published releases remain retrievable according to the established retention and security policy.
+
+Expiring GitHub Actions artifacts alone are insufficient.
+
+=== Public production download
+
+The production application should have a stable public download location through the GitHub repository.
+
+Users must not need to identify an individual workflow execution or understand the development infrastructure to obtain the latest production APK.
+
+The production download location must:
+
+* Identify the production application unambiguously.
+* Offer the latest successfully published production APK.
+* Remain independent of failed or unfinished replacement builds.
+* Not accidentally select a staging release.
+* Permit verification of the downloaded artifact.
+
+A stable production APK asset name and GitHub's latest-release mechanism should be investigated under `FQ-10`.
+
+This is a distribution convenience, not a version-selection mechanism for internal delivery workflows.
+
+=== Proposed GitHub Releases mechanism
+
+The following mechanism is a candidate for implementation.
+
+It remains subject to technical verification.
+
+[cols="2,4",options="header"]
+|===
+| Property | Proposed behavior
+
+| Production release
+| A published GitHub Release containing the verified production APK and corresponding release evidence.
+
+| Staging release
+| A GitHub pre-release containing the verified staging APK, if public staging distribution is approved.
+
+Otherwise, use persistent storage compatible with the approved staging access policy.
+
+| Release tag
+| Automatically generated from the existing version information and environment identity.
+
+| Release preparation
+| Create the release as a draft and attach the verified assets.
+
+| Publication
+| Verify the attached assets before making the release available.
+
+| Latest production release
+| Only successfully published production releases qualify for the stable production download location.
+
+| Previous releases
+| Retained independently of the current production download.
+
+| Immutability
+| Use the available release and reference protection mechanisms to prevent or detect unauthorized changes.
+|===
+
+Automatically generated tags introduce no independent numbering convention.
+
+Possible generated names include:
+
+[source,text]
+----
+stg-v2.1.34+20134065
+v2.1.34+20134065
+----
+
+These are examples, not a prescribed naming convention.
+
+A generated release tag must identify the actual source commit corresponding to the associated artifact.
+
+The environment distinction must prevent collisions between staging and production releases carrying identical version information.
+
+Tags are not release authorization mechanisms.
+
+Existing historical tags, where present, remain preserved.
+
+=== Release access policy
+
+GitHub Release assets in a public repository are publicly accessible once published.
+
+A GitHub pre-release is not a private distribution mechanism.
+
+Production APK distribution is intended to be public.
+
+Staging access remains a separate decision.
+
+If staging distribution is restricted, its APKs require a persistent storage mechanism that enforces the intended restriction.
+
+The internal version-retrieval mechanism must support the approved storage arrangement.
+
+=== Android signing compatibility
+
+A persistently downloadable APK does not automatically provide a continuous Android update path.
+
+Android application updates depend on application identity, version ordering and signing compatibility.
+
+If Google Play installations use a Google-managed application signing key, an APK signed only with a different upload key may not update those installations.
+
+The exact signing lineage of the GitHub-distributed production APK must therefore be established.
+
+Possible approaches include:
+
+* Distribution of an appropriately signed APK obtained through the Google Play application signing infrastructure.
+* Direct distribution using a compatible signing identity, where available.
+* An explicitly separate application or installation lineage.
+
+The appropriate mechanism remains part of UNR-01.
+
+Compatibility between GitHub and Google Play installations is desirable but must not be claimed before it has been demonstrated.
+
+== Durable build and delivery records
+
+=== Purpose
+
+Application artifacts and their associated evidence must remain identifiable and retrievable independently of temporary workflow storage.
+
+Build and delivery records preserve what was actually built, verified, delivered and published.
+
+They are not additional independently maintained version counters.
+
+=== Required build information
+
+The existing `cadena-build-manifest/1` and `tool/build_manifest.py` provide a starting point.
+
+Prefer extending and reusing existing mechanisms over introducing a parallel evidence system.
+
+[cols="2,3,3",options="header"]
+|===
+| Required information | Existing field or mechanism | Required extension
+
+| Application version
+| `version.platform_version_name`
+| Verify against the authoritative version information.
+
+| Numerical build number
+| `version.platform_build_number`
+| Verify against the corresponding Magic allocation.
+
+| Source identity
+| `source.commit`
+| Add or derive the content identity required for source comparison.
+
+| Environment
+| `environment`
+| Verify against the expected application identity and configuration.
+
+| Artifact checksum
+| `artifact.sha256`
+| Preserve with the corresponding persistent artifact.
+
+| Build outcome
+| Not fully represented.
+| Preserve allocation, build, verification and publication outcomes, including failures and cancellations.
+
+| Workflow execution
+| `ci.run_id`, `ci.run_attempt`, `ci.run_url`
+| Preserve durable references.
+
+| Version inheritance
+| Not fully represented.
+| Identify the preceding build or delivery from which the version was inherited.
+
+| Source comparison
+| Not fully represented.
+| Preserve the comparison result in the inheriting delivery record.
+|===
+
+=== Evidence protection
+
+Build and delivery evidence must be protected against unauthorized modification.
+
+A checksum alone does not establish authenticity if both the artifact and its corresponding checksum can be replaced by the same unauthorized actor.
+
+The implementation must establish a trustworthy association between:
+
+* The authorized source.
+* The workflow execution.
+* The application artifact.
+* Its version information.
+* Its durable build record.
+* The applicable release authorization.
+
+Records of historical allocations and delivery outcomes must not be silently overwritten.
+
+The storage mechanism must support durable evidence for builds that fail before publication.
+
+The exact protection and storage mechanisms remain subject to `FQ-05` and `FQ-13`.
+
+=== Version retrieval
+
+Subsequent delivery workflows identify the preceding build or delivery by its explicitly selected identity.
+
+They retrieve the corresponding persistent evidence and, where required, the application artifact.
+
+They verify the artifact's extracted version information and checksum against trustworthy build evidence.
+
+The latest available release is not automatically the authorized release.
+
+A stable public download location may point to the latest production APK.
+
+Internal promotion workflows instead use specifically identified and authorized builds.
+
+This distinction must be maintained.
+
+== Consolidation of existing Android build mechanisms
+
+The repository currently contains two relevant Android staging build mechanisms.
+
+The existing release audit reports the following characteristics.
+
+[cols="2,3,3",options="header"]
+|===
+| Aspect | `android-ci-validation.yml` | `build-variants.yml` (`android-staging-apk`)
+
+| Build command
+| `flutter build apk --debug --flavor staging`
+| `flutter build apk --release --flavor staging`
+
+| Signing
+| Ephemeral runner debug key.
+| Temporary debug signing.
+
+| Verification
+| `tool/verify_artifact.sh`
+| Artifact verification, manifest and cross-check.
+
+| Evidence
+| Text evidence.
+| Text evidence and `cadena-build-manifest/1`.
+
+| Retention
+| Temporary Actions artifact.
+| Temporary evidence and optional encrypted artifact retention.
+
+| Triggers
+| Manual and staging push.
+| Manual and staging push.
+
+| Manual source restriction
+| Development tip.
+| Development tip.
+
+| Current principal role
+| Installable staging APK.
+| Compilation and variant validation.
+|===
+
+=== Consolidation objective
+
+The target is one underlying Android APK delivery mechanism, invoked manually through Magic.
+
+The existing mechanisms must be investigated for reusable components, particularly:
+
+* Application compilation.
+* Environment configuration.
+* Artifact verification.
+* Build manifests.
+* Source restrictions.
+* Signing behavior.
+* Automated tests.
+* Artifact retention.
+
+The preferred implementation reuses the stronger existing verification and evidence mechanisms.
+
+It must not unnecessarily maintain two independent procedures for building and delivering the same staging application.
+
+The underlying build implementation may also be reused for production where appropriate.
+
+Environment-specific signing and configuration remain separate.
+
+=== Required changes
+
+WP-C1 establishes Magic by placing version allocation before the consolidated staging APK build mechanism.
+
+WP-C2 simplifies the development-to-staging delivery trigger.
+
+WP-C3 establishes persistent artifact storage and version retrieval.
+
+After the reviewed implementation change:
+
+* Magic is the sole routine producer of staging APK deliverables.
+* The development-to-staging promotion automatically delivers iOS only.
+* Automatic validation workflows may continue but do not retain or publish alternative staging APK deliverables.
+* Existing verification guarantees remain applicable.
+* The selected staging APK and its version information are inherited by the iOS delivery.
+
+The debug or release build type of the staging APK remains an implementation decision.
+
+The staging signing identity and its ability to support in-place application updates remain subject to UNR-01.
+
+== Historical build-number initialization
+
+=== Objective
+
+Magic must never allocate a previously consumed build number.
+
+This requirement includes relevant historical Android and iOS builds, successful deliveries, failed attempts and attempts with indeterminate outcomes.
+
+Safe initialization does not necessarily require reconstruction of every historical development build.
+
+A trustworthy historical upper boundary may satisfy the requirement (DEC-37).
+
+=== Known historical evidence
+
+[cols="3,4,2",options="header"]
+|===
+| Source | Reported information | Status
+
+| `config/release/published_versions.json`
+| Android published numbers `1000034` and `1000035`.
+| Existing recorded evidence.
+
+| Production iOS delivery record
+| Application version `1.0.4`, build `1000035`.
+| Existing recorded evidence.
+
+| Staging delivery history
+| Build `10005001`: failed delivery.
+
+Build `10005002`: successful delivery.
+| Existing recorded evidence.
+
+| Release branch history
+| Historical version declarations and promotion attempts.
+| Requires investigation.
+
+| Historical manual and automatic APK builds
+| Not comprehensively recorded.
+| Incomplete evidence.
+
+| Google Play Console and App Store Connect
+| Store-side upload and delivery history.
+| Requires maintainer verification.
+|===
+
+=== Acceptable initialization mechanisms
+
+Safe initialization may be established through:
+
+* A verified historical inventory of consumed numbers.
+* A trustworthy upper boundary covering relevant historical consumption.
+* A combination of historical records and verified numerical boundaries.
+
+The selected mechanism must account for:
+
+* Both platforms.
+* Relevant staging and production application identities.
+* Failed or indeterminate delivery attempts.
+* The single shared allocation sequence.
+* Numerical ordering requirements.
+* The approved numerical encoding.
+
+An upper boundary is not an independently maintained version counter.
+
+It represents historical initialization evidence.
+
+Subsequent allocations must be derived from the authoritative allocation mechanism.
+
+For example, if the highest relevant consumed build of version `1.0.5` is established as:
+
+[source,text]
+----
+10005002
+----
+
+The next permitted allocation for that version is at least:
+
+[source,text]
+----
+10005003
+----
+
+This example does not establish that the complete historical boundary is already verified.
+
+If a higher consumed number is identified, the actual allocation must account for it.
+
+If the encoding of the selected application version cannot accommodate a safe next number, Magic must refuse allocation until a suitable reviewed version change is made.
+
+=== Initialization verification
+
+Investigation `FQ-12` must establish and document a reliable initialization mechanism.
+
+The verification must demonstrate that:
+
+* Known consumed numbers cannot be allocated again.
+* The initialization evidence covers the relevant historical numerical range.
+* Invalid or insufficient initialization evidence prevents unsafe allocation.
+* The selected next number satisfies the encoding and ordering requirements.
+
+The exact format of the historical initialization evidence is not prescribed.
+
+A reviewed historical register is acceptable, but exhaustive historical reconstruction is not mandatory where a sufficient numerical boundary can be established.
+
+== Architectural invariants
+
+The following properties must be demonstrated before the corresponding mechanisms are relied upon operationally.
+
+`UNPROVEN` means that implementation and verification of the required property remain pending.
+
+[cols="1,4,3,1",options="header"]
+|===
+| ID | Invariant | Verification | Status
+
+| INV-01
+| Concurrent Magic executions cannot allocate the same build number.
+| `FQ-01`, `FQ-09`: concurrent allocation tests.
+| UNPROVEN
+
+| INV-02
+| Allocation is persistent before compilation begins. Failure or cancellation never releases an allocated number.
+| `FQ-01`, `FQ-09`: failure and cancellation tests.
+| UNPROVEN
+
+| INV-03
+| Allocation and record storage preserve existing branch protection and review guarantees.
+| `FQ-01`: review permissions, rulesets and storage operations.
+| UNPROVEN
+
+| INV-04
+| Allocation, build, signing and publication operations use appropriately separated permissions. Third-party build execution receives no unnecessary write privileges or release credentials.
+| `FQ-01`: static workflow tests and permission review.
+| UNPROVEN
+
+| INV-05
+| Every allocated number remains retrievable, including failed, cancelled and unpublished builds. Historical evidence cannot be silently overwritten.
+| `FQ-13`: storage, failure and modification tests.
+| UNPROVEN
+
+| INV-06
+| A delivery refuses missing, unverifiable or inconsistent build evidence. Artifact version information and checksum are verified against trustworthy evidence.
+| `FQ-05`: altered, missing and unreachable record tests.
+| UNPROVEN
+
+| INV-07
+| Every delivered artifact uses the specifically authorized version information. No independent version declaration or current development counter can override it.
+| `FQ-02`: inventory all version readers and test inheritance and override rejection.
+| UNPROVEN
+
+| INV-08
+| Failed replacement builds do not remove or replace the previously available APK. An older concurrent build cannot silently replace a newer successfully published build as the current APK.
+| `FQ-09`, `FQ-10`: failure and concurrent publication tests.
+| UNPROVEN
+
+| INV-09
+| Safe historical initialization prevents allocation of previously consumed numbers and invalid numerical ordering.
+| `FQ-12`: historical boundary and allocation tests.
+| UNPROVEN
+
+| INV-10
+| Automatic validation workflows do not publish or retain alternative staging APK deliverables.
+| Workflow inspection, static tests and artifact inspection after a staging push.
+| UNPROVEN
+
+| INV-11
+| Interrupted, cancelled and abandoned signing operations are brought to a safe conclusion with verified removal of temporary credentials.
+| `FQ-14`: interruption and cleanup tests.
+| UNPROVEN
+
+| INV-12
+| The numerical encoding is accepted by the applicable platforms throughout the numerical range required by the application.
+| `FQ-03`: platform compatibility verification, including longer Apple build numbers before they are required.
+| UNPROVEN
+|===
+
+The verification of a future numerical range that is not currently required need not prevent operation within an already verified range.
+
+Unsupported or unverified numerical ranges must not be used for delivery.
+
+The implementation sequence and applicable cutover conditions are described in xref:ch09-migration-sequence.adoc#ch09[Chapter 9].
+
+== Technical feasibility questions
+
+The following investigations establish implementation feasibility.
+
+They are not alternative architectural proposals.
+
+An architectural decision is reconsidered only where a concrete technical, operational or security incompatibility is established.
+
+[cols="1,3,4",options="header"]
+|===
+| ID | Question | Required investigation
+
+| FQ-01
+| How is version allocation persisted securely and atomically?
+| Evaluate the simplest repository-based mechanism that satisfies concurrency, persistence, governance and access-control requirements.
+
+Identify any necessary new permissions.
+
+Do not weaken existing branch protection.
+
+| FQ-02
+| How do existing application build tools consume authoritative and inherited version information?
+| Identify every relevant version reader.
+
+Determine the future role of `pubspec.yaml`.
+
+Reconcile `verify_version.sh`, artifact verification, IPA verification, build manifests and authorization checks.
+
+Demonstrate rejection of unauthorized overrides.
+
+| FQ-03
+| Is the agreed numerical encoding compatible with the applicable platforms?
+| Confirm the applicable numerical bounds and store requirements.
+
+Verify longer Apple build numbers before they are operationally required.
+
+Identify any concrete incompatibility with the agreed encoding.
+
+| FQ-04
+| Can successive staging APKs update existing installations?
+| Compare signing identities across independent build executions.
+
+Determine the appropriate persistent staging signing arrangement.
+
+Resolve under UNR-01.
+
+| FQ-05
+| How are durable build records authenticated and protected?
+| Evaluate repository permissions, release protection, reference protection and artifact verification.
+
+Demonstrate detection or prevention of unauthorized record and artifact replacement.
+
+| FQ-06
+| How is previous delivery consumption established?
+| Determine whether existing branch history and durable records provide sufficient evidence.
+
+Verify both staging and production delivery history.
+
+Introduce additional state only where necessary.
+
+| FQ-07
+| How is source consistency compared accurately?
+| Identify relevant application source and build inputs.
+
+Compare content rather than commit hashes alone.
+
+Test identical content, real differences and promotion merge commits.
+
+| FQ-08
+| Which existing Android build mechanism should become the common implementation?
+| Compare existing build commands, signing behavior, verification, manifests, tests and retention.
+
+Prefer consolidation and reuse.
+
+| FQ-09
+| What happens during concurrent, interrupted or cancelled Magic executions?
+| Test simultaneous allocations, cancellations, failed builds and out-of-order completion.
+
+Verify number consumption and correct publication ordering.
+
+| FQ-10
+| How are persistent GitHub releases and APK downloads established?
+| Verify release creation, automatic tags, asset verification, access policy, stable production download locations and available immutability mechanisms.
+
+Demonstrate that failed replacements preserve existing APK availability.
+
+| FQ-11
+| How is partial production delivery handled?
+| Define delivery outcomes for APK, AAB and IPA independently and collectively.
+
+Establish recovery behavior under UNR-09 without weakening version consumption or authorization requirements.
+
+| FQ-12
+| How is safe historical allocation initialization established?
+| Examine existing records, branch history, published floors and store-side history.
+
+Establish a trustworthy historical inventory or sufficient numerical upper boundary.
+
+Demonstrate safe allocation above previously consumed numbers.
+
+| FQ-13
+| Where are unsuccessful build records retained?
+| Establish durable storage for allocations and outcomes independently of successful artifact publication.
+
+Verify that historical evidence cannot be silently removed or modified.
+
+| FQ-14
+| What happens to temporary credentials during interrupted signing operations?
+| Investigate cancellation, abandoned approvals, workflow timeouts and cleanup behavior.
+
+Verify credential removal and absence following each relevant interruption scenario.
+|===
+
+The investigation results must distinguish between:
+
+* A demonstrated implementation mechanism.
+* An unverified implementation proposal.
+* An unresolved engineering problem.
+* A genuine decision requiring CTO authorization.
+
+Do not introduce additional architectural complexity merely to resolve a documentation gap.
+
+== Implementation work packages
+
+[cols="1,3,4",options="header"]
+|===
+| ID | Work package | Objective
+
+| WP-C1
+| Consolidate Android builds and implement Magic.
+| One manually triggered staging APK build mechanism, persistent version allocation, historical initialization and artifact verification.
+
+| WP-C2
+| Simplify staging delivery.
+| Automatic iOS-only staging delivery, inherited version information, source comparison and reconciled authorization.
+
+| WP-C3
+| Persistent releases and version retrieval.
+| Durable staging APK storage, public production APK distribution, protected build records and reliable artifact-derived version inheritance.
+|===
+
+The implementation of these work packages must preserve the existing verified staging infrastructure until the replacement mechanisms are ready.
+
+The revised staging architecture must be demonstrated end to end before the production pipeline relies upon it.
+
+Production pipeline implementation remains separate from authorization of an actual production release.
+
+== References
+
+* xref:ch02-established-decisions.adoc#ch02[Chapter 2]: Established decisions.
+* xref:ch03-unresolved-decisions.adoc#ch03[Chapter 3]: Unresolved decisions.
+* xref:ch05-requirements-and-enforcement.adoc#ch05[Chapter 5]: Requirements and enforcement.
+* xref:ch07-machine-readable-state.adoc#ch07[Chapter 7]: Machine-readable state.
+* xref:ch08-operator-credential-tool.adoc#ch08[Chapter 8]: Operator credential-management tool.
+* xref:ch09-migration-sequence.adoc#ch09[Chapter 9]: Migration and implementation sequence.
+* xref:ch10-production-extensions.adoc#ch10[Chapter 10]: Production extensions.

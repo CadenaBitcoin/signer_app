@@ -1,0 +1,650 @@
+[[ch03]]
+= Register of unresolved decisions
+:description: Outstanding architectural and operational decisions, their status and the implementation activities they affect.
+
+*Scope:* Decisions that remain open following the CTO reconciliation of 2026-11-27 and the subsequent documentation review.
+
+*Status:* Proposal for review.
+
+This register identifies outstanding decisions requiring CTO authorization.
+
+Technical implementation questions are not automatically CTO decisions. Where an architectural requirement is already established, the implementation must satisfy that requirement without reopening the decision.
+
+A technical question becomes a CTO decision only where:
+
+* A concrete incompatibility with an established requirement is identified.
+* A change to the security architecture is necessary.
+* A material operational or distribution policy must be established.
+* An existing architectural constraint requires modification.
+
+Deferred decisions are addressed when their corresponding implementation or authorization activities become relevant.
+
+== Decision status
+
+[cols="1,3,2,4",options="header"]
+|===
+| ID | Subject | Status | Disposition
+
+| UNR-01
+| Android signing and distribution model
+| Partially resolved
+| The Android build architecture is established.
+
+Magic produces the staging APK. Production generates APK and AAB artifacts from the same approved source.
+
+Persistent production APK availability is required.
+
+Signing identities, key custody, staging access and distribution details remain open.
+
+| UNR-02
+| Apple credential custody, continuity and revocation
+| Deferred
+| Temporary credential provisioning and removal are established.
+
+Long-term custody, privileges, backup, recovery, rotation and revocation remain open.
+
+| UNR-03
+| Credential provisioning sequence
+| Approved
+| DEC-28 establishes the sole supported sequence for staging and production.
+
+No alternative provisioning order is supported.
+
+| UNR-04
+| Release identifiers and Git tags
+| Resolved in principle
+| DEC-29 eliminates the independent release candidate counter.
+
+Automatically generated tags are permitted where required by the distribution or storage mechanism.
+
+No independently maintained tag-based versioning system is required.
+
+| UNR-05
+| Versioning and build-number management
+| Resolved in principle
+| DEC-30, DEC-31, DEC-32, DEC-37 and DEC-38 establish the encoding, allocation sequence, historical initialization and version inheritance.
+
+Platform compatibility and the persistent storage mechanism require technical verification.
+
+| UNR-06
+| Staging validation evidence required for production
+| Partially resolved
+| Possible application source discrepancies between the staging APK and IPA are explicitly accepted.
+
+The consequences of such discrepancies for production authorization remain open.
+
+| UNR-07
+| Native-library provenance
+| Deferred
+| Existing hash verification remains applicable.
+
+The required provenance and reproducibility guarantees remain open.
+
+| UNR-08
+| Production release acceptance criteria
+| Deferred
+| Production pipeline readiness and authorization of an actual production release are separate objectives.
+
+The substantive acceptance criteria remain to be established.
+
+| UNR-09
+| Partial production delivery and recovery
+| Open
+| Production generates three artifacts with identical inherited version information.
+
+Recovery from a partially successful production delivery requires a defined operational policy.
+|===
+
+== Decisions resolved by the architectural reconciliation
+
+=== UNR-03: Credential provisioning sequence
+
+Resolved by DEC-28.
+
+Both staging and production iOS deliveries follow the same credential-management sequence.
+
+The temporary credentials are uploaded before the authorized promotion merge and removed after the delivery operation concludes.
+
+Implementation of the operator tool and verification of interruption handling remain engineering tasks.
+
+=== UNR-04: Release identifiers and tags
+
+Resolved by DEC-29.
+
+The application version and numerical build number establish the version identity.
+
+The exact application source is identified through its Git commit and corresponding build evidence.
+
+The separate `rc.N` counter is eliminated.
+
+Automatically generated Git tags or other technical references may support artifact publication or persistent allocation storage.
+
+They must not introduce an independent versioning system, an additional authorization mechanism or routine manual administration.
+
+=== UNR-05: Versioning and build-number management
+
+Resolved in principle by DEC-30, DEC-31, DEC-32, DEC-37 and DEC-38.
+
+The approved architecture establishes:
+
+* Numerical build-number encoding as `XX.YY.ZZ.RRR`.
+* One shared allocation sequence.
+* Magic as the sole routine build-number allocation mechanism.
+* Version inheritance through both branch promotions.
+* Persistent and unambiguous authoritative version information.
+* Safe initialization against previously consumed build numbers.
+
+The exact persistent storage mechanism has not been prescribed.
+
+A trustworthy historical upper boundary may satisfy initialization requirements without exhaustive reconstruction of historical builds.
+
+The remaining investigations are defined in xref:ch11-build-and-release-architecture.adoc#ch11[Chapter 11].
+
+The decision is reopened only if a concrete technical or security incompatibility is identified.
+
+== Remaining CTO decisions
+
+=== UNR-01: Android signing and distribution
+
+The build architecture is established.
+
+The remaining decisions concern application signing, distribution access and installation continuity.
+
+==== UNR-01 (a): Staging signing identity
+
+Magic produces an installable Android APK using the staging application identity and configuration.
+
+The existing staging APK mechanisms reportedly use temporary or ephemeral debug signing identities.
+
+If the signing identity changes between builds, an installed application may not accept the next APK as an update.
+
+This behavior must be verified under `FQ-04`.
+
+The outstanding decision concerns whether successive staging APKs must support in-place application updates and, if so, how a persistent staging signing identity is managed.
+
+The decision must address:
+
+* Required installation and update behavior.
+* Ownership of the staging signing identity.
+* Key custody and recovery.
+* Permitted credential exposure during builds.
+* Separation from production signing credentials.
+
+The selection of a debug or release build configuration is an implementation matter unless it changes an established security or operational requirement.
+
+*Decision required before:* Operational adoption of Magic as the persistent staging APK delivery mechanism.
+
+==== UNR-01 (b): Staging APK access policy
+
+Persistent storage of successful staging APKs is established by DEC-35.
+
+The access policy remains open.
+
+The repository is public. Consequently, a published GitHub Release asset is publicly accessible, including assets attached to pre-releases.
+
+An existing policy restricts public distribution of signed staging APKs. That restriction remains applicable until explicitly reconciled.
+
+Possible distribution arrangements include:
+
+* Public GitHub pre-releases.
+* Restricted persistent artifact storage.
+* Encrypted artifact distribution to designated recipients.
+
+The selected mechanism must support:
+
+* Persistent availability.
+* Retrieval by subsequent authorized delivery workflows.
+* Verification of artifact identity and integrity.
+* The approved access restrictions.
+
+Expiring workflow artifacts alone are insufficient.
+
+*Decision required before:* Operational publication of persistent staging APKs.
+
+==== UNR-01 (c): Production Android signing and distribution
+
+Production generates an APK and an AAB from the same approved application source.
+
+A production APK must remain publicly downloadable, preferably through GitHub Releases.
+
+The Android App Bundle is intended for Google Play distribution.
+
+The outstanding decisions concern:
+
+* Production signing-key custody.
+* Whether production signing occurs in CI or through another controlled procedure.
+* Upload-key provisioning and removal.
+* The signing identity of the publicly distributed APK.
+* Automated delivery to Google Play.
+* Authorization of publication.
+* Installation and update compatibility between GitHub-distributed and Google Play-distributed applications.
+
+Google Play application signing and direct APK distribution may use different signing identities.
+
+An APK signed with an upload key that differs from the Google Play application signing key may not update an existing Play-installed application.
+
+Cross-channel update compatibility is desirable but has not been established as a mandatory product requirement.
+
+The actual signing arrangement must be investigated before choosing the distribution mechanism.
+
+Production signing must preserve the separation of credential-bearing operations from third-party build execution.
+
+*Decision required before:* Implementation of the corresponding production Android signing and distribution mechanisms.
+
+==== Why the staging reference is insufficient
+
+The demonstrated staging delivery does not establish a persistent Android signing identity, a permanent staging access policy or an automated production Android signing procedure.
+
+The existing production Android signing procedure is reportedly local and uses `tool/release_android.sh`.
+
+These findings must be verified during implementation investigation.
+
+==== Affected implementation activities
+
+* WP-C1: Magic.
+* WP-C3: Persistent APK storage and publication.
+* `PRD-08`: Production Android signing and delivery.
+* `PRD-19`: Persistent production APK availability.
+
+UNR-01 does not prevent independent implementation of the iOS delivery infrastructure.
+
+=== UNR-02: Apple credential custody, continuity and revocation
+
+The temporary operational use of the Apple credential is established by DEC-09 and DEC-28.
+
+The existing delivery procedure uses an Admin-role App Store Connect team API key.
+
+Permanent storage of the temporary delivery credentials in GitHub is prohibited.
+
+The outstanding decisions concern:
+
+* Ownership and long-term custody of the original credential.
+* Authorized access to the credential.
+* Backup and recovery arrangements.
+* Continuity if the current credential holder becomes unavailable.
+* Credential rotation.
+* Emergency revocation.
+* Required App Store Connect privileges.
+* Whether separate credentials are appropriate for different delivery environments.
+
+The use of the existing Admin-role key does not establish that this privilege level is permanently necessary or appropriate.
+
+The required privileges should be investigated against the actual Apple signing and delivery operations.
+
+Verified removal of temporary GitHub secrets does not establish that external credential custody arrangements are secure or complete.
+
+*Decision required before:* Operational adoption of any new production credential arrangement and the first production release authorization.
+
+Credential-free production pipeline development and verification may proceed independently.
+
+=== UNR-06: Staging validation evidence required for production authorization
+
+Validation using the staging applications and Bitcoin Signet must precede production release authorization (DEC-26).
+
+The CTO has explicitly accepted that the staging APK and IPA may originate from different application source revisions.
+
+Both may nevertheless carry the same application version and numerical build number.
+
+The discrepancy must be detected, reported and preserved.
+
+Production generates all artifacts from the same approved application source.
+
+The unresolved question is what Android validation evidence is required where the previously tested staging APK does not correspond exactly to the source being promoted into production.
+
+==== Possible acceptance policies
+
+The following policies remain available for consideration:
+
+* Accept the documented source discrepancy following review of the affected changes.
+* Require additional Android validation against equivalent application source before production authorization.
+* Require an explicit CTO acceptance identifying the tested Android build, the promoted source and any accepted discrepancy.
+* Establish mandatory validation criteria based on the nature and significance of the source differences.
+
+These are possible acceptance policies, not established requirements.
+
+Any requirement for exact Android source validation must be implemented consistently with the approved build architecture.
+
+Magic operates on reviewed development source.
+
+A requirement to validate an arbitrary staging commit through Magic would therefore require additional investigation or an explicitly approved extension.
+
+==== Required distinction
+
+Production artifact consistency establishes that the production APK, AAB and IPA originate from the same approved application source.
+
+It does not establish that this exact source has previously been functionally tested on both platforms.
+
+Successful staging delivery is likewise not equivalent to successful staging validation.
+
+The acceptance policy must define the evidence necessary to bridge this distinction.
+
+==== Why the staging reference is insufficient
+
+The demonstrated staging delivery included basic installation, application launch and login testing.
+
+That evidence does not establish comprehensive application functionality, wallet security or release readiness.
+
+*Decision required before:* Establishing the final production authorization gate and authorizing the first production release.
+
+*Affected requirement:* `PRD-02`.
+
+UNR-06 does not prevent implementation or operation of the staging delivery infrastructure.
+
+=== UNR-07: Native-library provenance
+
+The application incorporates native cryptographic components, including `dlcplazacryptlib` through the `dlc_wallet` Flutter plugin.
+
+The existing release infrastructure verifies pinned hashes of the applicable native-library artifacts.
+
+Hash verification establishes that a particular artifact corresponds to its expected identity.
+
+It does not independently establish:
+
+* The origin of the native artifact.
+* The source revision from which it was built.
+* The integrity of the native build environment.
+* Reproducibility of the artifact.
+* Whether the binary corresponds to the reviewed source code.
+
+The outstanding decision concerns the provenance and reproducibility guarantees required for production release authorization.
+
+The existing native-library verification requirements remain in force.
+
+No existing hash verification or artifact integrity check may be removed merely because a stronger provenance mechanism has not yet been implemented.
+
+The corresponding technical investigation must identify available source, build and verification mechanisms before presenting an implementation proposal.
+
+*Related issue:* #89.
+
+*Decision required before:* Final production security acceptance and release authorization.
+
+This does not prevent independent development of the production delivery infrastructure.
+
+=== UNR-08: Production release acceptance criteria
+
+A technically operational production pipeline does not establish that the application is ready for public release.
+
+Production release authorization requires separate consideration of application security, functional correctness, operational readiness and distribution requirements.
+
+The acceptance criteria must address, where applicable:
+
+* Wallet and cryptographic security.
+* Entropy generation and deterministic nonce handling.
+* Known application defects.
+* Signer App pairing and connection behavior.
+* Native-library provenance.
+* Supported platform versions.
+* Privacy manifest requirements.
+* Export compliance.
+* Application permissions.
+* Functional regression testing.
+* Relevant backend compatibility.
+* Known security exceptions and their dispositions.
+
+Existing issues relevant to this decision include:
+
+* #22: Entropy and deterministic nonce concerns.
+* #89: Native-library provenance.
+* #136: Pairing-related defect.
+* #110: Push notification functionality.
+
+Listing an issue here does not automatically classify it as a production release blocker.
+
+Each relevant issue must be evaluated and explicitly classified.
+
+The final acceptance criteria must distinguish between:
+
+* Mandatory release-blocking requirements.
+* Accepted limitations.
+* Deferred functionality.
+* Operational warnings.
+* Previously resolved issues.
+
+*Decision required before:* Authorization of an actual production release.
+
+This decision does not prevent implementation and credential-free verification of the production pipeline.
+
+=== UNR-09: Partial production delivery and recovery
+
+Production delivery generates three artifacts carrying identical inherited version information:
+
+* Android APK.
+* Android AAB.
+* iOS application.
+
+These artifacts may be delivered through independent distribution mechanisms.
+
+Consequently, production delivery cannot be assumed to be an indivisible publication operation.
+
+One distribution channel may accept its artifact while another fails.
+
+==== Established constraints
+
+The following decisions remain applicable:
+
+* Production inherits its version information from the accepted staging delivery.
+* Production promotion does not allocate a new build number.
+* All production artifacts originate from the same approved application source.
+* Existing build-number consumption guarantees remain applicable.
+* Previously published successful releases must not be silently replaced or removed.
+* Recovery must not bypass explicit release authorization.
+* A successfully published artifact must not be misrepresented as withdrawn merely because another delivery failed.
+
+==== Outstanding recovery policy
+
+The production recovery policy must establish:
+
+* The meaning of successful production delivery.
+* The meaning of partial production delivery.
+* Which delivery and publication outcomes are independently recorded.
+* When a build number becomes consumed for each distribution channel.
+* Whether an incomplete delivery can be completed without rebuilding or re-uploading an already accepted artifact.
+* Whether any controlled retry of an unpublished artifact is permissible.
+* How indeterminate upload outcomes are resolved.
+* Whether recovery requires a new Magic build, staging validation and production promotion.
+* How the stable public production APK download is managed during partial delivery.
+
+The distinction between building, signing, uploading, store acceptance and public publication must remain explicit.
+
+==== Current recovery default
+
+The established recovery procedure prohibits re-running a failed authorized delivery using its consumed number.
+
+The conservative production recovery default therefore remains:
+
+. Allocate a new build number through Magic.
+. Establish a new staging delivery.
+. Perform the required validation.
+. Obtain new production authorization.
+. Perform a new production promotion.
+
+This default may impose substantial operational overhead when only one distribution channel fails.
+
+Any less restrictive production recovery procedure requires an explicit CTO decision supported by the applicable store behavior and security requirements.
+
+No exception is established by this chapter.
+
+==== Why the staging reference is insufficient
+
+The demonstrated automatic staging delivery targets one iOS application through one store.
+
+It does not demonstrate coordinated delivery to multiple independent production distribution channels.
+
+*Decision required before:* Operational adoption of production delivery and its recovery procedure.
+
+*Related investigation:* `FQ-11`.
+
+== Decision dependencies
+
+Outstanding decisions are addressed when their corresponding implementation or authorization activity requires them.
+
+[cols="1,3,4",options="header"]
+|===
+| ID | Decision timing | Affected activity
+
+| UNR-01 (a)
+| Before operational adoption of Magic.
+| Staging signing identity and installation continuity.
+
+| UNR-01 (b)
+| Before persistent staging APK publication.
+| Staging artifact access and distribution.
+
+| UNR-01 (c)
+| Before implementing the relevant production signing and distribution mechanisms.
+| Production Android delivery.
+
+| UNR-02
+| Before operational adoption of the production credential arrangement.
+| Apple credential custody, continuity, privilege and revocation.
+
+| UNR-03
+| Resolved.
+| Operator credential-management tool.
+
+| UNR-04
+| Resolved in principle.
+| Release identifiers, generated references and publication.
+
+| UNR-05
+| Technical verification before Magic becomes operational.
+| Version encoding, allocation, initialization and inheritance.
+
+| UNR-06
+| Before final production authorization enforcement.
+| Staging validation and acceptance evidence.
+
+| UNR-07
+| Before final production security acceptance.
+| Native-library provenance and reproducibility.
+
+| UNR-08
+| Before authorization of an actual production release.
+| Application security and functional acceptance.
+
+| UNR-09
+| Before operational production delivery.
+| Partial delivery, consumption and recovery.
+|===
+
+An unresolved decision does not prevent unrelated implementation work.
+
+The migration sequence must reflect actual dependencies rather than require premature resolution of every outstanding decision.
+
+== Disposition of Phase 1 decisions
+
+The original Phase 1 decision identifiers are retained for historical traceability.
+
+They do not constitute an additional normative decision register.
+
+[cols="2,3,4",options="header"]
+|===
+| Phase 1 decision | Current disposition | Rationale
+
+| D-01: Production authorization model
+| Established in principle.
+| Explicit version-bound authorization, protected signing environments, human approval and temporary credentials remain applicable.
+
+DEC-05, DEC-08, DEC-09, DEC-20, DEC-28.
+
+| D-02: Build-number encoding
+| UNR-05.
+| Encoding and allocation architecture established.
+
+Technical compatibility verification remains pending.
+
+| D-03: Release identifiers and tags
+| UNR-04.
+| Independent release candidate numbering is eliminated.
+
+Technical references may be generated automatically.
+
+| D-04: Android delivery model
+| UNR-01.
+| Build architecture established.
+
+Signing and distribution policy remain open.
+
+| D-05: Apple Admin key
+| UNR-02.
+| Temporary operational use established.
+
+Long-term credential arrangements remain open.
+
+| D-06: Re-authorization granularity
+| Established in principle.
+| Explicit authorization and consumed-number recovery remain applicable.
+
+Partial production delivery requires UNR-09.
+
+| D-07: Required checks, signed commits and CODEOWNERS
+| Implementation and repository governance.
+| Existing requirements `BRN-03` and `GOV-04` remain applicable.
+
+Any change requiring a new security authority or reduced protection requires separate authorization.
+
+| D-08: Documentation migration and decoupling
+| Established.
+| DEC-25.
+
+Implementation and documentation organization remain to be completed.
+
+| D-09: Production acceptance
+| UNR-06 and UNR-08.
+| Staging validation requirements and substantive production acceptance remain open.
+
+| D-10: Distribution destinations
+| Partially established.
+| iOS staging uses TestFlight internal testing.
+
+Production APK availability through GitHub Releases is preferred.
+
+Google Play and Apple production publication details remain subject to the applicable delivery policies.
+
+| D-11: Native-library provenance
+| UNR-07.
+| Artifact hash verification does not establish source provenance.
+
+| D-12: Secret scanning and dependency management
+| Implementation and repository maintenance.
+| Existing security requirements remain applicable.
+
+| D-13: Authoritative current-state documentation
+| Documentation organization.
+| `STA-01`.
+
+| D-14: Evidence retention
+| Established in principle.
+| DEC-23 and DEC-35.
+
+Storage and protection mechanisms remain engineering questions.
+
+| D-15: Temporary exceptions
+| Separate reconciliation.
+| xref:ch04-exceptions-and-reconciliation.adoc#ch04[Chapter 4].
+
+Exceptions require explicit disposition and do not automatically become permanent policy.
+|===
+
+== Carried-forward items
+
+The following earlier policy questions are retained but are not presently classified as release-framework blockers:
+
+* Production application display name.
+* Fork-related policy.
+* Security support policy in `SECURITY.md`.
+* Outstanding Apple account information.
+
+These items remain in the applicable current-state documentation or issue register.
+
+Their classification may change if a concrete implementation or distribution dependency is identified.
+
+== References
+
+* xref:ch02-established-decisions.adoc#ch02[Chapter 2]: Established decisions.
+* xref:ch04-exceptions-and-reconciliation.adoc#ch04[Chapter 4]: Exceptions, reconciliation and historical record.
+* xref:ch05-requirements-and-enforcement.adoc#ch05[Chapter 5]: Requirements and enforcement.
+* xref:ch08-operator-credential-tool.adoc#ch08[Chapter 8]: Operator credential-management tool.
+* xref:ch09-migration-sequence.adoc#ch09[Chapter 9]: Migration and implementation sequence.
+* xref:ch10-production-extensions.adoc#ch10[Chapter 10]: Production extensions.
+* xref:ch11-build-and-release-architecture.adoc#ch11[Chapter 11]: Build and release architecture.

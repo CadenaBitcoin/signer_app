@@ -1,0 +1,83 @@
+[[ch12]]
+= Revision history
+:description: A non-normative record of how this specification was formed: the staging reference, the CTO decisions of 2026-11-27, the acceptance audits and the CTO's chapter-by-chapter review.
+
+*Scope:* The origin and development of this specification and the disposition of the findings that shaped it.
+
+*Status:* Non-normative. Where this chapter and a normative chapter differ, the normative chapter governs.
+
+== Origin
+
+The first merge-triggered staging delivery (run 46005605593, `staging` `f31e598`) and its approved decisions are the reference implementation. This book extracts, formalizes and consolidates what is already established. It does not redesign it.
+
+== Revisions
+
+[cols="1,2,5",options="header"]
+|===
+| Revision | Date | Content
+
+| 1
+| 2026-11-27
+| First consolidation: established decisions, unresolved decisions, exceptions, requirement matrix, documentation hierarchy, machine-readable state, credential tool, migration, production extensions.
+
+| 2
+| 2026-11-27
+| Incorporates the CTO decision reconciliation: the sole credential sequence (DEC-28), the end of `rc.N` (DEC-29), the build-number encoding (DEC-30, DEC-31), Magic (DEC-32), the iOS-only staging promotion (DEC-33), the three-artifact production promotion (DEC-34), persistent artifacts and records (DEC-35) and the build-trigger matrix (DEC-36). Adds the build and release architecture chapter.
+
+| 3
+| 2026-11-27
+| Corrects the first acceptance audit (findings F-01 to F-09): safe historical initialization, controlled change windows for authorization-bound files, record durability, one authoritative version declaration with derived copies, the restriction of automatic validation builds, credential interruption procedures, separation of historical and normative text, structural conventions.
+
+| 4
+| 2026-11-28
+| Incorporates the CTO's chapter-by-chapter review of Chapters 2 to 11 as the authoritative architectural content. Those reviews reduced mandated mechanisms to invariants with investigations, made historical initialization acceptable through trustworthy numerical upper bounds, added the production-activation window W4 and branch-specific activation, and kept the eight-step credential sequence unchanged. Revision 4 reconciles Chapters 1 and 12 and the master index with them, applies native AsciiDoc cell styles in Chapter 2, unifies status terminology (resolved in principle) and renames this chapter to match its content.
+|===
+
+== Disposition of the audit findings of revision 3
+
+[cols="1,4,3",options="header"]
+|===
+| Finding | Subject | Where it is now handled
+
+| F-01
+| Historical consumption of build numbers must be accounted for before Magic allocates.
+| `VER-13`, `VER-14`, DEC-37, `INV-09`, `FQ-12` (xref:ch11-build-and-release-architecture.adoc#ch11[Chapter 11]). Trustworthy upper bounds are acceptable.
+
+| F-02
+| The migration sequence and the rules for authorization-bound files must agree.
+| Windows W1 to W4 and the change conditions in xref:ch09-migration-sequence.adoc#ch09[Chapter 9].
+
+| F-03
+| Durable records for builds that never publish.
+| `EVD-05`, `EVD-07`, `INV-05`, `FQ-13`. The storage format remains an implementation question.
+
+| F-04
+| One authoritative version declaration, with derived copies.
+| DEC-38, `VER-15`, the single-source section of xref:ch11-build-and-release-architecture.adoc#ch11[Chapter 11].
+
+| F-05
+| Magic as the only routine staging APK delivery mechanism.
+| DEC-39, `DEL-08`, `INV-10`.
+
+| F-06
+| Production prerequisites for the Android signing and distribution decision.
+| UNR-01 (c) in xref:ch03-unresolved-decisions.adoc#ch03[Chapter 3] and step P10 in Chapter 9.
+
+| F-07
+| Recovery text consistent with the revised architecture.
+| DEC-24, DEC-28, `RCV-01`.
+
+| F-08
+| Interrupted, abandoned and cancelled signing operations.
+| xref:ch08-operator-credential-tool.adoc#ch08[Chapter 8], `CRD-09`, `FQ-14`, `INV-11`.
+
+| F-09
+| Structural documentation conventions.
+| Documentation conventions in xref:ch01-scope-and-method.adoc#ch01[Chapter 1].
+|===
+
+== References
+
+* xref:ch01-scope-and-method.adoc#ch01[Chapter 1]: conventions and the normative boundary.
+* xref:ch04-exceptions-and-reconciliation.adoc#ch04[Chapter 4]: the historical record of superseded requirements.
+* xref:ch09-migration-sequence.adoc#ch09[Chapter 9]: the implementation sequence.

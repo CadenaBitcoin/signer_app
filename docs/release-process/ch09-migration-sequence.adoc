@@ -1,0 +1,985 @@
+[[ch09]]
+= Migration and implementation sequence
+:description: The ordered adoption of the release framework, the revised staging build architecture and the production delivery infrastructure.
+
+*Scope:* Documentation adoption, technical investigations, implementation work packages, controlled changes to existing security mechanisms, staging cutover and production implementation.
+
+*Status:* Proposal for review. No implementation step is authorized merely through inclusion in this document.
+
+== Objectives
+
+The migration establishes the approved release architecture while preserving the existing verified security and delivery mechanisms.
+
+The principal implementation objectives are:
+
+. Establish authoritative and maintainable release documentation.
+. Improve the existing operational and credential-management mechanisms.
+. Consolidate Android build procedures and establish Magic.
+. Establish persistent artifact availability and reliable version inheritance.
+. Simplify automatic staging delivery.
+. Demonstrate the revised staging architecture end to end.
+. Implement the production delivery infrastructure using the established framework.
+. Authorize an actual production release separately.
+
+The implementation must prefer consolidation and reuse over replacement.
+
+Unrelated repository restructuring, application modernization and additional infrastructure are outside the scope unless justified by an established requirement.
+
+== Rules for every implementation step
+
+=== Reviewed changes
+
+All repository changes follow the established contribution and review procedure.
+
+Documentation and implementation changes may be combined where they concern the same requirement and must remain consistent.
+
+Unrelated changes should remain separate.
+
+The number of pull requests is determined by the scope, dependencies and reviewability of the implementation.
+
+An implementation work package does not automatically correspond to exactly one pull request.
+
+=== CTO involvement
+
+CTO decisions are requested only when:
+
+* An established architectural requirement cannot be satisfied.
+* A material security or authorization change is necessary.
+* An unresolved distribution or operational policy affects the implementation.
+* An explicitly deferred decision becomes necessary.
+* An actual release requires authorization.
+
+Technical implementation choices that satisfy the established requirements do not require separate CTO authorization.
+
+=== Existing security guarantees
+
+Existing authorization, signing isolation, artifact verification, repository protection and credential-management guarantees remain applicable throughout the migration.
+
+Tests may be adapted to the approved architecture.
+
+Security assertions must not be removed or weakened merely because their original implementation changes.
+
+Where a mechanism is replaced, its relevant security properties must remain demonstrably enforced.
+
+=== Release authority
+
+Implementation work does not authorize an application release.
+
+Production credentials must not be provisioned during ordinary development or credential-free verification.
+
+Scratch-repository rehearsals use synthetic credentials, test data and non-production infrastructure.
+
+Actual Apple credential provisioning follows DEC-28 and requires a specifically authorized delivery.
+
+The first authorized staging delivery under the revised architecture occurs at P7.
+
+Authorization of an actual production release occurs separately at P10.
+
+=== Current and target behavior
+
+Documentation must distinguish:
+
+* Existing implementation.
+* Approved target architecture.
+* Implementation mechanisms under investigation.
+* Mechanisms implemented but not yet verified.
+* Mechanisms accepted for operational use.
+
+The current-state documentation (`STA-01`) describes actual repository behavior.
+
+Approved target requirements do not become implemented merely because the corresponding documentation has been adopted.
+
+=== No competing authorities
+
+At any time, an operational mechanism must have one authoritative source for each required declaration.
+
+Before cutover, the existing version declaration and delivery mechanisms remain authoritative.
+
+After cutover, Magic establishes new allocations, and subsequent deliveries inherit the specifically authorized version information.
+
+The exact version storage mechanism remains subject to DEC-38, `FQ-01` and `FQ-02`.
+
+No transitional fallback may permit a delivery gate to accept either of two competing authorization records or version authorities.
+
+== Controlled changes to authorization-bound files
+
+=== Definition
+
+An authorization-bound file is a file whose identity is explicitly bound by the applicable release authorization mechanism.
+
+The current gate and its expected-identity inspection mechanism determine the applicable set of bound files.
+
+The existing implementation reportedly provides this information through `--print-expected`.
+
+The actual binding scope must be verified before modifying the corresponding files.
+
+This chapter does not maintain an independent duplicate list of bound files.
+
+=== Change conditions
+
+A change affecting authorization-bound files requires:
+
+. Withdrawal of the affected release authorization.
+. Confirmation that no affected delivery is waiting or executing.
+. Identification of the affected files and authorization bindings.
+. A reviewed implementation change.
+. Preservation or appropriate adaptation of the applicable security tests.
+. Refreshing of the required implementation bindings.
+. Verification of the resulting closed authorization state.
+
+Where several reviewed changes are necessary, authorization remains withdrawn throughout the corresponding implementation interval.
+
+The affected delivery mechanism must not become operational in an inconsistent intermediate state.
+
+Changes to authorization-bound files must not be introduced incidentally through unrelated documentation cleanup.
+
+=== Change windows
+
+The following windows identify the principal stages at which authorization-bound implementation changes are expected.
+
+[cols="1,1,4,4",options="header"]
+|===
+| Window | Step | Purpose | Required guarantees
+
+| W1
+| P2
+| Separate machine-readable authorization state from narrative documentation. Remove unnecessary documentation dependencies and obsolete implementation examples where applicable.
+| Existing authorization and delivery behavior remains unchanged. Existing gate scenarios are preserved or equivalently adapted. Implementation bindings are refreshed.
+
+| W2
+| P5
+| Introduce the reusable tool capabilities required by Magic, version allocation, artifact records and future version inheritance.
+| Additive changes must not alter the existing operational delivery path. New capabilities remain inactive for authorized delivery until cutover. Existing security behavior remains verified.
+
+| W3
+| P6
+| Establish the revised staging architecture. Activate Magic, inherited version information and iOS-only automatic staging delivery.
+| The coordinated cutover establishes one authoritative allocation and inheritance mechanism. Applicable authorization refusals remain enforced. New artifact and build-record verification requirements are implemented.
+
+| W4
+| P9
+| Implement and reconcile the production authorization gate, production workflows and applicable shared security-critical mechanisms.
+| Production authorization remains withdrawn. Existing production restrictions remain effective until the replacement delivery path is ready. Any affected shared staging mechanisms remain consistent and verified.
+|===
+
+W1 precedes W2.
+
+W2 precedes W3.
+
+W4 concerns the subsequent production implementation.
+
+The existing staging authorization remains withdrawn during the W1 to W3 migration interval.
+
+The production authorization remains withdrawn during production implementation and credential-free verification.
+
+If a shared implementation change also affects staging authorization bindings, the corresponding staging authorization must be withdrawn and its bindings reconciled.
+
+Additional controlled changes may be required if implementation reveals an unforeseen dependency.
+
+Such changes follow the same security procedure and must not introduce an unauthorized delivery path.
+
+The change-window identifiers are planning references, not additional release authorization mechanisms.
+
+== Work packages
+
+=== Group A: Operational and infrastructure mechanisms
+
+[cols="1,4,3",options="header"]
+|===
+| ID | Content | Principal requirements
+
+| WP-A1
+| Implement the local operator-controlled Apple credential-management tool. Support `status`, `check-promotion`, `provision`, `verify` and `cleanup`, together with interruption handling and credential-free tests.
+| `CRD-04`, `CRD-05`, `CRD-07`, `CRD-08`, `CRD-09`. Chapter 8.
+
+| WP-A2
+| Establish read-only verification of required repository settings, environment protections and applicable promotion prerequisites. Introduce a machine-readable infrastructure declaration only where useful.
+| `INF-01`, `AUT-08`, REP-04.
+
+| WP-A3
+| Reconcile repository protection and security configuration with established requirements. Address required status checks, commit signatures, merge restrictions, action pinning, secret scanning, push protection and relevant security alerts.
+| `BRN-03`, `GOV-02`, `GOV-04`, `INF-02`, `INF-03`, `INF-04`.
+
+| WP-A5
+| Separate machine-readable authorization state from narrative documentation. Reconcile dependent gates, tools and tests without weakening authorization behavior.
+| `DOC-03`, `DOC-04`, W1. Chapter 7.
+|===
+
+The original WP-A4 identifier is retired.
+
+Its earlier versioning responsibilities are superseded by WP-C1 and the corresponding technical investigations.
+
+==== WP-A3 implementation considerations
+
+The repository hardening work package must investigate and address the existing audit findings, including:
+
+* Required status checks on protected branches.
+* Enforcement of the established commit-signing policy.
+* Equivalent merge restrictions on the relevant protected branches.
+* Required commit-SHA pinning of third-party GitHub Actions.
+* Secret scanning and push protection.
+* CODEOWNERS coverage where it improves enforcement of established review authority.
+* The CodeQL cache-poisoning exception (EXC-05).
+* Outstanding Dependabot alerts under the established dependency-management policy.
+
+The proposed `cache: false` remediation must be verified before EXC-05 is closed.
+
+Repository housekeeping, including automatic branch deletion and appropriate `.gitignore` rules, may be addressed separately where useful.
+
+Such housekeeping is not a prerequisite for Magic or staging delivery unless a concrete dependency is established.
+
+Repository hardening must not introduce new authority, bypass actors or operational restrictions that contradict the approved architecture.
+
+=== Group B: Documentation and evidence
+
+[cols="1,4,3",options="header"]
+|===
+| ID | Content | Principal requirements
+
+| WP-B1
+| Establish native AsciiDoc conventions, the master documentation entry point, terminology and applicable document templates.
+| DEC-25, `DOC-01`, `DOC-02`.
+
+| WP-B2
+| Establish the maintained current-state documentation (`STA-01`) and reconcile outdated or contradictory statements in existing documents.
+| REC-01 to REC-14, Chapter 4.
+
+| WP-B3
+| Migrate human-oriented documentation into the approved documentation hierarchy. Preserve necessary entry points, historical records and unresolved machine dependencies.
+| DEC-25, `DOC-01`, `DOC-02`, Chapter 6.
+
+| WP-B4
+| Improve maintenance of durable delivery records and requirement-to-enforcement traceability. Introduce generators only where they demonstrably reduce duplication or operational overhead.
+| `EVD-02`, `EVD-03`, `EVD-05`, `DOC-02`.
+|===
+
+Documentation migration must not unnecessarily block independent implementation work.
+
+However, essential normative requirements and operational instructions must be available before the corresponding mechanism becomes operational.
+
+The existing staged and unstaged changes to `docs/RELEASE_VERSIONING.md` must be preserved until their owner explicitly reconciles them.
+
+=== Group C: Build and release architecture
+
+[cols="1,4,3",options="header"]
+|===
+| ID | Content | Principal requirements
+
+| WP-C1
+| Consolidate the existing Android APK build mechanisms and implement Magic. Establish authoritative version allocation, numerical encoding, safe historical initialization, concurrency protection, artifact verification and durable allocation evidence.
+| `VER-08` to `VER-15`, `BLD-05`, `DEL-02`, `DEL-08`, `INF-05`.
+
+| WP-C2
+| Simplify automatic staging delivery. Remove automatic Android APK delivery at cutover. Reuse the existing iOS delivery infrastructure and establish version inheritance from the selected Magic APK, source comparison and reconciled authorization.
+| `DEL-01`, `DEL-05`, `AUT-10`, `VER-04`, `VER-12`, `VER-15`.
+
+| WP-C3
+| Establish persistent APK distribution, durable build records and trustworthy subsequent version retrieval. Preserve previous successful APK availability during failed replacements.
+| `VER-07`, `DEL-07`, `EVD-05`, `EVD-07`, `INF-05`.
+|===
+
+These three work packages establish the approved target build architecture.
+
+WP-C1 and WP-C3 have interdependent allocation, artifact and evidence requirements.
+
+Their implementation may proceed incrementally.
+
+WP-C2 must not become operational before its required version inheritance and artifact retrieval mechanisms are available.
+
+== Consolidation of the Android build mechanisms
+
+WP-C1 begins with an investigation of the existing Android build mechanisms:
+
+* `android-ci-validation.yml`
+* `build-variants.yml`, particularly `android-staging-apk`
+* Associated build, signing, configuration and verification tools.
+
+The investigation compares:
+
+* Application build commands.
+* Debug and release build characteristics.
+* Application flavor and configuration.
+* Signing identity and update compatibility.
+* Artifact verification.
+* Build manifests.
+* Source restrictions.
+* Existing tests.
+* Artifact retention and distribution behavior.
+
+The preferred direction is to reuse the stronger existing verification, manifest and evidence mechanisms while preserving the ability to generate an installable staging APK.
+
+The selection of the common build type is an implementation decision unless it affects an unresolved security or distribution policy.
+
+Magic places authoritative version allocation before the consolidated APK build mechanism.
+
+The existing automatic staging APK delivery must not be disabled prematurely.
+
+Its removal becomes effective only through the coordinated cutover at P6.
+
+Credential-free compilation and regression testing may remain after cutover, but must not retain or publish alternative staging APK deliverables.
+
+== Technical investigations
+
+The feasibility questions defined in xref:ch11-build-and-release-architecture.adoc#ch11[Chapter 11] are addressed according to their actual implementation dependencies.
+
+It is not necessary to resolve all fourteen investigations before starting Magic.
+
+[cols="1,4,3",options="header"]
+|===
+| Investigation | Principal subject | Required by
+
+| FQ-01
+| Secure and atomic version allocation.
+| WP-C1, before operational allocation.
+
+| FQ-02
+| Authoritative version information and existing build-tool integration.
+| WP-C1, WP-C2.
+
+| FQ-03
+| Numerical encoding and applicable platform compatibility.
+| Before use of the affected numerical range.
+
+| FQ-04
+| Android staging signing and update compatibility.
+| UNR-01 (a), WP-C1.
+
+| FQ-05
+| Trustworthy and protected durable build records.
+| WP-C3, WP-C2.
+
+| FQ-06
+| Previous delivery-consumption verification.
+| WP-C2 and subsequent production implementation.
+
+| FQ-07
+| Accurate application source comparison.
+| WP-C2.
+
+| FQ-08
+| Consolidation of the existing Android builds.
+| WP-C1.
+
+| FQ-09
+| Allocation concurrency, interruption and publication ordering.
+| WP-C1, WP-C3.
+
+| FQ-10
+| Persistent releases, access controls and stable APK availability.
+| WP-C3; production-specific aspects at P9.
+
+| FQ-11
+| Partial production delivery and recovery.
+| P9, UNR-09.
+
+| FQ-12
+| Safe historical build-number initialization.
+| WP-C1, before operational allocation.
+
+| FQ-13
+| Durable evidence for unsuccessful and unpublished builds.
+| WP-C1, WP-C3.
+
+| FQ-14
+| Credential cleanup and interrupted signing operations.
+| WP-A1, before the first revised staging delivery.
+|===
+
+Each investigation must establish:
+
+* The actual implementation obstacle.
+* Existing mechanisms that may satisfy the requirement.
+* The preferred implementation.
+* Required verification.
+* Any necessary permissions or security changes.
+* Whether a genuine CTO decision is required.
+
+Investigations should begin with read-only inspection.
+
+Controlled experiments may use a scratch repository or equivalent isolated test environment.
+
+No experiment may provision actual production credentials, modify store publication state or bypass existing repository protection.
+
+Findings should be consolidated into a practical implementation proposal rather than a succession of isolated administrative decisions.
+
+== Implementation sequence
+
+The following steps establish the principal implementation order.
+
+The step identifiers remain stable.
+
+Independent work may proceed in parallel where the applicable dependencies permit it.
+
+=== P0: Specification review and adoption
+
+Review and adopt the corrected release-framework specification.
+
+Confirm the established architectural decisions and distinguish them from:
+
+* Proposed implementation mechanisms.
+* Outstanding technical investigations.
+* Unresolved CTO decisions.
+* Proposed temporary exception dispositions.
+
+Verify the documentation's AsciiDoc rendering, includes and cross-references.
+
+The review does not require premature resolution of every deferred CTO decision.
+
+Existing approved decisions remain applicable without being reopened merely because the implementation mechanism has not yet been selected.
+
+*Completion condition:* The specification provides a consistent implementation basis and clearly identifies remaining decisions and investigations.
+
+=== P1: Documentation foundations and current-state reconciliation
+
+Implement WP-B1 and the applicable initial parts of WP-B2.
+
+Establish:
+
+* Native AsciiDoc documentation conventions.
+* The master documentation entry point.
+* Relevant terminology.
+* The maintained as-built overview (`STA-01`).
+* Applicable release authorization and delivery-record templates.
+
+Correct misleading statements concerning:
+
+* Existing staging delivery infrastructure.
+* Protected environment approval.
+* Temporary Apple credentials.
+* Release authorization authority.
+* Current and proposed versioning behavior.
+
+Retain existing operational document paths until their dependencies have been resolved.
+
+Do not modify authorization-bound implementation files incidentally.
+
+Preserve the user's existing uncommitted versioning documentation.
+
+Its owner reconciles it with DEC-30, DEC-31, DEC-37 and DEC-38.
+
+*Completion condition:* Essential documentation distinguishes actual implemented behavior from the approved target architecture.
+
+=== P2: Authorization data and documentation decoupling
+
+Implement WP-A5 through W1.
+
+Separate machine-consumed authorization information from narrative documentation using an appropriate structured representation.
+
+Adapt the existing gates, workflows and tests to the new representation.
+
+Preserve:
+
+* Version-bound authorization.
+* Default withdrawn state.
+* Live authorization withdrawal.
+* Existing source and promotion restrictions.
+* Application identity checks.
+* Implementation bindings.
+* Fail-closed behavior.
+
+State-dependent tests are reconciled with controlled fixtures and the underlying security properties.
+
+Existing operational behavior remains unchanged.
+
+Production-specific workflow replacement is deferred to P9 unless a shared dependency requires an earlier reviewed change.
+
+*Completion condition:* Authorization data can be maintained without unnecessary dependence on narrative documentation, and existing security behavior remains verified.
+
+=== P3: Operational tooling and repository protection
+
+Implement WP-A1, WP-A2 and the applicable security-critical parts of WP-A3.
+
+Establish:
+
+* The local operator credential-management tool.
+* Read-only promotion readiness verification.
+* Reliable presence and absence checks for the designated Apple credentials.
+* Interruption and partial provisioning procedures.
+* Required repository protection and security configuration.
+
+The sole Apple credential-management sequence remains unchanged.
+
+Testing uses synthetic credential values and controlled environments.
+
+Ordinary implementation and dry-run verification do not require actual Apple credentials.
+
+Where security configuration changes affect repository authority or established contribution procedures, obtain the applicable approval before activation.
+
+*Completion condition:* The applicable operational tooling and security guarantees are demonstrated before they are required by the revised staging delivery.
+
+=== P4: Technical investigation of Magic and persistent records
+
+Investigate the mechanisms necessary for WP-C1 and WP-C3, together with their dependencies on WP-C2.
+
+The principal objectives are:
+
+. Select the common Android APK build mechanism.
+. Establish how authoritative version information is persisted.
+. Demonstrate a concurrency-safe allocation mechanism.
+. Establish safe historical initialization.
+. Determine how successful and unsuccessful build records are preserved.
+. Determine how persistent APK distribution and subsequent version retrieval work.
+. Identify required workflow permissions and security implications.
+
+Historical initialization may use a verified inventory, trustworthy numerical upper boundaries or a combination of both.
+
+Do not require exhaustive reconstruction where a sufficient upper boundary can be established.
+
+Do not assume that version information must be stored in separate files or that a particular reference namespace is mandatory.
+
+The investigation identifies the necessary CTO decisions, particularly:
+
+* UNR-01 (a): Staging signing identity.
+* UNR-01 (b): Staging artifact access policy.
+* Any new privileged workflow identity or material security-architecture change.
+
+The required decisions are made when the investigation supplies sufficient technical information and before the corresponding mechanism becomes operational.
+
+Production-only investigations do not block completion of this step.
+
+*Completion condition:* A practical implementation proposal exists for Magic, persistent storage and version inheritance, with demonstrated feasibility or explicitly identified remaining blockers.
+
+=== P5: Implement and rehearse Magic and persistent storage
+
+Implement the applicable parts of WP-C1 and WP-C3.
+
+Use W2 for necessary additive changes to authorization-bound tools.
+
+The new mechanisms must support:
+
+* Authoritative numerical build-number allocation.
+* Persistent allocation before compilation.
+* Shared allocation across the intended application environments.
+* Safe handling of concurrent runs.
+* Durable evidence for unsuccessful allocations and builds.
+* Generation and verification of the staging APK.
+* Persistent storage of successful APKs.
+* Retrieval and verification of build evidence.
+* Preservation of previously published successful APKs.
+* Safe publication ordering when concurrent builds finish out of order.
+
+The operational signing identity and access policy for Magic must be resolved before actual persistent staging distribution begins.
+
+Rehearse the mechanisms using isolated or non-operational test configurations.
+
+Scratch-repository allocations must not affect the authoritative allocation sequence of the actual application.
+
+Any allocation deliberately performed within the actual application sequence is consumed, regardless of whether it is part of a rehearsal.
+
+The existing staging delivery remains operationally unchanged.
+
+The new Magic allocator does not yet become a competing operational version authority.
+
+The existing automatic Android staging delivery trigger and its applicable retention mechanism are not removed at this step.
+
+*Completion condition:* The required Magic, allocation, persistence and retrieval mechanisms have been implemented and sufficiently rehearsed to support the coordinated staging cutover.
+
+=== P6: Coordinated staging cutover
+
+Implement WP-C2 through W3.
+
+This step establishes the revised staging architecture.
+
+The cutover must activate the new operational mechanisms without introducing competing version authorities or alternative staging APK delivery paths.
+
+==== Preconditions
+
+Before cutover:
+
+* Safe historical initialization satisfies `VER-13` and `VER-14`.
+* The applicable allocation and persistence mechanisms have been demonstrated.
+* The staging signing identity and access policy are established.
+* The necessary build-record retrieval mechanisms are available.
+* Applicable source-comparison mechanisms have been verified.
+* Existing and new authorization checks have passed their applicable tests.
+* No conflicting delivery or version allocation is in progress.
+* Required authorization-bound implementation changes are reviewed.
+* The corresponding release authorization is `WITHDRAWN`.
+
+The applicable architectural invariants defined in Chapter 11 must be demonstrated.
+
+An invariant necessary for safe current operation must not remain unverified merely because the overall direction has been approved.
+
+Future numerical ranges and production-specific requirements that are not needed for the current staging operation may remain pending.
+
+For example, an unverified nine-digit Apple build-number range does not prevent operation within the already demonstrated numerical range.
+
+==== Cutover changes
+
+The coordinated cutover establishes:
+
+* Magic as the sole routine build-number allocator.
+* Magic as the sole routine staging APK delivery mechanism.
+* Artifact-derived version inheritance by the staging iOS delivery.
+* Explicit selection of the successful Magic build.
+* Verification of the selected build evidence.
+* Source comparison between the staging APK and promoted iOS source.
+* Reporting of source differences and newer successful Magic builds.
+* Removal of automatic Android staging APK delivery from the promotion-triggered workflow.
+* Continued credential-free validation without alternative APK delivery.
+* Reconciled staging authorization and verification mechanisms.
+
+Existing manual version advancement and competing APK delivery mechanisms must not remain operational alternatives after cutover.
+
+==== Branch-specific activation
+
+The implementation must account for the fact that `development`, `staging` and `production` contain different source revisions until reviewed promotion occurs.
+
+Merging implementation changes into `development` does not, by itself, update workflows stored on `staging` or `production`.
+
+The activation procedure must therefore establish:
+
+* Which Magic workflow becomes operational on `development`.
+* Which staging workflow becomes effective at the first subsequent authorized promotion.
+* Which older delivery mechanisms remain present but must not be invoked.
+* Which authorization records and implementation bindings govern each operation.
+
+No intervening staging delivery may use an inconsistent combination of the old and new mechanisms.
+
+The first authorized staging promotion at P7 must carry and execute the intended revised delivery implementation.
+
+==== Documentation reconciliation
+
+Update `STA-01` to distinguish:
+
+* Mechanisms activated on `development`.
+* Mechanisms awaiting their first staging promotion.
+* Mechanisms already verified operationally.
+* Production mechanisms that remain unchanged.
+
+Documentation must not describe all branches as having completed cutover merely because the implementation has reached `development`.
+
+*Completion condition:* The revised staging architecture is ready for its first authorized operational delivery, with the correct branch-specific activation procedure established.
+
+=== P7: First staging delivery under the revised architecture
+
+This step is an explicitly authorized operational validation.
+
+It demonstrates the revised staging architecture end to end.
+
+The sequence is:
+
+. Execute Magic on reviewed development source.
+. Allocate and persist the new build number.
+. Build and verify the staging APK.
+. Store the APK and its durable build evidence.
+. Identify the successful Magic build intended for staging delivery.
+. Establish written CTO authorization naming the selected build and version.
+. Prepare and review the development-to-staging promotion pull request.
+. Complete the readiness checks.
+. Execute the sole Apple credential-management sequence established by DEC-28.
+. Deliver the staging iOS application with the inherited version information.
+. Record the Android and iOS source comparison.
+. Verify the delivery outcome.
+. Remove the temporary credentials and verify their absence.
+. Withdraw the delivery authorization.
+. Perform and record the applicable staging validation.
+
+The Apple credential-management sequence must be followed without introducing an alternative provisioning order.
+
+If the authorized delivery fails, apply the established recovery procedure.
+
+A successful TestFlight upload alone does not establish comprehensive functional or security acceptance.
+
+==== Required evidence
+
+The validation must demonstrate:
+
+* Persistent and unique build-number allocation.
+* Successful staging APK generation.
+* Persistent APK availability under the approved access policy.
+* Explicit selection of the inherited version information.
+* Correct application of the revised promotion trigger.
+* Automatic iOS-only staging delivery.
+* Detection and reporting of any source discrepancy.
+* Correct staging application identity.
+* Preservation of the existing signing and verification guarantees.
+* Durable delivery evidence.
+* Verified credential removal.
+* Authorization withdrawal.
+
+The actual production delivery mechanisms remain outside the scope of this validation.
+
+*Completion condition:* The revised staging architecture has been demonstrated end to end and accepted as the implementation reference for production.
+
+=== P8: Documentation migration and consolidation
+
+Complete WP-B3 and the applicable parts of WP-B4.
+
+Migrate existing documentation according to xref:ch06-document-hierarchy-and-mapping.adoc#ch06[Chapter 6].
+
+The work includes:
+
+* Consolidation of normative requirements.
+* Preservation of architectural reasoning.
+* Migration of operational runbooks.
+* Reconciliation of historical records.
+* Preservation of necessary compatibility entry points.
+* Retirement of redundant documents.
+* Verification of document references and rendering.
+
+Documentation generators are introduced only where they provide practical maintenance benefits.
+
+Independent parts of documentation migration may proceed before P7 where their implementation dependencies have been resolved.
+
+Documentation describing the revised staging operation is finalized against its demonstrated behavior.
+
+The entire documentation migration need not block unrelated production development.
+
+However, essential production requirements and operational procedures must be available before their corresponding mechanisms are implemented or used.
+
+*Completion condition:* The authoritative documentation is consistent, independently maintainable and suitable for standalone and book rendering, with no unresolved machine dependencies caused by the migration.
+
+=== P9: Production pipeline implementation and verification
+
+Implement the production-specific requirements defined in xref:ch10-production-extensions.adoc#ch10[Chapter 10].
+
+Use the demonstrated revised staging architecture as the implementation reference.
+
+Apply W4 to the production authorization gate, workflows and applicable authorization-bound files.
+
+The production implementation must establish:
+
+* Controlled staging-to-production promotion.
+* Explicit selection of the accepted staging delivery.
+* Verified version inheritance.
+* Common production source for the APK, AAB and IPA.
+* Production application identity and configuration verification.
+* Production-specific authorization.
+* Production native-framework preflight.
+* Protected production signing environment.
+* Applicable Android and iOS signing mechanisms.
+* Controlled artifact distribution.
+* Persistent public production APK availability.
+* Durable production delivery evidence.
+* Applicable failure, interruption and partial-delivery procedures.
+
+Resolve outstanding decisions when their corresponding mechanisms require them.
+
+In particular:
+
+* UNR-01 (c) affects production Android signing and distribution.
+* UNR-02 affects the production credential arrangement.
+* UNR-06 affects final production authorization enforcement.
+* UNR-09 affects operational production delivery and recovery.
+
+UNR-07 and UNR-08 remain necessary for final production release acceptance but do not prevent independent infrastructure implementation.
+
+The production implementation serves as a practical validation of the documentation framework.
+
+Framework defects are recorded and corrected according to Chapter 10.
+
+Documentation and implementation corrections may be included in the same reviewed change.
+
+No actual production release is authorized by this step.
+
+==== Verification outcome
+
+Produce a readiness report under `PRD-00`.
+
+The report distinguishes:
+
+* Implemented and verified mechanisms.
+* Implemented mechanisms awaiting operational verification.
+* Outstanding implementation work.
+* Unresolved CTO decisions.
+* Applicable exceptions and limitations.
+* Credential-free verification evidence.
+* Prerequisites for actual production release authorization.
+
+The production authorization remains `WITHDRAWN`.
+
+The designated temporary Apple credentials remain absent.
+
+*Completion condition:* The CTO has accepted an accurate production pipeline readiness assessment. Any remaining operational or release-specific blockers are explicitly identified.
+
+=== P10: Production release authorization and delivery
+
+Authorization of an actual production release is a separate CTO decision.
+
+Before authorization:
+
+* The required staging validation evidence has been accepted.
+* Applicable production mechanisms are operationally ready.
+* The production source and inherited version information are identified.
+* Applicable production signing and distribution requirements are satisfied.
+* Outstanding production acceptance and security decisions are resolved.
+* Applicable temporary exceptions have been evaluated.
+* The production recovery procedure is established.
+
+The applicable outstanding decisions include:
+
+* UNR-01 (c).
+* UNR-02.
+* UNR-06.
+* UNR-07.
+* UNR-08.
+* UNR-09.
+
+The CTO issues explicit written authorization for the specifically identified production release.
+
+Only then may the corresponding authorized production operation proceed.
+
+The production delivery follows the applicable authorization, signing, credential-management, verification and distribution procedures.
+
+Successful production delivery must be recorded separately from the preceding readiness assessment.
+
+*Completion condition:* The authorized production delivery has concluded, its actual distribution outcomes are recorded, temporary credentials have been removed and their absence verified, and the applicable authorization closeout is complete.
+
+== Implementation dependencies
+
+The following dependencies define the critical implementation sequence.
+
+[source,text]
+----
+P0  Specification adoption
+ |
+P1  Essential documentation
+ |
+P2  Authorization-data decoupling (W1)
+ |
+ +------------------------------+
+ |                              |
+P3  Operational tooling        P4  Technical investigations
+ |                              |
+ |                             P5  Magic and persistent storage (W2)
+ |                              |
+ +------------------------------+
+ |
+P6  Staging cutover (W3)
+ |
+P7  Authorized staging validation
+ |
+P9  Production implementation (W4)
+ |
+P10 Separate production release authorization
+----
+
+P8, documentation migration and consolidation, may proceed incrementally alongside the implementation sequence once its individual dependencies have been resolved.
+
+The diagram establishes the principal dependencies, not a mandatory prohibition against preparatory work.
+
+Independent investigations and implementation activities may start earlier where they do not modify an active delivery mechanism or depend on unresolved decisions.
+
+== Transitional state
+
+=== Before P6
+
+The existing staging delivery architecture remains authoritative.
+
+Its current version information originates from `pubspec.yaml`.
+
+The current staging promotion triggers Android and iOS build operations according to the existing implementation.
+
+The target Magic mechanisms may be prepared and rehearsed but must not become competing operational authorities.
+
+The approved Apple credential-management sequence already applies to any separately authorized delivery conducted before the controlled migration interval.
+
+During the W1 to W3 migration interval, the staging authorization remains withdrawn and no authorized staging delivery takes place.
+
+=== Between P6 and P7
+
+Magic may operate under its approved staging signing and distribution arrangements.
+
+The revised iOS staging delivery is prepared for activation through the first authorized promotion carrying the new implementation.
+
+The old staging delivery path must not be invoked as an alternative.
+
+The branch-specific activation state remains explicitly documented.
+
+=== After P7
+
+The demonstrated revised staging architecture becomes the authoritative operational reference.
+
+Magic is the sole routine allocator and staging APK delivery mechanism.
+
+Development-to-staging promotion automatically delivers the staging iOS application using inherited version information.
+
+Production continues under its existing restrictions until the production replacement mechanisms become ready.
+
+=== After P9
+
+The production pipeline readiness assessment establishes what has been implemented and verified.
+
+No actual production release occurs without P10 authorization.
+
+== Security guarantees preserved throughout migration
+
+[cols="3,5",options="header"]
+|===
+| Guarantee | Required preservation mechanism
+
+| Explicit version-bound authorization
+| Existing authorization requirements remain applicable. Revised gates verify the specifically authorized build and delivery.
+
+| Closed default state
+| Affected authorization records remain withdrawn during controlled implementation changes.
+
+| Implementation binding
+| Changes to authorization-bound files follow the applicable reviewed procedure, with refreshed identities and verification.
+
+| Temporary credential exposure
+| The approved eight-step Apple credential-management procedure remains unchanged.
+
+| Credential cleanup
+| Success, failure, cancellation and interruption conclude with applicable credential removal and verified absence.
+
+| Third-party build isolation
+| Third-party build execution does not receive release signing credentials or unnecessary repository write permissions.
+
+| Branch protection
+| Allocation and evidence storage do not bypass existing protected-branch governance.
+
+| One authoritative version sequence
+| Magic becomes the sole routine allocator at cutover. Promotions inherit verified version information without allocating new numbers.
+
+| Number consumption
+| Failed, cancelled and indeterminate allocations remain consumed.
+
+| Historical evidence
+| Existing release records and previously established facts remain retrievable.
+
+| Artifact availability
+| Failed or unfinished replacement builds do not remove the preceding successful APK.
+
+| Environment separation
+| Staging and production retain distinct application identities, configuration and authorization.
+
+| Production consistency
+| Production artifacts originate from one approved source and carry identical inherited version information.
+|===
+
+These properties must be demonstrated through the applicable implementation and verification activities.
+
+Their inclusion in this table does not establish that their target enforcement mechanisms already exist.
+
+== Implementation completion
+
+The migration is considered complete when:
+
+* The authoritative documentation framework has been adopted and reconciled.
+* The required machine-readable operational information is maintained without competing authorities.
+* Magic is operational and verified.
+* Persistent staging APK availability is established.
+* The revised staging iOS delivery has been demonstrated.
+* Version inheritance and source comparison work as specified.
+* Existing security guarantees remain intact.
+* The production pipeline has been implemented and appropriately verified.
+* Outstanding release-specific decisions remain visible.
+* Actual production delivery, when separately authorized, is recorded and closed out according to the established procedures.
+
+The completion of implementation work and the authorization of an actual production release remain separate milestones.
+
+No implementation milestone automatically authorizes publication.
+
+== References
+
+* xref:ch02-established-decisions.adoc#ch02[Chapter 2]: Established decisions.
+* xref:ch03-unresolved-decisions.adoc#ch03[Chapter 3]: Outstanding decisions and their dependencies.
+* xref:ch04-exceptions-and-reconciliation.adoc#ch04[Chapter 4]: Exceptions, reconciliation and historical requirements.
+* xref:ch05-requirements-and-enforcement.adoc#ch05[Chapter 5]: Requirements and enforcement.
+* xref:ch06-document-hierarchy-and-mapping.adoc#ch06[Chapter 6]: Documentation organization and migration.
+* xref:ch07-machine-readable-state.adoc#ch07[Chapter 7]: Machine-readable operational information.
+* xref:ch08-operator-credential-tool.adoc#ch08[Chapter 8]: Credential management and operator tool.
+* xref:ch10-production-extensions.adoc#ch10[Chapter 10]: Production implementation and framework validation.
+* xref:ch11-build-and-release-architecture.adoc#ch11[Chapter 11]: Build architecture, invariants and technical investigations.
