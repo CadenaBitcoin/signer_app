@@ -1,0 +1,170 @@
+[[ch01]]
+= Scope, vocabulary and method
+:description: What this specification covers, how statements are classified, which chapters are normative, and the conventions this book follows.
+
+*Scope:* What the framework covers, how statements are classified, which parts of the book are normative and the documentation conventions it follows.
+
+*Status:* Proposal for review. Nothing in this book is authoritative until the CTO accepts it and a reviewed pull request adopts it.
+
+== Scope
+
+The framework governs how a reviewed change in `CadenaBitcoin/signer_app` becomes a delivered, verified build of the Cadena Signer application on Android and iOS, in the environments *development*, *staging* and *production*.
+
+It covers governance, branch promotion, versioning, build, authorization, signing, verification, delivery, evidence, recovery and the external infrastructure those depend on.
+
+It does not cover application features, the Rust library's cryptographic design or the backend.
+
+== Two things that must never be confused
+
+[cols="1,3",options="header"]
+|===
+| Term | Meaning
+
+| *Pipeline implementation and verification*
+| Building, testing and dry-running the delivery machinery for an environment, without releasing anything. Needs engineering review. Uses no production credential.
+
+| *Release authorization*
+| The CTO's written, version-bound decision that one specific build may be signed and delivered. Needs the authorization record, the environment approval and the credential for that delivery.
+|===
+
+Production pipeline work (xref:ch10-production-extensions.adoc#ch10[Chapter 10]) is implementation and verification only. It authorizes no production release.
+
+== Classification used in this specification
+
+[cols="1,3",options="header"]
+|===
+| Class | Meaning
+
+| *A. Decided and implemented*
+| The decision or requirement is approved and the mechanism exists in the current system. Limits of the available verification are stated where they apply.
+
+| *B. Decided, not yet fully reflected*
+| The decision or requirement is approved, but the authoritative documentation, the current implementation or both do not yet reflect it. The current implementation remains authoritative until the reviewed implementation change takes effect.
+
+| *C. Established, insufficiently enforced*
+| A requirement exists in policy or in a decision; nothing, or only a person, enforces it.
+
+| *D. Improvement*
+| Implementation or operational work that does not change policy or architecture.
+
+| *E. Temporary exception*
+| A deviation accepted for a stated scope or until a stated condition. It stays an exception until a disposition is approved. A staging exception does not extend to production.
+
+| *F. Genuinely unresolved*
+| A question that the staging reference does not answer and that materially affects architecture, security or governance.
+|===
+
+Evidence labels from the audits are kept: VERIFIED, DOCUMENTED BUT NOT VERIFIED, INFERRED, UNKNOWN.
+
+An approved decision does not imply that its implementation exists, and an implementation does not imply that its behavior has been verified.
+
+== Normative and historical content
+
+The following chapters state what is currently required or decided: xref:ch02-established-decisions.adoc#ch02[Chapter 2], xref:ch03-unresolved-decisions.adoc#ch03[Chapter 3], the sections of xref:ch04-exceptions-and-reconciliation.adoc#ch04[Chapter 4] on open exceptions, accepted limitations, reconciliation of historical documents and exception management, and Chapters 5 to 11.
+
+The sections of Chapter 4 that form the historical record (superseded requirements, closed exceptions, retired identifiers and the staging recovery decisions) and the revision history in xref:ch12-revision-history.adoc#ch12[Chapter 12] are not normative. They keep the text, rationale and surviving security property of superseded requirements, so that reasoning is not lost.
+
+A statement that a later decision replaced is removed from the normative chapters. Where the repository today differs from an approved target, the requirement states the target, the current mechanism is stated as such, and the as-built page (`STA-01`) and the transitional rules of xref:ch09-migration-sequence.adoc#ch09[Chapter 9] govern the interval.
+
+A requirement is never described as implemented because it is documented. Every requirement states its enforcement type, and every mechanism that is not yet demonstrated is an invariant with the investigation that must demonstrate it (xref:ch11-build-and-release-architecture.adoc#ch11[Chapter 11]).
+
+== Revision history
+
+[cols="1,2,4",options="header"]
+|===
+| Revision | Date | Content
+
+| 1
+| 2026-11-27
+| First consolidation of the staging reference: established decisions, unresolved decisions, exceptions, requirement matrix, hierarchy, migration, production extensions.
+
+| 2
+| 2026-11-27
+| Incorporates the CTO decision reconciliation: the sole credential sequence, the end of `rc.N`, the build-number encoding, Magic, the build-trigger matrix, inheritance by both promotions, persistent releases and build records.
+
+| 3
+| 2026-11-27
+| Corrects the acceptance-audit findings F-01 to F-09.
+
+| 4
+| 2026-11-28
+| Incorporates the CTO's chapter-by-chapter review of Chapters 2 to 11 as authoritative. Reconciles Chapters 1 and 12 and the master index with the reviewed chapters. Applies native AsciiDoc cell styles in Chapter 2 and unifies status terminology. Renames Chapter 12 to match its content.
+|===
+
+The full revision record is in xref:ch12-revision-history.adoc#ch12[Chapter 12].
+
+== Sources
+
+* Repository at `development` `c66c151`: policy, records, workflows, gates, tools and tests (read only).
+* GitHub issues #54 and #71 and their comments; pull requests #144 to #153.
+* Workflow runs 45995314041 (safe failure) and 46005605593 (delivery) with the sealed evidence of the latter.
+* The Phase 1 audit (`cadena-release-framework-audit-phase1.adoc`, outside this book).
+* The CTO decisions and clarifications of 2026-11-27 and the CTO's review of Chapters 2 to 11.
+* Read-only inspection of the version tools, the staging authorization gate, the Android and iOS workflows, `config/release/published_versions.json`, GitHub repository visibility, rulesets, tags and releases, and public Google Play and Apple build-number documentation.
+* The working copy of `docs/RELEASE_VERSIONING.md`, read only and never modified.
+
+== Stable identifiers
+
+An identifier is never reused or renumbered. A retired identifier is kept in the historical record of xref:ch04-exceptions-and-reconciliation.adoc#ch04[Chapter 4].
+
+Each family has one defining chapter. Other chapters cite or summarize an identifier; they never redefine it.
+
+[cols="2,1,4",options="header"]
+|===
+| Identifier family | Defined in | Meaning
+
+| `DEC-NN`
+| xref:ch02-established-decisions.adoc#ch02[Chapter 2]
+| Established decision.
+
+| `UNR-NN`
+| xref:ch03-unresolved-decisions.adoc#ch03[Chapter 3]
+| Unresolved or deferred decision.
+
+| `EXC-NN`, `REC-NN`, `SUP-NN`
+| xref:ch04-exceptions-and-reconciliation.adoc#ch04[Chapter 4]
+| Temporary exception or accepted limitation, reconciliation of a historical document, superseded requirement.
+
+| `GOV`, `BRN`, `VER`, `CFG`, `AUT`, `RCV`, `CRD`, `BLD`, `SIG`, `DEL`, `EVD`, `DOC`, `INF` with `-NN`
+| xref:ch05-requirements-and-enforcement.adoc#ch05[Chapter 5]
+| Requirement.
+
+| `PRD-NN`
+| xref:ch10-production-extensions.adoc#ch10[Chapter 10]
+| Production-specific requirement.
+
+| `WP-xN`, `Wn`, `Pn`
+| xref:ch09-migration-sequence.adoc#ch09[Chapter 9]
+| Work package, controlled-change window, implementation step.
+
+| `FQ-NN`, `INV-NN`, `I-NN`
+| xref:ch11-build-and-release-architecture.adoc#ch11[Chapter 11]
+| Feasibility question, architectural invariant, operational interpretation.
+
+| `RUN-NN`, `STA-01`
+| xref:ch06-document-hierarchy-and-mapping.adoc#ch06[Chapter 6]
+| Names of future documentation pages (runbooks and the as-built page). They are not defined inside this book.
+|===
+
+Identifiers from outside this book keep their own meaning. The decision labels of the staging record (`S1` to `S4`, `C1` to `C4`, `R1` to `R3`) refer to `docs/release-records/ios-staging-authorization.md`. Finding identifiers of the Phase 1 audit (for example `REP-04`) refer to that audit. Where an audit identifier has the same form as a requirement identifier of this book, the identifier of this book is meant unless the text says "audit".
+
+== Documentation conventions of this book
+
+These are the conventions that `DOC-01` to `DOC-04` require of the future documentation tree. This book follows them.
+
+. Every chapter is a standalone page. It starts with a chapter anchor (`+[[chNN]]+`), a title, a scope line and a status line, and it ends with a References block.
+. Cross-references use anchors through `xref:` macros, never a bare file name. Requirement and decision identifiers are cited by identifier and located through the defining chapter named above.
+. Each identifier is defined once. Summaries elsewhere cite it.
+. Machine-read files keep their format; this book is human documentation in native AsciiDoc only.
+. A chapter renders without its neighbors. It may cite another chapter by anchor but does not depend on that chapter's text to be understood within its own scope.
+. Table cells that contain lists or delimited blocks use the native AsciiDoc `a` cell style.
+. The master document (`index.adoc`) assembles the chapters with include directives and a level offset; chapters carry no attributes that the master must override.
+
+== References
+
+* xref:ch02-established-decisions.adoc#ch02[Chapter 2]: established decisions.
+* xref:ch03-unresolved-decisions.adoc#ch03[Chapter 3]: unresolved decisions.
+* xref:ch04-exceptions-and-reconciliation.adoc#ch04[Chapter 4]: exceptions, reconciliation and historical record.
+* xref:ch05-requirements-and-enforcement.adoc#ch05[Chapter 5]: requirement-to-enforcement matrix.
+* xref:ch09-migration-sequence.adoc#ch09[Chapter 9]: transitional rules and implementation sequence.
+* xref:ch12-revision-history.adoc#ch12[Chapter 12]: revision history.

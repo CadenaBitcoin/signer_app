@@ -1,0 +1,54 @@
+= Cadena Signer release framework: consolidated specification
+:description: The consolidated release framework specification extracted from the successful staging reference and the CTO's approved decisions. Proposal for review.
+:revdate: 2026-11-28
+:revnumber: 4
+:toc: left
+:toclevels: 2
+:sectnums:
+:doctype: book
+:source-highlighter: rouge
+:status: PROPOSAL FOR REVIEW. Nothing in this book is authoritative until the CTO accepts it and a reviewed pull request adopts it. It replaces no existing document.
+
+// Each chapter is a standalone page with its own anchor, title, scope line, status line and references block.
+// It is included here with a level offset and can be included in any other Asciidoctor publication.
+
+{status}
+
+[preface]
+== About this specification
+
+The first merge-triggered staging delivery (run 46005605593, `staging` `f31e598`) and its approved decisions are the reference implementation.
+
+This book extracts, formalizes and consolidates what is already established. It separates decisions that are implemented from decisions that are approved but not yet reflected in documentation or implementation, requirements that are not yet enforced, temporary exceptions and the few questions that remain genuinely open.
+
+An approved decision does not imply that its implementation exists. Mechanisms that are only proposed, or whose feasibility is not yet demonstrated, are marked as such.
+
+Reading order for a reviewer: xref:ch01-scope-and-method.adoc#ch01[Chapter 1] (scope and conventions), xref:ch11-build-and-release-architecture.adoc#ch11[Chapter 11] (the build and release architecture), xref:ch02-established-decisions.adoc#ch02[Chapter 2] (what is settled), xref:ch03-unresolved-decisions.adoc#ch03[Chapter 3] (what is open), xref:ch04-exceptions-and-reconciliation.adoc#ch04[Chapter 4] (exceptions and the historical record), xref:ch05-requirements-and-enforcement.adoc#ch05[Chapter 5] (requirements and their enforcement), then Chapters 6 to 10 and the revision history in xref:ch12-revision-history.adoc#ch12[Chapter 12].
+
+:leveloffset: +1
+
+include::ch01-scope-and-method.adoc[]
+
+include::ch02-established-decisions.adoc[]
+
+include::ch03-unresolved-decisions.adoc[]
+
+include::ch04-exceptions-and-reconciliation.adoc[]
+
+include::ch05-requirements-and-enforcement.adoc[]
+
+include::ch06-document-hierarchy-and-mapping.adoc[]
+
+include::ch07-machine-readable-state.adoc[]
+
+include::ch08-operator-credential-tool.adoc[]
+
+include::ch09-migration-sequence.adoc[]
+
+include::ch10-production-extensions.adoc[]
+
+include::ch11-build-and-release-architecture.adoc[]
+
+include::ch12-revision-history.adoc[]
+
+:leveloffset: -1

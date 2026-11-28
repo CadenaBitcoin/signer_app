@@ -1,0 +1,804 @@
+[[ch06]]
+= AsciiDoc documentation hierarchy and migration
+:description: The target documentation structure, the responsibilities of its individual parts and the migration of existing documentation.
+
+*Scope:* The organization of authoritative human-oriented documentation, its relationship to machine-readable information, and the migration of existing repository documents.
+
+*Status:* Proposal for review. No repository document has been moved or replaced through this specification.
+
+== Objectives
+
+The documentation architecture must support:
+
+* Independent development and maintenance of individual documents.
+* Inclusion of individual documents in a comprehensive documentation book.
+* Unambiguous identification of authoritative requirements.
+* Understandable architectural reasoning.
+* Practical operational procedures.
+* Reconstruction of the release infrastructure independently of a particular developer, assistant or workstation.
+* Preservation of historical decisions and release evidence.
+* Minimal duplication and administrative overhead.
+
+The documentation must be useful to both human developers and AI-assisted development tools.
+
+It must not depend on access to previous conversations or undocumented personal knowledge.
+
+== Documentation principles
+
+=== Canonical format
+
+Native AsciiDoc is the canonical format for human-oriented documentation (DEC-25).
+
+Machine-readable files retain the format required by their consuming tools.
+
+Externally prescribed or tool-specific documents may retain Markdown or another required format.
+
+Such documents should reference authoritative AsciiDoc content rather than maintain independent copies of normative requirements.
+
+=== One authoritative location
+
+Every normative requirement has one authoritative definition.
+
+Other documents may reference, explain or operationally apply that requirement, but must not independently redefine it.
+
+The different documentation categories have distinct responsibilities:
+
+[cols="2,4",options="header"]
+|===
+| Category | Responsibility
+
+| Governance
+| Authority, responsibilities, contribution rules and repository governance.
+
+| Policy
+| Normative architectural, operational and security requirements.
+
+| Architecture
+| System structure, design decisions, rationale and component relationships.
+
+| Implementation
+| Implemented mechanisms, workflows, tools and verification procedures.
+
+| Infrastructure
+| External services, required configuration and reconstruction information.
+
+| Operations
+| Practical procedures for performing authorized operations.
+
+| Current state
+| Implementation status, outstanding work and applicable exceptions.
+
+| Records
+| Historical decisions, delivery outcomes and supporting evidence.
+
+| Archive
+| Superseded designs and historical material without current normative authority.
+|===
+
+A runbook may repeat information necessary for safe execution.
+
+Such repetition is an operational representation of an authoritative requirement, not a separately maintained policy.
+
+=== Independent and includable documents
+
+Each substantive documentation page should have:
+
+* A descriptive title.
+* A stable anchor.
+* A clearly identifiable scope.
+* An implementation or approval status where applicable.
+* References to related authoritative documents.
+
+Individual pages must remain understandable when read independently.
+
+They must also be suitable for inclusion in the master documentation book.
+
+Cross-references use stable anchors and appropriate native AsciiDoc mechanisms.
+
+The implementation must verify that cross-references work both when rendering individual documents and when rendering the complete book.
+
+Directory structure alone must not be relied upon to establish document authority.
+
+=== Appropriate modularity
+
+Documentation is divided according to meaningful responsibilities.
+
+A separate document is justified when its subject:
+
+* Has an independent architectural or operational purpose.
+* Has a distinct maintenance lifecycle.
+* Is independently referenced or consumed.
+* Would otherwise make a larger document unnecessarily difficult to maintain.
+
+Closely related subjects may remain in one document.
+
+A small requirement group does not automatically require a separate file.
+
+The proposed hierarchy is an organizational framework, not a mandatory file count.
+
+=== Separation of documentation and operational data
+
+Machine-consumed authorization and release information belongs in suitable machine-readable structures.
+
+Human-oriented documentation explains their meaning and operational use.
+
+Reorganizing narrative documentation should not unnecessarily require changes to release gates or other security-critical implementation files.
+
+See xref:ch07-machine-readable-state.adoc#ch07[Chapter 7].
+
+=== Security-critical implementation references
+
+Authorization-bound workflows, gates and tools should avoid unnecessary dependencies on incidental documentation paths or wording.
+
+Stable requirement identifiers may be used to establish traceability.
+
+Useful documentation references are not prohibited merely because they occur in an implementation file.
+
+Operationally necessary references remain applicable.
+
+Any change to an authorization-bound file follows the corresponding reviewed change procedure.
+
+See `DOC-04` and xref:ch09-migration-sequence.adoc#ch09[Chapter 9].
+
+=== Historical traceability
+
+Superseded requirements and architectural decisions remain retrievable where they provide meaningful historical context.
+
+Historical material must be clearly distinguishable from current normative documentation.
+
+Git history remains part of the project's historical record.
+
+Archiving a superseded document is useful where retaining it improves understanding, reconstruction or auditability.
+
+There is no requirement to maintain redundant copies of every previous document.
+
+== Proposed documentation hierarchy
+
+The following hierarchy establishes the target organization.
+
+The listed filenames describe proposed documentation subjects.
+
+They may be consolidated where this improves clarity without compromising independent maintainability or authoritative ownership.
+
+[source,text]
+----
+docs/
+    index.adoc
+
+    00-front/
+        about.adoc
+        how-to-read.adoc
+        glossary.adoc
+        conventions.adoc
+
+    10-governance/
+        authority-and-roles.adoc
+        branches-and-promotion.adoc
+        contribution.adoc
+        security-reporting.adoc
+        assistant-rules.adoc
+
+    20-policy/
+        principles.adoc
+        authorization-model.adoc
+        versioning-and-build-numbers.adoc
+        identifiers-and-tags.adoc
+        application-identity.adoc
+        credentials.adoc
+        distribution.adoc
+        release-record.adoc
+        requirements-index.adoc
+
+    30-architecture/
+        pipeline-overview.adoc
+        build-trigger-matrix.adoc
+        version-encoding.adoc
+        magic-android-build.adoc
+        build-records-and-releases.adoc
+        build-configuration.adoc
+        release-triggers.adoc
+        authorization-gate.adoc
+        handover-and-signing.adoc
+        verification-v1-v9.adoc
+        credential-model.adoc
+        native-library.adoc
+        android-signing.adoc
+        ci-validation.adoc
+        retained-artifacts.adoc
+        security-boundary.adoc
+
+    40-implementation/
+        enforcement-matrix.adoc
+        workflows.adoc
+        tools.adoc
+        tests.adoc
+        bound-files.adoc
+
+    50-infrastructure/
+        github.adoc
+        apple.adoc
+        google-play.adoc
+        reconstruction.adoc
+        register.adoc
+
+    60-operations/
+        run-01-delivery.adoc
+        run-02-pre-promotion-checks.adoc
+        run-03-credentials.adoc
+        run-04-evidence.adoc
+        run-05-recovery.adoc
+        run-06-closeout.adoc
+        run-07-android-local-release.adoc
+        run-08-magic-android-build.adoc
+        templates/
+
+    70-state/
+        as-built.adoc
+        open-items.adoc
+        exceptions.adoc
+
+    80-records/
+        index.adoc
+        staging-1.0.5-10005002.adoc
+        ios-1.0.4-1000035.adoc
+
+    90-archive/
+
+config/
+    build/
+    release/
+----
+
+The numerical directory prefixes establish the intended reading and inclusion order.
+
+They do not define requirement priority or implementation priority.
+
+The final file boundaries are determined during documentation migration.
+
+No empty or redundant document needs to be created solely to reproduce this proposed tree.
+
+== Responsibilities of the documentation parts
+
+=== Front matter
+
+The front matter establishes the purpose and scope of the documentation.
+
+It contains terminology, reading guidance and documentation conventions.
+
+Terminology should be defined centrally where its meaning applies across multiple documents.
+
+=== Governance
+
+Governance documents establish:
+
+* Repository authority and responsibilities.
+* Branch management and promotion rules.
+* Contribution and review requirements.
+* Security reporting.
+* AI-assisted development constraints.
+
+Root-level entry points remain available where required by external tools or contributor discovery conventions.
+
+=== Policy
+
+Policy documents contain normative requirements.
+
+They establish what the infrastructure must guarantee without unnecessarily prescribing unresolved implementation mechanisms.
+
+Stable requirement identifiers provide traceability between policy, implementation and verification.
+
+Requirements defined in xref:ch05-requirements-and-enforcement.adoc#ch05[Chapter 5] and xref:ch10-production-extensions.adoc#ch10[Chapter 10] are incorporated into their appropriate authoritative locations.
+
+The migration must explicitly establish whether a requirement matrix or an individual policy page is the authoritative definition of each requirement.
+
+Both must not be maintained as independent normative authorities.
+
+=== Architecture
+
+Architecture documents explain how the system is organized and why its principal decisions were made.
+
+They establish the relationship between:
+
+* Magic.
+* Application version management.
+* Environment configuration.
+* Branch promotions.
+* Authorization.
+* Application compilation.
+* Signing and verification.
+* Artifact distribution.
+* Durable build evidence.
+
+Architecture documents must distinguish established architectural requirements from candidate implementation mechanisms.
+
+The build-trigger matrix defined in xref:ch11-build-and-release-architecture.adoc#ch11[Chapter 11] has one authoritative definition.
+
+Related architecture and operational documents reference that definition.
+
+=== Implementation
+
+Implementation documentation explains the mechanisms satisfying the architectural and policy requirements.
+
+It identifies relevant:
+
+* Workflows.
+* Scripts and tools.
+* Configuration files.
+* Authorization gates.
+* Verification procedures.
+* Automated tests.
+* Authorization-bound implementation files.
+
+The requirement-to-enforcement matrix identifies the relationship between requirements and mechanisms.
+
+A generated matrix may be introduced where this reduces duplication.
+
+Generation is not mandatory if a simpler maintained representation provides sufficient traceability.
+
+Implementation status must remain consistent with the maintained current-state documentation.
+
+=== Infrastructure
+
+Infrastructure documentation provides the information necessary to understand, verify and reconstruct external release infrastructure.
+
+It covers the applicable GitHub, Apple and Google Play arrangements.
+
+It distinguishes between:
+
+* Required configuration.
+* Observed external configuration.
+* External identifiers.
+* Required permissions.
+* Credential references.
+* Human-controlled prerequisites.
+
+Credential values and private signing material are not included.
+
+The reconstruction documentation must not depend on the availability of a particular workstation or undocumented local setup.
+
+=== Operations
+
+Operational documentation contains procedures that can be followed by an appropriately authorized operator.
+
+The procedures should identify:
+
+* Prerequisites.
+* Required authority.
+* The sequence of operations.
+* Expected results.
+* Failure and interruption behavior.
+* Required closeout and evidence.
+
+Operational documents should remain concise and actionable.
+
+They must not require an operator to reconstruct the intended procedure from several independent architectural documents.
+
+The approved Apple credential-management sequence is defined by DEC-28 and xref:ch08-operator-credential-tool.adoc#ch08[Chapter 8].
+
+The local operator tool is distinguished from the manual procedure until its implementation has been verified.
+
+=== Current state
+
+The current-state documentation distinguishes implemented and verified behavior from approved but unimplemented requirements.
+
+`STA-01` identifies the principal maintained as-built overview.
+
+The current-state documentation includes or references:
+
+* Implemented release mechanisms.
+* Outstanding implementation work.
+* Verification limitations.
+* Applicable temporary exceptions.
+* Unresolved architectural decisions.
+
+GitHub issues and other established work-management mechanisms remain authoritative for their actual issue state.
+
+The documentation should reference those records rather than introduce an independently maintained duplicate task-management system.
+
+Historical release facts remain in delivery records.
+
+They are not rewritten whenever the current system state changes.
+
+=== Records
+
+Release records preserve the evidence of particular operational events.
+
+They may contain:
+
+* Release authorization references.
+* Application versions and numerical build numbers.
+* Source identities.
+* Workflow execution identifiers.
+* Artifact identities and checksums.
+* Delivery outcomes.
+* Human-reported observations.
+* Accepted limitations and exceptions.
+
+Human-oriented release records do not replace authoritative machine-readable build evidence.
+
+See DEC-23, DEC-35 and xref:ch07-machine-readable-state.adoc#ch07[Chapter 7].
+
+=== Archive
+
+The archive contains material retained primarily for historical understanding.
+
+Archived documents must be clearly identified as historical and non-normative.
+
+An archived document must not remain an active machine-readable authorization source.
+
+== Mapping of existing documentation
+
+The following mapping originates from the release infrastructure audit.
+
+Reported implementation dependencies must be reconfirmed before moving or modifying the affected documents.
+
+Proposed target locations refer to the documentation hierarchy above.
+
+Where several target documents are listed, their final separation remains subject to appropriate modularity.
+
+[cols="3,4,3,4",options="header"]
+|===
+| Existing document | Proposed target | Required action | Existing dependency or constraint
+
+| `GOVERNANCE.md`
+| `10-governance/authority-and-roles.adoc`, `branches-and-promotion.adoc`
+| Consolidate governance requirements. Reconcile release authority and remove outdated state statements (REC-08, REC-09).
+| No code dependency reported.
+
+| `CONTRIBUTING.md`
+| `10-governance/contribution.adoc`
+| Consolidate contribution guidance and introduce the documentation convention (`DOC-01`).
+| Preserve a discoverable root-level contributor entry point where appropriate.
+
+| `SECURITY.md`
+| `10-governance/security-reporting.adoc`
+| Consolidate security reporting and applicable support policy.
+| Preserve the GitHub-recognized security policy entry point. A root-level Markdown file may remain necessary.
+
+| `CLAUDE.md`
+| Retain the tool-specific file; reference `10-governance/assistant-rules.adoc` where appropriate.
+| Preserve tool-specific instructions and reconcile duplication.
+| Consumed by AI-assisted development tooling and reportedly referenced by workflows.
+
+| `docs/AI_DEVELOPMENT_WORKFLOW.md`
+| `10-governance/assistant-rules.adoc`
+| Consolidate AI-assisted development guidance.
+| Preserve operationally necessary instructions in the applicable tool-specific entry point.
+
+| `README.adoc`, `README.md`
+| One authoritative repository README in native AsciiDoc.
+| Consolidate duplicated content (REC-11).
+| Verify GitHub rendering, repository entry points and external references before removing the redundant file.
+
+| `docs/RELEASE_POLICY.md`
+| `20-policy/`, with implementation status and outstanding items transferred to `70-state/`.
+| Consolidate normative release policy and reconcile superseded requirements.
+| Reportedly cited by authorization-bound workflows and tools. Observe the bound-file change procedure.
+
+| `docs/RELEASE_VERSIONING.md` (committed version)
+| `20-policy/versioning-and-build-numbers.adoc`, `identifiers-and-tags.adoc`, `30-architecture/version-encoding.adoc`
+| Reconcile with DEC-29 through DEC-38. Remove superseded allocation and identifier requirements when the target architecture becomes effective.
+| Reportedly referenced by `build_manifest.py` and `build-variants.yml`.
+
+| `docs/RELEASE_VERSIONING.md` (uncommitted working copy)
+| Input to the authoritative versioning and encoding documentation.
+| Preserve the existing working copy. Its owner reconciles it with the approved decisions.
+| Existing staged and unstaged changes must not be overwritten, discarded or committed incidentally.
+
+| `docs/RELEASE_TRIGGERS.md`
+| `30-architecture/release-triggers.adoc`, `build-trigger-matrix.adoc`
+| Consolidate trigger definitions and reconcile staging delivery behavior at cutover (REC-13).
+| Reportedly referenced by `build_manifest.py`, `test_release_triggers.sh` and assertions in `test_ios_staging_delivery.sh`.
+
+| `docs/BUILD_CONFIGURATION.md`
+| `30-architecture/build-configuration.adoc`
+| Convert to native AsciiDoc and reconcile environment configuration.
+| Reportedly referenced by workflows, `verify_artifact.sh` and `generate_app_icons.py`.
+
+| `docs/IOS_CI.md`, `docs/ANDROID_CI.md`
+| `30-architecture/ci-validation.adoc`, `magic-android-build.adoc`
+| Consolidate CI validation documentation. Reconcile Android delivery with Magic at cutover (REC-13, REC-14).
+| Reportedly referenced by workflows, `check_build_drift.sh` and `test_release_triggers.sh`.
+
+| `docs/RELEASE_SIGNING_ARCHITECTURE.md`
+| Applicable policy and architecture documents; historical original where useful in `90-archive/`.
+| Preserve relevant architectural reasoning and requirements. Remove superseded descriptions of implementation state (REC-04).
+| No implementation dependency reported.
+
+| `docs/RELEASE_IMPLEMENTATION_PLAN.md`
+| Historical material in `90-archive/`; unresolved work referenced from `70-state/`.
+| Preserve historical rationale and reconcile outstanding implementation work with the current plan.
+| Reportedly referenced by `build-variants.yml`.
+
+| `docs/IOS_SIGNING.md`
+| `30-architecture/`, `50-infrastructure/apple.adoc`, historical material where appropriate.
+| Consolidate signing architecture, Apple credential analysis and relevant historical readiness evidence. Reconcile reviewer requirements (REC-02).
+| Reportedly referenced by `verify_ipa.py`, workflows and `test_ios_der_diagnostics.sh`. Some dependencies are authorization-bound.
+
+| `docs/IOS_HOSTED_SIGNING.md`
+| `30-architecture/handover-and-signing.adoc`, `authorization-gate.adoc`, applicable production runbook.
+| Consolidate architecture and operational procedures.
+| Reportedly referenced by `validate_handover_archive.py`, `check_signing_authorization.sh` and `ios-hosted-signing.yml`. Some dependencies are authorization-bound.
+
+| `docs/IOS_RELEASE.md`
+| `30-architecture/verification-v1-v9.adoc`, applicable production runbook and historical records.
+| Consolidate verification requirements and production release procedures.
+| Reportedly referenced by workflows and `test_required_reason_scan.sh`.
+
+| `docs/IOS_STAGING_DELIVERY.md`
+| Authorization and signing architecture, applicable operational runbooks, infrastructure documentation and native-library documentation.
+| Separate architecture, current implementation, operational procedure and historical evidence.
+| Reportedly referenced by the staging workflow, authorization gate and numerous assertions in `test_ios_staging_delivery.sh`.
+
+| `docs/ANDROID_RELEASE.md`
+| `30-architecture/android-signing.adoc`, `60-operations/run-07-android-local-release.adoc`, historical records.
+| Consolidate signing architecture and the existing local release procedure. Reconcile future production arrangements through UNR-01.
+| Reportedly referenced by `verify_android_release.py` and workflows.
+
+| `docs/RETAINED_ARTIFACTS.md`
+| `30-architecture/retained-artifacts.adoc`
+| Reconcile artifact retention with persistent APK availability and approved access policies.
+| Reportedly referenced by `build-variants.yml`, `retain_artifact.py`, `install_age.sh` and `check_verdict.sh`.
+
+| `docs/SECURITY_BOUNDARY.md`
+| `30-architecture/security-boundary.adoc`
+| Preserve and reconcile the established security boundaries.
+| No implementation dependency reported.
+
+| `docs/APPLE_ACCOUNT_QUESTIONNAIRE.md`
+| `50-infrastructure/apple.adoc`
+| Consolidate established Apple account facts. Distinguish confirmed information from unresolved questions.
+| No implementation dependency reported.
+
+| `docs/release-records/ios-staging-authorization.md`
+| Structured authorization data under `config/release/`; historical narrative under `80-records/`.
+| Separate operational authorization from historical documentation after the replacement gate mechanism is ready.
+| Machine-consumed by the existing staging gate, workflows and test scripts. A reference stub is not an adequate operational replacement.
+
+| `docs/release-records/ios-1.0.4-1000035.md`
+| `80-records/ios-1.0.4-1000035.adoc`, with any necessary operational data preserved separately.
+| Preserve the historical production delivery record. Convert only after its machine-readable dependencies are safely removed.
+| Reportedly machine-consumed by the production authorization gate and tests.
+
+| `docs/release-records/staging-delivery-1.0.5-10005002.adoc`
+| `80-records/staging-1.0.5-10005002.adoc`
+| Preserve the demonstrated staging delivery evidence.
+| Reportedly asserted by `test_ios_staging_delivery.sh`. Preserve historical references and reconcile tests where necessary.
+
+| `config/release/*.json`, `config/release/*.txt`
+| Existing machine-readable configuration hierarchy.
+| Retain or consolidate according to their operational responsibilities.
+| Machine-consumed. Changes require verification of the applicable tools and workflows.
+|===
+
+The mapping is a migration plan, not evidence that the listed moves have already been performed.
+
+The actual repository dependency inventory must be checked before implementation.
+
+== New documentation subjects
+
+The approved target architecture introduces subjects that are not fully represented in the existing documentation.
+
+[cols="3,3,2",options="header"]
+|===
+| Subject | Authoritative architectural basis | Operational status
+
+| Build-trigger matrix
+| DEC-36, `DEL-01`, Chapter 11.
+| Target architecture.
+
+| Version encoding and allocation
+| DEC-30, DEC-31, DEC-37, DEC-38.
+| Approved direction; implementation and technical verification pending.
+
+| Magic Android build
+| DEC-32, Chapter 11.
+| Implementation pending.
+
+| Persistent APK distribution
+| DEC-35, `DEL-07`.
+| Implementation and applicable access-policy decisions pending.
+
+| Durable build records and version inheritance
+| DEC-33, DEC-34, DEC-35, DEC-38.
+| Implementation pending.
+
+| Magic operational procedure (`RUN-08`)
+| Magic implementation and verification.
+| Becomes operational after the corresponding mechanism has been verified.
+
+| Apple credential-management procedure (`RUN-03`)
+| DEC-28, Chapter 8.
+| Approved manual sequence; supporting operator tool pending.
+|===
+
+These subjects may be introduced into existing documents or maintained as independent pages according to the modularity principles.
+
+Documentation describing the target build architecture must not present it as already operational.
+
+The manual Apple credential-management sequence remains applicable independently of the Magic cutover.
+
+Instructions requiring the new operator tool become operational only after that tool has been implemented and verified.
+
+== Migration of existing documents
+
+=== Migration inventory
+
+Before moving, splitting or retiring an existing document, identify:
+
+* Human-oriented references.
+* External links and contributor entry points.
+* Workflow and script references.
+* Machine-readable dependencies.
+* Automated test dependencies.
+* Authorization-bound implementation dependencies.
+* Existing uncommitted user changes.
+
+Classify each dependency according to its actual operational purpose.
+
+An incidental reference does not necessarily require retention of the original document indefinitely.
+
+A machine-readable dependency must be migrated before its source can be removed.
+
+=== Reference compatibility
+
+Where an existing document has moved but its previous location remains referenced, preserve a short compatibility stub where practical.
+
+A compatibility stub contains:
+
+* A short identification of the original document.
+* A statement that its authoritative content has moved.
+* A reference to the replacement document or section.
+
+A stub is not a second authoritative document.
+
+It must not preserve superseded normative requirements merely for convenience.
+
+Where the old document is consumed by a machine, a stub alone is insufficient.
+
+The consumer must be migrated and tested before replacing its operational input.
+
+Root-level entry points required by external tools may remain permanent rather than temporary stubs.
+
+=== Authorization-bound dependencies
+
+References within authorization-bound implementation files are reconciled through the applicable reviewed change procedure.
+
+Such files must not be changed incidentally during a documentation-only migration.
+
+The corresponding authorization state, implementation bindings and security tests must remain valid.
+
+See xref:ch09-migration-sequence.adoc#ch09[Chapter 9].
+
+=== Automated test dependencies
+
+Tests that depend on incidental narrative wording or current operational state should be reconciled with the underlying requirement.
+
+Existing tests must not simply be removed because documentation has moved.
+
+Distinguish between:
+
+* Security and operational behavior tests.
+* Machine-readable schema validation.
+* Historical evidence preservation tests.
+* Documentation structure and reference checks.
+
+Each applicable property remains verified after migration.
+
+=== Historical preservation
+
+Historical release evidence must remain attributable to its original source and operational event.
+
+Format conversion or document relocation must not silently change historical facts.
+
+Where necessary, retain the original commit, record identifier or historical reference.
+
+Any substantive historical correction must be explicitly identified.
+
+=== Retirement of old paths
+
+An old document path may be retired when:
+
+* No required machine consumer depends on it.
+* Applicable automated tests have been reconciled.
+* Relevant internal references have been updated.
+* External entry-point requirements remain satisfied.
+* Historical evidence remains retrievable.
+
+A permanent compatibility entry point may remain where external references cannot reasonably be updated.
+
+== Master documentation book
+
+The master documentation file is:
+
+[source,text]
+----
+docs/index.adoc
+----
+
+It includes the applicable documentation parts in their intended reading order.
+
+The master document should define common book-level attributes where appropriate, including:
+
+* Document type.
+* Table of contents.
+* Section numbering.
+* Common presentation attributes.
+* Include conventions.
+
+Individual pages must remain suitable for standalone rendering.
+
+Common content must not be duplicated merely to support standalone and book rendering.
+
+The documentation structure must be tested for:
+
+* Successful standalone rendering.
+* Successful rendering of the complete documentation book.
+* Correct section hierarchy.
+* Unique anchors within the assembled book.
+* Resolvable cross-references.
+* Correct include paths.
+* Correct rendering of tables and source blocks.
+
+Successful structural inspection of AsciiDoc source is not equivalent to successful rendering.
+
+The framework must be rendered with Asciidoctor before documentation adoption.
+
+PDF generation may be supported where useful but is not required to establish the canonical documentation format.
+
+The native AsciiDoc source remains authoritative.
+
+== Migration sequence
+
+Documentation migration is coordinated through WP-B1, WP-B2, WP-B3 and the applicable supporting implementation work packages.
+
+The general sequence is:
+
+. Establish the documentation conventions and target organization.
+. Reconcile misleading implementation-status statements.
+. Identify authoritative requirements and their target locations.
+. Resolve machine-readable dependencies and authorization-bound references through the applicable reviewed changes.
+. Migrate human-oriented documentation.
+. Preserve historical records and necessary compatibility entry points.
+. Validate references, includes and rendering.
+. Retire redundant documents when their dependencies have been resolved.
+
+The migration does not require immediate creation of every proposed document.
+
+Documentation parts may be migrated independently where their dependencies permit it.
+
+The exact implementation sequence is governed by xref:ch09-migration-sequence.adoc#ch09[Chapter 9].
+
+== Acceptance criteria
+
+The documentation migration is accepted when:
+
+* Human-oriented documentation uses native AsciiDoc as its canonical format.
+* Each normative requirement has one identifiable authoritative location.
+* Current implementation is distinguishable from approved target architecture.
+* Individual documents render independently.
+* The complete documentation book renders successfully.
+* Cross-references and document includes resolve correctly.
+* Machine-readable operational dependencies remain functional.
+* Existing authorization and verification guarantees remain intact.
+* Historical decisions and release evidence remain retrievable.
+* Required external and tool-specific entry points remain functional.
+* Existing uncommitted user changes have been preserved.
+* Redundant normative documentation has been eliminated.
+* The resulting structure is understandable without access to previous assistant conversations or undocumented workstation-specific knowledge.
+
+Acceptance is based on the usability, consistency and integrity of the documentation.
+
+The number of files, directories or pages is not an acceptance criterion.
+
+== References
+
+* xref:ch01-scope-and-method.adoc#ch01[Chapter 1]: Scope and documentation conventions.
+* xref:ch02-established-decisions.adoc#ch02[Chapter 2]: Established decisions, particularly DEC-25.
+* xref:ch04-exceptions-and-reconciliation.adoc#ch04[Chapter 4]: Documentation reconciliation and historical requirements.
+* xref:ch05-requirements-and-enforcement.adoc#ch05[Chapter 5]: Requirements and enforcement.
+* xref:ch07-machine-readable-state.adoc#ch07[Chapter 7]: Machine-readable state.
+* xref:ch08-operator-credential-tool.adoc#ch08[Chapter 8]: Credential management.
+* xref:ch09-migration-sequence.adoc#ch09[Chapter 9]: Migration and implementation sequence.
+* xref:ch10-production-extensions.adoc#ch10[Chapter 10]: Production requirements.
+* xref:ch11-build-and-release-architecture.adoc#ch11[Chapter 11]: Build and release architecture.

@@ -1,0 +1,848 @@
+[[ch05]]
+= Requirement-to-enforcement matrix
+:description: Stable release-framework requirements, their architectural basis, existing enforcement mechanisms and outstanding implementation work.
+
+*Scope:* Governance, versioning, authorization, credentials, application builds, delivery, evidence, documentation and infrastructure requirements.
+
+*Status:* Proposal for review. The matrix distinguishes established requirements, existing implementation, incomplete enforcement and proposed mechanisms.
+
+== Reading the matrix
+
+Each requirement has a stable identifier.
+
+The requirement column describes the approved target behavior, except where a requirement is explicitly identified as proposed or dependent on an unresolved decision.
+
+The mechanism column describes the currently known implementation, not the intended future implementation.
+
+Implementation observations originate from the release infrastructure audit and the demonstrated staging delivery. They must be reconfirmed where subsequent implementation depends on them.
+
+The classification follows xref:ch01-scope-and-method.adoc#ch01[Chapter 1].
+
+Enforcement types:
+
+[cols="1,4",options="header"]
+|===
+| Type | Meaning
+
+| AUTO
+| The requirement is enforced automatically within its stated implementation scope.
+
+| PARTIAL
+| Enforcement is incomplete, or combines automated mechanisms with human-controlled operations.
+
+| HUMAN
+| Enforcement depends principally on human compliance.
+
+| NONE
+| No mechanism enforcing the target requirement has been established.
+|===
+
+Automatic enforcement does not imply comprehensive verification.
+
+A requirement may have an existing mechanism while its approved extension remains unimplemented.
+
+The gap column identifies outstanding implementation work, verification, exception handling or unresolved decisions.
+
+A proposed mechanism does not become an approved architectural requirement merely through inclusion in this matrix.
+
+Until the target architecture takes effect, the existing implementation remains governed by the transitional arrangements in xref:ch09-migration-sequence.adoc#ch09[Chapter 9].
+
+Superseded requirements are retained only in the historical record of xref:ch04-exceptions-and-reconciliation.adoc#ch04[Chapter 4].
+
+Production-specific requirements use the prefix `PRD` and are defined in xref:ch10-production-extensions.adoc#ch10[Chapter 10].
+
+== Governance and branches
+
+[cols="1,4,2,1,3,1,3",options="header"]
+|===
+| ID | Requirement | Basis | Cls | Current mechanism | Type | Gap
+
+| GOV-01
+| All application source changes, including platform-specific changes, enter protected development and release branches through reviewed pull requests.
+| `GOVERNANCE.md`; #54; DEC-01
+| A
+| Existing rulesets require pull requests for `development`, `staging` and `production`, with no bypass actors reported.
+| AUTO
+| Reconfirm settings through WP-A2.
+
+| GOV-02
+| Merge authority for protected branches belongs to the `maintainers` team.
+| `GOVERNANCE.md`; DEC-01
+| A
+| Classic restrictions exist on `development` and `staging`.
+| PARTIAL
+| Equivalent protection for `production` and `main`: WP-A3.
+
+| GOV-03
+| Reviewed changes require at least one approving review. Promotion uses merge commits. Stale approvals are dismissed and review threads resolved.
+| DEC-01
+| A
+| Existing ruleset parameters.
+| AUTO
+| Verify continued applicability through WP-A2.
+
+| GOV-04
+| Commits must satisfy the established commit-signing policy.
+| `CLAUDE.md` section 8
+| C
+| Developer convention.
+| HUMAN
+| Required signature enforcement: WP-A3.
+
+| GOV-05
+| Independent review must not be claimed merely because review and approval are performed through different maintainer accounts.
+| DEC-16
+| A
+| Documented governance limitation.
+| HUMAN
+| EXC-08.
+
+| BRN-01
+| Release promotion is forward only: `development` to `staging` to `production`.
+| DEC-01
+| A
+| Existing staging authorization gate enforces source and promotion restrictions.
+| PARTIAL
+| Equivalent production promotion enforcement: `PRD-01`.
+
+| BRN-02
+| Direct commits, unauthorized deletion and force pushes to protected release branches are prohibited.
+| DEC-01
+| A
+| Existing branch rulesets.
+| AUTO
+| Reconfirm protection across all relevant branches: WP-A2.
+
+| BRN-03
+| Applicable CI, version validation, security and regression checks must pass before a release promotion is merged.
+| Release policy sections 2.3 and 7.3
+| C
+| CI checks exist, but mandatory status-check enforcement has not been established.
+| HUMAN
+| Required status checks: WP-A3.
+
+| BRN-04
+| Workflows must not bypass protected-branch review requirements. Magic allocation and persistent record storage must preserve existing branch protection and governance.
+| DEC-01, DEC-32, DEC-38
+| A
+| Existing rulesets reportedly have no bypass actors.
+| PARTIAL
+| Demonstrate that the selected allocation mechanism preserves protection: `FQ-01`, `INV-03`.
+|===
+
+== Versioning, identity and configuration
+
+[cols="1,4,2,1,3,1,3",options="header"]
+|===
+| ID | Requirement | Basis | Cls | Current mechanism | Type | Gap
+
+| VER-01
+| The application version `X.Y.Z` originates from one authoritative reviewed version declaration. Workflows must not independently derive application versions from branch names, dates, workflow run numbers or arbitrary input.
+| DEC-02, DEC-38
+| B
+| The current version declaration is `pubspec.yaml`. Existing checks prohibit version overrides.
+| PARTIAL
+| Reconcile existing checks with authorized version inheritance: WP-C1, WP-C2, `FQ-02`.
+
+| VER-02
+| Corresponding Android and iOS delivery artifacts carry identical application version and numerical build-number information.
+| DEC-31, DEC-33, DEC-34
+| B
+| Existing platform version checks and build manifests use the current common version declaration.
+| PARTIAL
+| Implement and verify inheritance between Magic, staging iOS delivery and production delivery.
+
+| VER-03
+| Every newly allocated build number must be greater than the applicable historical consumption boundary and all previously allocated numbers in the shared sequence. Required numerical ordering must be preserved.
+| DEC-30, DEC-31, DEC-37
+| C
+| Existing Android publication floors in `config/release/published_versions.json`. Complete historical initialization is not established.
+| PARTIAL
+| WP-C1, `FQ-12`, `INV-09`.
+
+| VER-04
+| A build number is consumed at allocation and must not be independently allocated again. Authorized inheritance across corresponding staging and production applications is permitted. An authorized delivery attempt must not reuse a number already consumed by an earlier attempt targeting the same store application.
+| DEC-13, DEC-31, DEC-32
+| B
+| Existing human-controlled recovery procedure and store-side duplicate restrictions.
+| HUMAN
+| Implement allocation and delivery-consumption enforcement: WP-C1, WP-C2, `FQ-06`. Partial production recovery remains subject to UNR-09.
+
+| VER-06
+| The installed application displays both its application version and numerical build number. Displayed information must correspond to the installed artifact.
+| DEC-18
+| A
+| Version display exists on the Dashboard (#142).
+| PARTIAL
+| Explicitly verify both displayed values on Android and iOS.
+
+| VER-07
+| Releases are identifiable through application version, build number, environment and source identity. No independent `rc.N` counter exists. Automatically generated technical references are permitted but must not introduce another versioning or authorization mechanism. Existing historical tags are preserved.
+| DEC-29
+| B
+| Existing commit references and release evidence. No persistent GitHub release publication mechanism established.
+| PARTIAL
+| WP-C3, `FQ-10`. Generated allocation references, if required, remain subject to `FQ-01`.
+
+| VER-08
+| The build number follows the numerical encoding established in DEC-30. The major version is positive; minor and patch are between 0 and 99; revision is between 1 and 999. The result satisfies applicable platform limits. Invalid, exhausted or unsupported numerical ranges are rejected.
+| DEC-30
+| B
+| Existing tools perform basic numerical checks. The new encoding is not comprehensively enforced.
+| PARTIAL
+| WP-C1, `FQ-03`. Enforce the applicable Android limit of `2100000000` and verify Apple compatibility for the numerical range required.
+
+| VER-09
+| One shared numerical allocation sequence exists. No independently maintained platform-specific, environment-specific or release-candidate counters are permitted.
+| DEC-31
+| B
+| The current common version declaration is shared by both platforms. Magic allocation does not yet exist.
+| PARTIAL
+| WP-C1.
+
+| VER-10
+| Magic is the sole routine mechanism that allocates new build numbers and increments the development revision. Neither branch promotion allocates or changes the inherited number.
+| DEC-32, DEC-33, DEC-34
+| B
+| The current procedure advances the number through reviewed version changes.
+| NONE
+| WP-C1, WP-C2.
+
+| VER-11
+| Allocation is atomic and durably recorded before application compilation begins. Failed, cancelled and indeterminate builds never release allocated numbers for reuse.
+| DEC-32
+| B
+| No Magic allocation mechanism exists.
+| NONE
+| WP-C1, `FQ-01`, `FQ-09`, `INV-01`, `INV-02`.
+
+| VER-12
+| Delivered artifact version information is extracted from the finished artifact and verified against authoritative build evidence. Subsequent deliveries inherit verified version information from the specifically identified preceding build.
+| DEC-31, DEC-33, DEC-34, DEC-35
+| B
+| `verify_artifact.sh` and `verify_ipa.py` inspect artifact version information and compare it with the current declaration.
+| PARTIAL
+| Implement artifact-derived inheritance and verification: WP-C2, WP-C3, `FQ-02`.
+
+| VER-13
+| Safe historical initialization must account for relevant previously consumed numbers on both platforms, including published, uploaded, failed, cancelled and indeterminate delivery attempts. A verified historical inventory, trustworthy numerical upper boundary or combination of both is acceptable.
+| DEC-37
+| B
+| Existing published floors, release records and branch history provide partial evidence.
+| PARTIAL
+| Establish sufficient historical initialization evidence: WP-C1, `FQ-12`.
+
+| VER-14
+| Magic refuses allocation unless safe historical initialization has been established. The first and subsequent allocations must satisfy number uniqueness, numerical ordering, encoding and platform limits.
+| DEC-37
+| B
+| No Magic initialization enforcement exists.
+| NONE
+| WP-C1, `FQ-12`, `INV-09`.
+
+| VER-15
+| Each build has one unambiguous authoritative declaration of its application version and numerical build number. Artifact fields, authorization records, release records and UI displays may contain verified derived representations. No derived representation may independently redefine the authoritative version information. The exact storage arrangement is not prescribed.
+| DEC-38
+| B
+| Current authoritative version information resides in `pubspec.yaml`.
+| PARTIAL
+| Establish the target storage and inheritance mechanisms: WP-C1, WP-C2, `FQ-01`, `FQ-02`, `INV-07`.
+
+| CFG-01
+| Environment selection is explicit. Missing or contradictory configuration causes the build to fail.
+| DEC-03
+| A
+| `build_config.dart`, `verify_build_config.sh`.
+| AUTO
+| Reuse existing verification.
+
+| CFG-02
+| The application flavor corresponds to the selected environment configuration.
+| DEC-03
+| A
+| Build configuration checks and `verify_artifact.sh`.
+| AUTO
+| Reuse existing verification.
+
+| CFG-03
+| Staging and production use separate application identities on both platforms.
+| DEC-03
+| A
+| Existing flavor identities and staging authorization constants.
+| PARTIAL
+| Complete production identity enforcement: `PRD-03`.
+
+| CFG-04
+| Staging uses Bitcoin Signet, the staging backend and disposable test accounts. Mainnet funds must not be used.
+| DEC-15
+| A
+| `config/build/staging.json`; artifact and backend URL verification, including V6.
+| PARTIAL
+| Test-account and funds restrictions remain human-controlled.
+|===
+
+The retired identifier `VER-05` is intentionally omitted.
+
+Its historical meaning is retained in xref:ch04-exceptions-and-reconciliation.adoc#ch04[Chapter 4].
+
+== Authorization and recovery
+
+[cols="1,4,2,1,3,1,3",options="header"]
+|===
+| ID | Requirement | Basis | Cls | Current mechanism | Type | Gap
+
+| AUT-01
+| An authorized release delivery requires a written CTO decision identifying the applicable version, build number and delivery attempt.
+| DEC-05, DEC-13
+| B
+| Existing authorization record references a written decision. The gate reportedly checks the authorization URL format only.
+| PARTIAL
+| Establish adequate verification of the referenced authorization and its authority: WP-A5, WP-C2.
+
+| AUT-02
+| Release authorization is recorded in a reviewed repository record and bound to the applicable version, application identity, certificate, native-library identity, workflow, gate and verification-tool identities.
+| DEC-05
+| A
+| Existing staging authorization gate.
+| AUTO
+| Preserve the existing bindings during implementation changes. Extend corresponding production enforcement.
+
+| AUT-03
+| Authorization is fail-closed. A record that does not authorize the specifically identified delivery authorizes nothing. The resting state is `WITHDRAWN`.
+| DEC-05, DEC-14
+| A
+| Existing authorization gate and workflow authorization job.
+| AUTO
+| Preserve during WP-C2 and production implementation.
+
+| AUT-04
+| Withdrawal on the current authorization source prevents subsequent authorization checks from succeeding. An already running operation that has passed its checks may require explicit cancellation.
+| DEC-06
+| A
+| Existing staging gate reads the current `development` authorization record.
+| PARTIAL
+| Verify cancellation and interruption handling: `CRD-09`, `FQ-14`.
+
+| AUT-05
+| A delivered staging commit satisfies the existing current-tip restriction, reviewed two-parent promotion requirement and authorized application source comparison. The relevant development source is the revision actually promoted, subject to the existing gate restrictions.
+| DEC-07
+| A
+| `check_staging_authorization.sh`, `commit_parents.sh`.
+| AUTO
+| Preserve the existing gate guarantees. Clarify exact source-comparison semantics during WP-C2. Production promotion is governed by `PRD-01`.
+
+| AUT-06
+| Apple signing takes place in a protected, branch-restricted environment with required reviewers. Environment approval confirms deployment; it does not independently create release authorization.
+| DEC-08
+| A
+| Protected signing environments and workflow configuration.
+| PARTIAL
+| Verify environment configuration against established requirements: WP-A2.
+
+| AUT-07
+| Following an authorized delivery attempt, authorization returns to `WITHDRAWN` through a reviewed pull request.
+| DEC-14
+| A
+| Human-controlled closeout, demonstrated through PR #153.
+| HUMAN
+| Operational closeout procedure: RUN-06.
+
+| AUT-08
+| Before temporary credential provisioning and promotion merge, verify applicable authorization, implementation bindings, application source, inherited build evidence, version validity, environment protection, credential absence, CI status, absence of conflicting runs, number availability and intended distribution prerequisites.
+| DEC-22, DEC-28
+| B
+| Existing manually performed pre-promotion checks.
+| HUMAN
+| Operator checker and runbook: WP-A1, WP-A2, RUN-02.
+
+| AUT-09
+| Pipeline implementation and verification are distinct from authorization of an actual release. Successful pipeline testing does not authorize public distribution.
+| CTO Phase 2 direction; DEC-27
+| B
+| Architectural and operational distinction.
+| HUMAN
+| Formalize production enforcement and acceptance: `PRD-00`.
+
+| AUT-10
+| Staging authorization identifies the application version, numerical build number and specifically selected successful Magic build.
+| DEC-33; I-01, I-04
+| B
+| The current authorization record identifies version information but not a Magic build.
+| PARTIAL
+| Implement explicit build selection and evidence verification: WP-C2.
+
+| RCV-01
+| A failed authorized staging delivery is not re-run using its consumed number. Under the target architecture, recovery requires a new Magic allocation, successful staging APK, new written authorization and reviewed promotion. Production partial-delivery recovery remains subject to UNR-09.
+| DEC-13, DEC-24
+| B
+| Existing human-controlled recovery procedure, supported by stale-tip and authorization restrictions.
+| PARTIAL
+| WP-C2, RUN-05, `FQ-06`, UNR-09.
+
+| RCV-02
+| Temporary delivery credentials are removed following successful, failed, cancelled or abandoned delivery operations, and their absence is verified.
+| DEC-28
+| B
+| Human-controlled credential removal.
+| HUMAN
+| Operator tool and interruption procedure: WP-A1, `FQ-14`.
+|===
+
+== Credentials
+
+[cols="1,4,2,1,3,1,3",options="header"]
+|===
+| ID | Requirement | Basis | Cls | Current mechanism | Type | Gap
+
+| CRD-01
+| Apple delivery credentials must not be stored permanently in GitHub. Their presence is restricted to an authorized delivery operation.
+| DEC-09, DEC-28
+| A
+| Temporary provisioning and manually verified absence following demonstrated deliveries.
+| HUMAN
+| Operator tool and read-only credential status verification: WP-A1, WP-A2.
+
+| CRD-02
+| Apple delivery credentials are exposed only to the specifically designated credential-consuming steps. They must not be available to third-party build code, unrelated jobs or dependencies, and must not appear in logs or retained evidence.
+| DEC-09, DEC-10
+| A
+| Step-specific environment variables, existing workflow isolation, static tests and parity checks.
+| AUTO
+| Preserve existing restrictions and verify any new signing implementation.
+
+| CRD-03
+| Temporary credential files are created only for the operation requiring them and are removed afterwards. They are not retained as workflow artifacts or evidence.
+| DEC-09; existing workflow
+| A
+| Existing temporary key-file creation and cleanup steps.
+| PARTIAL
+| Demonstrate cleanup under interruption and cancellation: `FQ-14`.
+
+| CRD-04
+| The sole Apple credential-management sequence is readiness checks, credential upload, verification of presence, promotion merge, protected signing approval, completion and outcome verification, credential removal and verification of absence.
+| DEC-28
+| B
+| Manually demonstrated through delivery run `46005605593`.
+| HUMAN
+| Operator tool and operational runbook: WP-A1.
+
+| CRD-05
+| Credential provisioning, status verification and cleanup are supported by a local operator-controlled tool. The tool must not print credential values, create unnecessary persistent copies or retain them in logs or evidence.
+| CTO direction; DEC-28
+| D
+| No operator tool has been implemented.
+| NONE
+| WP-A1; xref:ch08-operator-credential-tool.adoc#ch08[Chapter 8].
+
+| CRD-06
+| Long-term Apple credential custody, recovery, continuity, privileges, rotation and revocation must be established. The previously proposed requirement for at least two custodians remains subject to explicit CTO resolution.
+| Release policy section 11.1; UNR-02
+| F
+| Original credential held outside GitHub. Complete custody arrangements have not been independently verified.
+| NONE
+| UNR-02.
+
+| CRD-07
+| The three temporary Apple delivery credentials are removed regardless of delivery outcome. Their absence is verified at the applicable environment, repository and organization scopes. Unrelated repository or organization secrets are not modified.
+| DEC-28
+| B
+| Manual removal and verification.
+| HUMAN
+| WP-A1.
+
+| CRD-08
+| Uploading Apple delivery credentials after the promotion merge is not a supported alternative provisioning procedure.
+| DEC-28
+| B
+| Established operating procedure.
+| HUMAN
+| Implement corresponding operator-tool refusal and runbook restrictions: WP-A1.
+
+| CRD-09
+| An abandoned, interrupted, cancelled or timed-out signing operation must be brought to a safe conclusion. Pending operations are cancelled where necessary, temporary credentials are removed, and their absence is verified. Credentials must not remain provisioned indefinitely while waiting for approval. Indeterminate delivery outcomes are recorded conservatively for number-consumption purposes.
+| DEC-06, DEC-13, DEC-28
+| B
+| Existing workflow contains cleanup steps. Cancellation behavior has not been comprehensively demonstrated.
+| PARTIAL
+| Establish maximum operational waiting periods and interruption procedures: WP-A1, `FQ-14`, `INV-11`. Production partial recovery remains subject to UNR-09.
+|===
+
+The existing use of an Admin-role App Store Connect credential does not establish that this privilege level is permanently required.
+
+Credential privileges and long-term custody remain subject to UNR-02.
+
+== Build, signing, verification and delivery
+
+[cols="1,4,2,1,3,1,3",options="header"]
+|===
+| ID | Requirement | Basis | Cls | Current mechanism | Type | Gap
+
+| BLD-01
+| Third-party application build code runs without release signing credentials, using the fixed reviewed source revision and applicable pinned toolchain. Delivery build jobs must not independently select a newer branch revision.
+| DEC-10, DEC-32, DEC-34
+| A
+| Existing iOS build and signing isolation and toolchain checks.
+| PARTIAL
+| Preserve existing enforcement. Extend the same security property to Magic and production delivery where applicable.
+
+| BLD-02
+| The iOS archive transferred to the signing job is digest-checked and structure-validated. Temporary handover retention must be sufficient for the authorized delivery operation.
+| DEC-10
+| A
+| One-day handover artifact and `validate_handover_archive.py`.
+| AUTO
+| Preserve verification. Reconcile retention constraints with interruption and recovery procedures.
+
+| BLD-03
+| The native Rust library and applicable `dlc_wallet` framework match their authorized hash pins. Framework pin measurement occurs through credential-free preflight.
+| DEC-11, DEC-17
+| A
+| Existing native-library verification and preflight workflow.
+| AUTO
+| EXC-07; native-library provenance remains subject to UNR-07.
+
+| BLD-04
+| The Apple credential-bearing signing job executes only the designated repository scripts from the authorized workflow source and necessary Apple tools. It must not execute untrusted build code or executable content supplied through the handover archive.
+| DEC-10
+| A
+| Existing signing workflow and static verification tests.
+| AUTO
+| Preserve this isolation through all implementation changes.
+
+| BLD-05
+| Allocation, compilation, signing and publication operations receive only the permissions necessary for their responsibilities. Any privileged allocation or publication operation must remain isolated from third-party build execution. New repository write permissions or privileged identities require explicit review.
+| DEC-32, DEC-38; `INV-04`
+| B
+| Magic allocation and persistent publication mechanisms do not exist.
+| NONE
+| WP-C1, WP-C3, `FQ-01`, `FQ-05`.
+
+| SIG-01
+| The delivered IPA carries the explicitly authorized Apple Distribution signing identity and satisfies the applicable certificate fingerprint verification.
+| DEC-11
+| A
+| Existing cloud-managed Apple Distribution signing and V3/V7 verification.
+| AUTO
+| EXC-01. Reconfirm identity and applicable signing arrangements for production.
+
+| SIG-02
+| The signed IPA passes the applicable V1 to V9 verification checks before upload, including permitted signing-related differences and native artifact verification.
+| DEC-11
+| A
+| `verify_ipa.py` and existing verification workflow.
+| AUTO
+| Trust-anchor and revocation limitations: EXC-11.
+
+| SIG-03
+| The exact verified IPA is uploaded to its explicitly authorized application identity. Artifact digest equality is rechecked before delivery.
+| DEC-12
+| A
+| Existing upload step, digest checks and application identity constants.
+| AUTO
+| Preserve staging enforcement and establish equivalent production enforcement.
+
+| SIG-04
+| Production Android signing is explicit and uses the authorized production signing identity. Missing or invalid production signing configuration must cause failure rather than fallback to a debug or staging key.
+| `ANDROID_RELEASE.md`; UNR-01
+| A
+| Existing Gradle signing rules and `test_android_gradle_signing.sh`.
+| AUTO
+| Production signing arrangement: UNR-01 (c). Staging signing identity: UNR-01 (a).
+
+| DEL-01
+| Application delivery follows the authoritative build-trigger matrix in Chapter 11. Magic generates the staging APK and allocates the number. Development-to-staging promotion delivers the staging IPA. Staging-to-production promotion generates the production APK, AAB and IPA. Neither promotion increments the number.
+| DEC-36
+| B
+| Existing workflow mappings and `tool/plan_build_variants.sh` implement the earlier architecture.
+| NONE
+| WP-C1, WP-C2 and production pipeline implementation.
+
+| DEL-02
+| Magic generates the installable Android APK using the staging application identity and configuration. The finished artifact is verified, its signing status recorded and its successful build evidence preserved.
+| DEC-32
+| B
+| Existing Android build and artifact verification mechanisms.
+| PARTIAL
+| Consolidate the existing mechanisms and introduce Magic: WP-C1, `FQ-04`, `FQ-08`.
+
+| DEL-03
+| The approved staging APK access and distribution policy is explicitly stated and enforced. Public distribution must not occur before the applicable policy permits it.
+| UNR-01 (b); existing release policy section 8.2
+| F
+| Existing temporary artifact storage. No permanent staging access policy established.
+| NONE
+| UNR-01 (b), WP-C3.
+
+| DEL-04
+| Staging iOS delivery targets the designated staging application and TestFlight internal testing only. It does not submit the application for App Review or public release.
+| DEC-12
+| A
+| Existing staging workflow and authorization constants.
+| AUTO
+| Preserve the staging restriction. Production distribution is governed separately.
+
+| DEL-05
+| Staging iOS delivery inherits version information from the specifically authorized successful Magic APK. Artifact identity, extracted version and durable evidence are verified. Application source differences and the existence of newer successful Magic builds are reported without silently substituting another build. Neither condition alone prohibits delivery.
+| DEC-33; EXC-13; I-01
+| B
+| No artifact-derived staging version inheritance exists.
+| NONE
+| WP-C2, `FQ-05`, `FQ-07`.
+
+| DEL-06
+| Production delivery generates the APK, AAB and IPA from one fixed approved application source, with identical version information inherited from the specifically identified accepted staging delivery. Production does not consult the current development counter or allocate a new number.
+| DEC-34
+| B
+| Complete production delivery infrastructure has not been implemented.
+| NONE
+| `PRD-01`, `PRD-17`, UNR-06, UNR-09.
+
+| DEL-07
+| Following initial successful publication, a production APK remains persistently and publicly downloadable. Successful staging APKs are persistently stored under their approved access policy. Failed, interrupted or cancelled replacements do not remove the preceding successful APK. An older concurrent build must not silently replace a newer successfully published build as the current APK.
+| DEC-35; `INV-08`
+| B
+| Existing temporary Actions artifact retention.
+| NONE
+| WP-C3, `FQ-09`, `FQ-10`, UNR-01.
+
+| DEL-08
+| Magic is the sole routine staging APK delivery mechanism. Automatic validation may generate temporary compilation outputs but must not allocate numbers, publish alternative staging APKs, retain alternative installable staging deliverables or create and replace application releases.
+| DEC-39
+| B
+| Existing staging push workflows generate or may retain Android APK artifacts.
+| NONE
+| WP-C1, WP-C2. Verify workflow triggers and artifact retention behavior.
+|===
+
+Production publication remains subject to its separate authorization, signing and distribution requirements.
+
+The existence of a successfully built or signed artifact does not establish authorization to publish it.
+
+== Evidence, documentation and infrastructure
+
+[cols="1,4,2,1,3,1,3",options="header"]
+|===
+| ID | Requirement | Basis | Cls | Current mechanism | Type | Gap
+
+| EVD-01
+| Every delivery produces identifiable evidence with an associated manifest. Evidence must not contain credential values or other prohibited secrets.
+| DEC-10, DEC-23
+| A
+| Existing evidence generation, manifest and secret-scanning steps.
+| AUTO
+| Preserve and extend to the target delivery mechanisms.
+
+| EVD-02
+| Release evidence remains durably retrievable and protected against unauthorized modification. Authoritative human-oriented release records are version-controlled. Essential release evidence must not depend exclusively on expiring workflow artifacts.
+| DEC-23, DEC-35
+| B
+| Manually maintained repository release record, demonstrated through PR #153.
+| PARTIAL
+| WP-B4, WP-C3, `FQ-05`, `FQ-13`.
+
+| EVD-03
+| Release records distinguish verified facts, human-reported observations and unconfirmed statements.
+| DEC-23
+| B
+| Existing delivery-record structure and manually maintained evidence.
+| PARTIAL
+| Establish consistent record conventions and verification: WP-B4, REC-01 template.
+
+| EVD-04
+| Artifacts subject to restricted retention or distribution must be protected according to their approved access policy. Where encrypted retention is required, only the designated recipients may access the artifact.
+| `RETAINED_ARTIFACTS.md`; UNR-01, UNR-02
+| C
+| Existing encrypted retention mechanism. No recipients are currently reported.
+| PARTIAL
+| Resolve applicable retention and recipient policies. Public production APKs are not subject to private distribution encryption.
+
+| EVD-05
+| Durable machine-readable build evidence identifies application version, build number, source identity, environment, workflow execution, outcome and applicable signing and access status. Where an artifact exists, its checksum and verified identity are recorded. Every allocated number remains retrievable, including failed, cancelled, indeterminate and unpublished builds.
+| DEC-35, DEC-37
+| B
+| Existing `cadena-build-manifest/1` provides several required fields. Persistent allocation and complete outcome records do not exist.
+| PARTIAL
+| WP-C1, WP-C3, `FQ-13`, `INV-05`.
+
+| EVD-06
+| The staging delivery record preserves the application source comparison between the selected Magic APK and the promoted iOS source. Subsequent production authorization evidence preserves the applicable comparison and its consequences for staging validation.
+| DEC-33, DEC-34; EXC-13
+| B
+| No corresponding source-comparison record exists.
+| NONE
+| WP-C2, WP-B4, `FQ-07`, UNR-06.
+
+| EVD-07
+| Historical build and delivery evidence cannot be silently overwritten or removed. Later states, corrections and additional facts remain traceable. Version inheritance is recorded by the inheriting delivery and does not redefine the preceding build record.
+| DEC-23, DEC-35, DEC-38
+| B
+| No comprehensive persistent evidence lifecycle mechanism exists.
+| NONE
+| WP-C3, `FQ-05`, `FQ-13`. Append-only records are an acceptable mechanism, not a prescribed storage implementation.
+
+| DOC-01
+| Native modular AsciiDoc is the canonical human-oriented documentation format. Machine-readable files and externally prescribed formats retain their required formats.
+| DEC-25
+| B
+| Existing documentation convention and proposed framework.
+| HUMAN
+| WP-B1, WP-B3. Verify independent rendering and book inclusion.
+
+| DOC-02
+| Each requirement has one authoritative normative location. Other documents reference it rather than independently redefine it. Current implementation status is maintained separately from normative policy.
+| CTO Phase 2 direction
+| B
+| Existing documentation contains overlapping and outdated statements.
+| NONE
+| WP-B1, WP-B2, WP-B3. Implementation observations in this matrix must remain consistent with the maintained current-state documentation.
+
+| DOC-03
+| Machine-consumed state is maintained in suitable machine-readable structures and is not dependent on parsing incidental narrative formatting.
+| CTO Phase 2 direction
+| B
+| Existing authorization records contain both machine-consumed information and explanatory prose.
+| PARTIAL
+| WP-A5; xref:ch07-machine-readable-state.adoc#ch07[Chapter 7].
+
+| DOC-04
+| Proposed: authorization-bound implementation files should not depend on incidental documentation paths or wording where such dependencies have no operational purpose.
+| Proposed implementation principle
+| D
+| Existing bound files contain documentation references.
+| NONE
+| WP-A5. Preserve operationally necessary references and existing authorization bindings.
+
+| INF-01
+| Proposed: required repository settings, environment protections and relevant external prerequisites are verifiable before promotion. Prefer a small machine-readable declaration and read-only verification mechanism where this reduces manual operational checks.
+| DEC-22; proposed implementation mechanism
+| D
+| Existing manually performed infrastructure and prerequisite checks.
+| HUMAN
+| WP-A2. Avoid duplicating authoritative platform state unnecessarily.
+
+| INF-02
+| Third-party GitHub Actions are pinned by commit SHA. Default workflow permissions are read-only. Elevated permissions are explicitly scoped to operations that require them.
+| Existing repository convention; DEC-10
+| A
+| Existing workflow SHA pins and reported read-only default permissions. Repository-wide mandatory SHA-pinning enforcement is not established.
+| PARTIAL
+| WP-A3. Review privileged allocation and publication operations separately.
+
+| INF-03
+| Repository secret scanning, push protection and security-alert management satisfy the established repository security requirements.
+| `CLAUDE.md` section 7
+| D
+| Secret scanning and push protection were reported disabled during the audit.
+| PARTIAL
+| WP-A3. Verify current feature availability and settings before implementation.
+
+| INF-04
+| Static security analysis runs as required. Dismissed alerts retain their rationale, applicable scope and acceptance conditions. Material changes require reassessment.
+| Recovery decision R1; EXC-05
+| A
+| Existing CodeQL configuration and manually managed alert dispositions.
+| PARTIAL
+| Resolve EXC-05 and verify the proposed remediation.
+
+| INF-05
+| Allocation and durable build-record storage must prevent or detect unauthorized creation, modification, replacement and deletion. Historical allocations remain consumed. The selected mechanism preserves existing repository governance and does not introduce unnecessary privileged identities or permissions.
+| DEC-32, DEC-35, DEC-38
+| B
+| No protected allocation and durable build-record mechanism has been established.
+| NONE
+| WP-C1, WP-C3, `FQ-01`, `FQ-05`, `FQ-13`. Reference namespace rulesets are a candidate mechanism, not an approved architectural requirement.
+|===
+
+== Enforcement principles
+
+The following principles apply when implementing the outstanding mechanisms.
+
+=== Preserve existing guarantees
+
+Existing authorization, environment separation, signing isolation, artifact verification and repository protection must not be weakened merely to accommodate the target build architecture.
+
+Changes to authorization-bound files follow the reviewed implementation procedure.
+
+Existing security assertions remain applicable unless explicitly replaced by equivalent or stronger assertions.
+
+=== Prefer existing mechanisms
+
+Existing workflows, verification scripts, manifests and tests should be consolidated and reused wherever practicable.
+
+A new component is justified by an identified requirement or implementation gap, not by architectural preference alone.
+
+=== Distinguish a requirement from its implementation
+
+An architectural requirement defines the property that must hold.
+
+The mechanism defines how that property is achieved.
+
+Where the mechanism remains unresolved, the requirement must not prescribe an unverified implementation as if it were already approved.
+
+This distinction applies particularly to:
+
+* Version allocation storage.
+* Historical build-number initialization.
+* Persistent artifact and evidence storage.
+* Generated Git references.
+* Workflow write permissions.
+* Repository and reference protection.
+* Signing-key custody.
+* Machine-readable infrastructure declarations.
+
+=== Verify the actual behavior
+
+Implementation acceptance requires appropriate evidence.
+
+Depending on the requirement, this may include:
+
+* Automated tests.
+* Workflow execution evidence.
+* Repository configuration verification.
+* Artifact inspection.
+* Failure and cancellation testing.
+* Concurrency testing.
+* Manual operational verification.
+
+The existence of a script, configuration file or documented procedure is not sufficient evidence that its required behavior has been demonstrated.
+
+=== Preserve authorization boundaries
+
+An operational mechanism must not silently resolve an outstanding CTO decision.
+
+Where implementation encounters a genuine security, operational or distribution policy question, the corresponding unresolved decision must be addressed before the affected mechanism becomes operational.
+
+Unrelated implementation work may proceed independently.
+
+== Requirement maintenance
+
+Requirement identifiers remain stable.
+
+When a requirement changes:
+
+. Identify the architectural decision or technical finding that justifies the change.
+. Update its authoritative normative definition.
+. Reconcile this matrix and the corresponding enforcement mechanism.
+. Update affected verification and acceptance tests.
+. Preserve the rationale of superseded requirements where historically relevant.
+
+A retired identifier must not be reassigned to an unrelated requirement.
+
+Requirements must not be duplicated into independently maintained normative documents.
+
+Where a machine-readable requirement register or generated matrix is introduced, its relationship to the authoritative human-readable documentation must be explicit.
+
+There must not be two independently maintained authorities for the same requirement.
+
+== References
+
+* xref:ch01-scope-and-method.adoc#ch01[Chapter 1]: Scope, vocabulary and classification.
+* xref:ch02-established-decisions.adoc#ch02[Chapter 2]: Established decisions.
+* xref:ch03-unresolved-decisions.adoc#ch03[Chapter 3]: Unresolved decisions.
+* xref:ch04-exceptions-and-reconciliation.adoc#ch04[Chapter 4]: Exceptions, reconciliation and historical record.
+* xref:ch06-document-hierarchy-and-mapping.adoc#ch06[Chapter 6]: Documentation hierarchy.
+* xref:ch07-machine-readable-state.adoc#ch07[Chapter 7]: Machine-readable state.
+* xref:ch08-operator-credential-tool.adoc#ch08[Chapter 8]: Operator credential-management tool.
+* xref:ch09-migration-sequence.adoc#ch09[Chapter 9]: Migration and implementation sequence.
+* xref:ch10-production-extensions.adoc#ch10[Chapter 10]: Production-specific requirements.
+* xref:ch11-build-and-release-architecture.adoc#ch11[Chapter 11]: Build and release architecture, invariants and feasibility investigations.

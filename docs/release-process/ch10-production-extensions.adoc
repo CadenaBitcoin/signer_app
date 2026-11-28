@@ -1,0 +1,1032 @@
+[[ch10]]
+= Production-specific extensions and framework validation
+:description: Production release requirements, reuse of the staging infrastructure, outstanding production-specific mechanisms and validation of the release-framework documentation.
+
+*Scope:* The requirements and implementation activities necessary to extend the demonstrated staging infrastructure into a controlled production delivery pipeline.
+
+*Status:* Proposal for review. Implementation and verification of the production pipeline do not constitute authorization of a production release.
+
+== Objective
+
+The production delivery infrastructure extends the demonstrated staging release infrastructure and incorporates the approved build and versioning architecture.
+
+The production implementation must:
+
+* Reuse existing mechanisms wherever practicable.
+* Preserve established authorization and security guarantees.
+* Inherit version information from the specifically accepted staging delivery.
+* Generate consistent production APK, AAB and IPA artifacts.
+* Support controlled production signing and distribution.
+* Maintain persistent public availability of the production APK.
+* Preserve durable and verifiable release evidence.
+* Remain reconstructible independently of a particular developer, assistant or workstation.
+
+The production implementation also serves as a practical validation of this documentation framework.
+
+== Pipeline readiness and release authorization
+
+Implementing a production pipeline and authorizing a production release are separate activities.
+
+The following stages must remain distinguishable.
+
+[cols="2,4,3",options="header"]
+|===
+| Stage | Meaning | Required evidence
+
+| Implementation readiness
+| The architectural requirements are sufficiently established to implement the corresponding mechanism.
+| Established requirements, identified dependencies and resolved decisions necessary for implementation.
+
+| Credential-free verification
+| The implemented mechanisms have been exercised without production delivery credentials.
+| Automated tests, production-flavor build evidence, authorization refusal tests, configuration verification and applicable dry runs.
+
+| Production pipeline readiness
+| The intended production delivery mechanisms have been implemented and verified to the extent possible without authorizing an actual production release.
+| Readiness report identifying demonstrated behavior, outstanding verification limitations and unresolved operational dependencies.
+
+| Production release authorization
+| The CTO explicitly authorizes the delivery of a specifically identified production version.
+| Written version-bound authorization, accepted staging validation, applicable security acceptance and verified delivery prerequisites.
+
+| Demonstrated production delivery
+| An authorized production delivery has actually been performed.
+| Build, signing, verification, upload and publication evidence for the corresponding artifacts and distribution channels.
+|===
+
+Successful credential-free verification does not establish that production credentials work, that signing succeeds or that external stores accept the resulting artifacts.
+
+These properties remain unverified until demonstrated through an appropriately authorized operation.
+
+=== PRD-00: Production pipeline readiness
+
+The production pipeline readiness assessment must establish that:
+
+* Applicable production mechanisms have been implemented.
+* Requirements have identifiable enforcement mechanisms and verification evidence.
+* Credential-free production builds and preflight checks succeed.
+* Production authorization gates refuse unauthorized delivery.
+* Production environment protection corresponds to the approved configuration.
+* The production authorization is `WITHDRAWN`.
+* The three designated temporary Apple credentials are absent.
+* Applicable operational procedures have been exercised through credential-free dry runs.
+* Outstanding production decisions and operational verification limitations are explicitly documented.
+* The CTO has accepted the readiness report.
+
+Requirements that depend on unresolved CTO decisions must be identified as incomplete.
+
+The readiness report must not represent a mechanism as operationally ready when an unresolved decision prevents its implementation or use.
+
+Independent implementation and verification may proceed without waiting for unrelated production acceptance decisions.
+
+A complete production delivery capability requires resolution of the decisions necessary for its intended operation.
+
+A readiness report authorizes no release.
+
+=== Production release authorization
+
+An actual production release requires a separate written, version-bound CTO decision.
+
+Before authorization, all applicable outstanding production decisions must be resolved, including:
+
+* UNR-01 (c): Android production signing and distribution.
+* UNR-02: Apple credential custody and privileges.
+* UNR-06: Required staging validation evidence.
+* UNR-07: Native-library provenance.
+* UNR-08: Production release acceptance criteria.
+* UNR-09: Partial production delivery and recovery.
+
+The timing of these decisions follows xref:ch03-unresolved-decisions.adoc#ch03[Chapter 3].
+
+Temporary staging exceptions do not automatically apply to production.
+
+Their production applicability requires explicit assessment and, where necessary, separate authorization.
+
+== Reuse of the staging infrastructure
+
+The demonstrated staging infrastructure is the principal implementation reference.
+
+The approved target architecture, rather than every incidental property of the existing staging implementation, determines the production requirements.
+
+[cols="3,3,4",options="header"]
+|===
+| Component | Intended reuse | Production-specific considerations
+
+| V1 to V9 verification
+| Reuse existing verification mechanisms.
+| Apply production application identity, configuration, certificate and native-library expectations. Resolve applicable staging verification limitations.
+
+| Archive handover validation
+| Reuse the existing digest and structural verification mechanism.
+| Verify the production archive and its authorized build inputs.
+
+| Evidence generation
+| Reuse existing manifests, evidence sealing and secret-scanning mechanisms.
+| Extend evidence to cover all production artifacts and distribution outcomes.
+
+| Apple credential handling
+| Reuse the established credential isolation and temporary key-file handling.
+| Preserve the approved eight-step procedure. Apply production-specific credential custody requirements.
+
+| Credential-free application build
+| Reuse and parameterize the existing build mechanism.
+| Build the production flavor from the fixed authorized source revision.
+
+| Authorization gate
+| Reuse common gate structure and verification properties.
+| Establish production-specific application identities, accepted staging delivery, promotion restrictions and authorization bindings.
+
+| Build records and version inheritance
+| Reuse the mechanisms established by the revised staging architecture.
+| Production inherits from the specifically accepted staging delivery rather than directly from the current development allocation state.
+
+| Native-framework preflight
+| Adapt the existing credential-free preflight.
+| Establish the expected production framework identity.
+
+| Operator credential tool
+| Reuse the local operator-controlled mechanism.
+| Require explicit production environment selection and production-specific readiness verification.
+
+| Operational runbooks
+| Reuse common procedures where applicable.
+| Extend authorization, distribution, incident handling and recovery procedures for production.
+|===
+
+The reuse of an existing mechanism does not eliminate the need to verify its production applicability.
+
+Where existing staging and production workflows contain equivalent security-critical operations, preserve their equivalence through shared implementation or appropriate verification tests.
+
+Duplicated workflow code is not required merely because the existing parity test compares equivalent implementations.
+
+Any consolidation must preserve the established security properties.
+
+== Production-specific requirements
+
+The following requirements supplement the general release requirements defined in xref:ch05-requirements-and-enforcement.adoc#ch05[Chapter 5].
+
+The requirement identifiers remain stable.
+
+Implementation mechanisms and verification evidence must be associated with these identifiers during implementation.
+
+=== PRD-01: Production promotion and authorization gate
+
+Production delivery originates from a reviewed promotion from `staging` into `production`.
+
+The production authorization identifies:
+
+* The application version and numerical build number.
+* The specifically accepted staging delivery.
+* The authorized production source.
+* The applicable production application identities.
+* The required certificate and native-library identities.
+* The applicable workflow, gate and verification-tool identities.
+
+The delivered source must satisfy the production branch and promotion restrictions.
+
+The promoted production application content must correspond to the source used for the accepted staging iOS delivery, subject to explicitly permitted environment-specific differences.
+
+The associated Android staging source comparison remains part of the acceptance evidence.
+
+The gate must not silently select the latest staging build or delivery.
+
+Production identity information reported by the existing infrastructure audit includes:
+
+[cols="2,3",options="header"]
+|===
+| Property | Reported value
+
+| iOS bundle identifier
+| `com.app.cadenabitcoin`
+
+| Apple application identifier
+| `6753348211`
+|===
+
+These values and the applicable team identity must be reconfirmed against the production infrastructure before operational use.
+
+*Dependencies:* WP-C2, UNR-06, `FQ-05`, `FQ-07`.
+
+=== PRD-02: Staging validation precondition
+
+Production release authorization requires acceptance of the specifically identified staging delivery.
+
+The acceptance evidence must identify:
+
+* The delivered staging iOS application.
+* The associated Magic APK.
+* The application source used by each artifact.
+* Relevant source discrepancies.
+* The validation activities performed.
+* The observed outcomes.
+* The applicable acceptance decision.
+
+The final validation requirements remain subject to UNR-06.
+
+The production gate verifies the required acceptance evidence once its normative definition has been established.
+
+Successful staging delivery is not equivalent to successful staging validation.
+
+The historical smoke test of installation, application launch and login does not establish comprehensive production readiness.
+
+*Dependencies:* UNR-06, UNR-08.
+
+=== PRD-03: Production and staging identity separation
+
+Staging and production applications remain distinct on both platforms.
+
+A staging authorization must not authorize production delivery.
+
+A production authorization must not authorize staging delivery.
+
+Production artifact verification establishes:
+
+* The expected production application identity.
+* The expected production backend configuration.
+* The applicable Bitcoin Mainnet configuration.
+* Absence of unintended staging configuration.
+* The correct application flavor.
+* The applicable production signing identity.
+
+Environment verification must establish the actual effective configuration.
+
+A simple textual search for words such as `signet` or `staging` is not sufficient where those words may legitimately occur in shared application code or inactive configuration.
+
+The verification mechanism must distinguish active application configuration from incidental textual content.
+
+*Basis:* DEC-03, `CFG-01`, `CFG-02`, `CFG-03`.
+
+=== PRD-04: Production native-framework pin and preflight
+
+The production native framework must match its explicitly authorized identity.
+
+The existing staging framework pin cannot automatically be used for production.
+
+The compiled `dlc_wallet` framework may contain flavor-dependent build paths and other build-environment-dependent content.
+
+The existing audit reports that the earlier production version `1.0.4` used a framework pin beginning with `9a2d1d98`, established from source revision `42d358a` using an earlier toolchain.
+
+This historical pin does not establish the expected identity of a new production build.
+
+A credential-free production-flavor preflight must establish or verify the expected native-framework identity.
+
+A new pin is required when the existing authorized pin is no longer applicable.
+
+Unchanged and independently verified pins do not need to be replaced merely because another release is prepared.
+
+The expected pin must be established through the reviewed authorization procedure, not accepted automatically from the artifact being authorized.
+
+*Dependencies:* DEC-11, DEC-17, EXC-07, UNR-07.
+
+=== PRD-05: Protected production signing environment
+
+Production signing uses the designated protected production environment.
+
+The environment must enforce:
+
+* The approved production deployment-branch policy.
+* Required human approval.
+* Appropriate restrictions on administrative bypass.
+* Explicit environment selection.
+* Temporary exposure of the designated Apple delivery credentials.
+* Verified absence of those credentials when no delivery is active.
+
+The existing production signing environment is:
+
+[source,text]
+----
+ios-hosted-signing
+----
+
+The release audit reports that its existing deployment policy supports the earlier manual workflow originating from `development`.
+
+The target production deployment policy must correspond to the approved production promotion mechanism.
+
+The actual environment settings must be verified before operational adoption.
+
+The staging signing environment remains independently protected.
+
+*Dependencies:* DEC-08, DEC-28, WP-A2.
+
+=== PRD-06: Production credential custody
+
+Production credential custody must be established through UNR-02.
+
+The decision must address:
+
+* Required credential privileges.
+* Credential ownership and authorized operators.
+* Long-term custody.
+* Backup and recovery.
+* Operational continuity.
+* Rotation and emergency revocation.
+* Whether staging and production share the same Apple credential.
+
+The temporary provisioning and removal sequence remains governed by DEC-28.
+
+The existing successful staging procedure does not establish that the current Admin-role Apple credential is the appropriate permanent production arrangement.
+
+Credential-free implementation may proceed before the final custody arrangement is established.
+
+*Dependency:* UNR-02.
+
+=== PRD-07: Production iOS destination discipline
+
+The production iOS delivery must target the designated production application in App Store Connect.
+
+The existing automated iOS delivery policy limits delivery to internal TestFlight use.
+
+App Review submission and public App Store publication remain outside the currently established automated scope.
+
+Successful upload must not be represented as public App Store publication.
+
+Any future automation of App Review submission or public release requires an explicitly established distribution policy.
+
+The production workflow must not accidentally upload to the staging application.
+
+*Basis:* Existing release policy sections 2.3, 8.1 and 11.16.
+
+=== PRD-08: Production Android signing and delivery
+
+Production delivery generates an APK and an AAB from the same authorized application source and inherited version information.
+
+Both artifacts must satisfy the applicable production identity and signing requirements.
+
+The production Android signing mechanism must address:
+
+* The Cadena-controlled signing or upload credentials.
+* Google Play application signing.
+* The signing identity of the directly distributed APK.
+* Signing-key custody and recovery.
+* Isolation of production signing credentials from third-party build execution.
+* Verification of the final signed artifacts.
+* Controlled Google Play delivery.
+* Persistent public APK distribution.
+
+Existing mechanisms such as the following should be reused where applicable:
+
+* `tool/release_android.sh`
+* `tool/verify_android_release.py`
+* `config/release/android_signing.json`
+* Existing Gradle signing configuration and signing tests.
+
+The existing production Android procedure reportedly performs signing locally.
+
+The demonstrated staging APK procedure does not establish a suitable production signing mechanism.
+
+Production APK and AAB signing must fail rather than silently fall back to a debug or staging identity.
+
+Cross-channel update compatibility between Google Play and direct APK installations remains subject to UNR-01 (c).
+
+*Dependency:* UNR-01 (c).
+
+=== PRD-09: Production delivery-consumption accounting
+
+A production build inherits a previously allocated number from the specifically accepted staging delivery.
+
+This inheritance is intentional.
+
+It does not constitute a new independent allocation.
+
+The production delivery must establish that the inherited number is eligible for the intended production application and distribution channel.
+
+The applicable checks include:
+
+* Previous production delivery attempts.
+* Store-side upload history.
+* Successful and unsuccessful delivery outcomes.
+* Indeterminate upload attempts.
+* Required numerical ordering.
+* Applicable store-specific uniqueness restrictions.
+
+The production gate must reject an unauthorized repeated delivery using an already consumed number.
+
+Existing branch history and durable delivery records should be reused wherever sufficient.
+
+An independent production allocation counter is prohibited.
+
+Partial production delivery and any permitted completion or recovery procedure remain subject to UNR-09.
+
+*Dependencies:* `VER-04`, `VER-09`, `FQ-06`, UNR-09.
+
+=== PRD-10: Persistent production release objects
+
+The production APK must have a persistent public distribution location.
+
+GitHub Releases is the preferred mechanism.
+
+The distribution mechanism must associate the APK with:
+
+* Its application version.
+* Its numerical build number.
+* Its production application identity.
+* Its application source.
+* Its verified checksum.
+* Its durable release evidence.
+
+Automatically generated Git tags may support GitHub Release creation.
+
+They must derive from existing version and source information.
+
+They introduce no independent release candidate counter and require no routine manual tagging.
+
+The release object must not become an independent release authorization mechanism.
+
+The stable production download location must identify the latest successfully published production APK.
+
+Failed or unfinished replacements must not disrupt availability of the preceding successful APK.
+
+*Dependencies:* DEC-29, DEC-35, WP-C3, `FQ-10`.
+
+=== PRD-11: Production release authority
+
+Production release authorization explicitly acknowledges that the delivered application is intended for the production environment and Bitcoin Mainnet.
+
+The written decision must identify the applicable version, source, accepted staging delivery and authorized distribution scope.
+
+The authorization must distinguish:
+
+* Release approval.
+* Repository promotion.
+* Protected signing approval.
+* Store delivery.
+* Public publication.
+
+The possession of signing credentials does not independently authorize production release.
+
+The existing governance documentation must be reconciled through REC-08.
+
+Production acceptance must also address the applicable operational limitations, security exceptions and incident-response arrangements.
+
+A production authorization does not automatically accept previously granted staging exceptions.
+
+*Dependencies:* DEC-05, DEC-08, DEC-27, REC-08, UNR-08.
+
+=== PRD-12: Production incident response and rollback
+
+The production infrastructure must support an appropriate response to a defective or compromised application release.
+
+The operational procedure must address, where applicable:
+
+* Withdrawal of further release authorization.
+* Cancellation of pending or active delivery operations.
+* Credential removal and emergency credential revocation.
+* Halting or limiting a store rollout.
+* Removal or expiration of a distributed build where supported.
+* Suspension of an unsafe public APK download.
+* Communication with affected users.
+* Preservation of incident evidence.
+* Preparation and authorization of a corrective release.
+
+The procedure must distinguish between actions that prevent further distribution and actions affecting applications already installed by users.
+
+Removing an APK from a distribution location does not remove it from existing devices.
+
+Withdrawing release authorization does not revoke an already installed application.
+
+A previous application version cannot necessarily be restored through an ordinary update because platform version ordering may prohibit downgrades.
+
+Rollback must therefore not be represented as an assured restoration of all users to a previous version.
+
+A corrective release may require a new Magic allocation and the corresponding staging and production authorization procedure.
+
+*Dependencies:* UNR-02, UNR-08, UNR-09.
+
+=== PRD-13: Production store and platform compliance
+
+Production distribution must satisfy the applicable Apple and Google Play requirements.
+
+The production acceptance process must address, where applicable:
+
+* Export compliance.
+* App Privacy declarations.
+* Privacy manifests.
+* Required-reason API declarations.
+* Supported operating-system versions.
+* Required SDK and build-tool versions.
+* Applicable application permission declarations.
+* Store submission and distribution requirements.
+
+The existing audit identifies the following Apple-related matters requiring attention:
+
+* Privacy-manifest decision X2.
+* Minimum supported iOS version.
+* Reported platform requirements taking effect in April 2027.
+* The associated possible requirement for an updated Xcode toolchain.
+
+The reported April 2027 requirements include an iOS 15 deployment target and the iOS 27 SDK.
+
+These dates and technical requirements must be verified against current official Apple documentation before operational reliance.
+
+The earlier successful staging delivery does not establish compliance with every future production submission requirement.
+
+Toolchain modernization must be explicitly justified and reviewed rather than introduced incidentally during unrelated release-framework work.
+
+*Dependency:* UNR-08.
+
+=== PRD-14: Native-library provenance
+
+Production acceptance must establish the required provenance of the native cryptographic components.
+
+The existing hash-verification mechanisms remain mandatory.
+
+A matching hash establishes the identity of a binary relative to its expected hash.
+
+It does not independently establish:
+
+* Its source-code origin.
+* Its build-environment integrity.
+* Its correspondence to reviewed source code.
+* Its reproducibility.
+
+The required provenance guarantees and verification procedure remain subject to UNR-07.
+
+The implementation must preserve the existing pins while the stronger provenance requirements are investigated.
+
+*Related issue:* #89.
+
+*Dependency:* UNR-07.
+
+=== PRD-15: Production evidence retention
+
+Every production delivery must have durable release evidence.
+
+The evidence must remain retrievable independently of expiring workflow artifacts.
+
+It must identify:
+
+* The applicable authorization.
+* The accepted staging delivery.
+* The production promotion and source identity.
+* The inherited application version and build number.
+* The production APK, AAB and IPA identities.
+* Artifact checksums where applicable.
+* Signing and verification outcomes.
+* Distribution outcomes for each channel.
+* Applicable exceptions and unresolved operational facts.
+
+The signed production APK remains persistently available under DEC-35.
+
+The required retention arrangements for the signed AAB and IPA must be established according to their operational, security and recovery requirements.
+
+Permanent retention of every signed artifact is not automatically required.
+
+Where restricted artifact retention is established, the approved access and protection mechanisms must be applied.
+
+Encrypted retention to named recipients is an available mechanism, not an automatically established requirement for every production artifact.
+
+Production evidence must not contain credential values or private signing material.
+
+*Dependencies:* DEC-23, DEC-35, UNR-01, UNR-02, EXC-10.
+
+=== PRD-16: Replacement of the manual production delivery path
+
+The approved production promotion mechanism supersedes the earlier manual production delivery workflow.
+
+The existing workflow:
+
+[source,text]
+----
+ios-hosted-signing.yml
+----
+
+reportedly supports a manually initiated signing and gated upload operation.
+
+The target production architecture must establish one authoritative production delivery path.
+
+The earlier manual delivery capability must not remain available as an independent alternative capable of bypassing the new production authorization procedure.
+
+Reusable components may remain.
+
+Credential-free diagnostic or preflight capabilities may also remain where useful.
+
+The transition must preserve the existing production restrictions until the replacement mechanism is ready.
+
+Changes to authorization-bound files follow the applicable reviewed implementation procedure.
+
+*Dependency:* Production implementation and cutover, step P9.
+
+=== PRD-17: Production version inheritance
+
+Production inherits the application version and numerical build number from the specifically identified accepted staging delivery.
+
+Production does not:
+
+* Consult the latest development counter as a version authority.
+* Independently select the latest Magic build.
+* Allocate another build number.
+* Increment the development revision.
+* Independently redefine the inherited version information.
+
+The production workflow verifies the inherited version information against trustworthy staging delivery evidence.
+
+Every generated production artifact must carry the authorized inherited version.
+
+The finished artifact version information is independently extracted and verified.
+
+Missing, inconsistent or unverifiable inherited version evidence prevents delivery.
+
+*Dependencies:* DEC-34, DEC-38, WP-C2, WP-C3, `VER-12`, `VER-15`.
+
+=== PRD-18: Common production source
+
+The production APK, AAB and IPA originate from the same fixed, approved application source revision.
+
+All three carry identical application version and numerical build-number information.
+
+Platform-specific implementation, environment configuration and signing differences remain expected.
+
+Production build jobs must not independently select different source revisions.
+
+The production delivery evidence associates each artifact with the common authorized source.
+
+A source discrepancy between the earlier staging APK and staging IPA does not permit corresponding inconsistencies between production artifacts.
+
+The production consistency requirement does not establish that the exact production source was previously functionally tested on both platforms.
+
+That acceptance question remains subject to UNR-06.
+
+Whether a partially successful production delivery may subsequently be completed remains subject to UNR-09.
+
+*Dependencies:* DEC-34, UNR-06, UNR-09.
+
+=== PRD-19: Production distribution
+
+The production infrastructure supports three distinct artifact destinations.
+
+[cols="2,3,4",options="header"]
+|===
+| Artifact | Intended destination | Distribution treatment
+
+| APK
+| Persistent public download, preferably GitHub Releases.
+| Publish only after successful build, verification and applicable production authorization. Maintain availability of the preceding successful APK until replacement publication succeeds.
+
+| AAB
+| Google Play.
+| Deliver through the approved signing and Play upload procedure. The track, rollout and public publication policy must be explicitly established.
+
+| IPA
+| Production application in App Store Connect.
+| Deliver through the approved production signing and upload procedure. Internal TestFlight remains the currently established automated destination.
+|===
+
+Application compilation, signing, verification, upload and public publication are distinct operations.
+
+Successful compilation or signing does not independently authorize publication.
+
+Successful store upload does not establish public availability.
+
+Each destination must preserve its applicable authorization and distribution restrictions.
+
+The exact Android signing and distribution mechanism remains subject to UNR-01 (c).
+
+The coordination of publication across the three destinations remains subject to UNR-09.
+
+*Dependencies:* DEC-34, DEC-35, UNR-01 (c), UNR-09, WP-C3.
+
+=== PRD-20: Partial production delivery and recovery
+
+The production delivery mechanism must recognize that the three distribution destinations operate independently.
+
+A production delivery may experience different outcomes for different artifacts.
+
+The production record must distinguish, where applicable:
+
+* Build completion.
+* Artifact verification.
+* Signing completion.
+* Upload initiation.
+* Upload acceptance.
+* Store processing.
+* Public publication.
+* Failure.
+* Cancellation.
+* Indeterminate external outcome.
+
+A successful delivery of one artifact must not be concealed or misrepresented because another artifact failed.
+
+The recovery mechanism must preserve:
+
+* Explicit release authorization.
+* Build-number consumption guarantees.
+* Version inheritance.
+* Common production source.
+* Durable delivery evidence.
+* Existing successful artifact availability.
+
+The conservative recovery default is a new Magic allocation, new staging cycle, new authorization and new production promotion.
+
+Whether a more targeted recovery or completion procedure is permissible remains subject to UNR-09.
+
+No new retry exception is established by this requirement.
+
+*Dependencies:* UNR-09, `FQ-11`.
+
+== Production requirement implementation register
+
+The production requirements must be incorporated into the applicable enforcement register during implementation.
+
+The register must not introduce another independently maintained normative definition of the same requirements.
+
+[cols="1,4,3",options="header"]
+|===
+| ID | Principal implementation mechanism | Outstanding dependency
+
+| PRD-00
+| Readiness assessment and verification report.
+| Applicable production mechanisms.
+
+| PRD-01
+| Production authorization and promotion gate.
+| WP-C2, UNR-06.
+
+| PRD-02
+| Staging validation acceptance evidence and corresponding gate checks.
+| UNR-06, UNR-08.
+
+| PRD-03
+| Production identity and configuration verification.
+| Production identity confirmation.
+
+| PRD-04
+| Credential-free production native-framework preflight.
+| Applicable framework identity and provenance requirements.
+
+| PRD-05
+| Protected production environment and configuration checker.
+| WP-A2.
+
+| PRD-06
+| Production credential custody arrangement and operator procedure.
+| UNR-02.
+
+| PRD-07
+| Production iOS destination restrictions.
+| Production application identity confirmation.
+
+| PRD-08
+| Production Android build, signing and verification mechanism.
+| UNR-01 (c).
+
+| PRD-09
+| Delivery-consumption verification and store-side prerequisites.
+| `FQ-06`, UNR-09.
+
+| PRD-10
+| Persistent production release publication.
+| WP-C3, `FQ-10`.
+
+| PRD-11
+| Production authorization record and decision template.
+| REC-08, UNR-08.
+
+| PRD-12
+| Production incident-response and corrective-release procedure.
+| UNR-02, UNR-08, UNR-09.
+
+| PRD-13
+| Platform and store compliance verification.
+| UNR-08.
+
+| PRD-14
+| Native-library provenance verification.
+| UNR-07.
+
+| PRD-15
+| Durable production artifact and delivery evidence.
+| WP-C3, applicable retention decisions.
+
+| PRD-16
+| Controlled production workflow replacement.
+| Production implementation and cutover.
+
+| PRD-17
+| Verified staging-to-production version inheritance.
+| WP-C2, WP-C3.
+
+| PRD-18
+| Common source and cross-artifact version verification.
+| Production build implementation.
+
+| PRD-19
+| Controlled distribution mechanisms for each artifact.
+| UNR-01 (c), UNR-09.
+
+| PRD-20
+| Partial delivery accounting and recovery procedure.
+| UNR-09, `FQ-11`.
+|===
+
+The implementation register must identify, for each requirement:
+
+* Its applicable implementation status.
+* Its enforcement mechanism.
+* Its verification evidence.
+* Any remaining technical investigation.
+* Any unresolved CTO decision.
+* Any applicable exception or limitation.
+
+A proposed implementation mechanism must not be marked as verified.
+
+== Framework validation protocol
+
+=== Objective
+
+The production implementation serves as a practical acceptance test of the release-framework documentation.
+
+An appropriately qualified developer or development assistant must be able to understand and implement the production infrastructure from the authoritative repository information without depending on undocumented personal knowledge.
+
+The validation concerns the usability, completeness and consistency of the entire repository-based framework.
+
+The documentation book is its principal human-oriented entry point.
+
+The repository source, machine-readable configuration, existing tests, release evidence and referenced external documentation remain legitimate implementation sources.
+
+The objective is not to reproduce every technical detail in the documentation book itself.
+
+=== Requirement-driven implementation
+
+Before implementing a production mechanism:
+
+. Identify its applicable requirement identifiers.
+. Identify the existing mechanisms that can be reused.
+. Identify the required architectural and operational guarantees.
+. Identify unresolved implementation questions.
+. Identify any outstanding CTO decision necessary for the affected work.
+. Establish the intended verification approach.
+
+Implementation details discovered during development are recorded in the appropriate authoritative location.
+
+The documentation and implementation must remain consistent.
+
+A newly discovered architectural question must not be silently resolved as an incidental implementation detail.
+
+=== Framework defects
+
+A framework defect exists when implementation or operation depends on information that is:
+
+* Missing from the authoritative repository information.
+* Contradictory across authoritative documents.
+* Incorrect or obsolete.
+* Available only through undocumented personal knowledge.
+* Unnecessarily difficult to locate.
+* Insufficient to establish the intended security or operational behavior.
+
+Framework defects may be identified using the notation:
+
+[source,text]
+----
+FW-DEFECT-nn
+----
+
+A framework defect record should identify:
+
+* The affected requirement or operational activity.
+* The missing, contradictory or incorrect information.
+* The source from which the correct information was established.
+* The affected authoritative documentation or configuration.
+* The corresponding correction.
+* The verification of that correction.
+
+Use the existing issue-management infrastructure where practical.
+
+Do not introduce a separate administrative tracking system merely to maintain framework defect identifiers.
+
+=== Use of historical sources
+
+Historical repository records, issue discussions, pull request descriptions, previous implementation evidence and other attributable sources may be consulted.
+
+Their use is not itself a framework defect.
+
+A defect exists when an essential current requirement, operational prerequisite or architectural decision can only be reconstructed from such material because the authoritative framework does not contain or adequately reference it.
+
+Where necessary, the discovered information is reconciled into the appropriate authoritative location.
+
+Historical reasoning must not silently override a subsequent established decision.
+
+Past assistant conversations and personal scratchpads must not remain indispensable operational dependencies.
+
+=== Documentation and implementation reconciliation
+
+When implementation exposes a framework defect:
+
+. Identify the correct requirement or operational fact.
+. Determine whether an existing architectural decision resolves it.
+. Obtain CTO clarification only where a genuine architectural decision is required.
+. Correct the affected authoritative information.
+. Reconcile the implementation and verification mechanisms.
+. Record the closure of the defect.
+
+The correction may be incorporated into the same reviewed implementation change where appropriate.
+
+A separate documentation pull request is not mandatory for every discovered implementation detail.
+
+However, an unresolved architectural ambiguity must be addressed before implementation relies on an assumed decision.
+
+=== Independent usability verification
+
+The operational procedures must be exercised by a qualified reviewer or development assistant that does not depend on the previous implementation conversation.
+
+The verification should use:
+
+* The authoritative repository documentation.
+* Existing source and configuration.
+* The documented prerequisites.
+* The available verification tools.
+* Referenced external technical documentation.
+
+Applicable runbooks are exercised in credential-free dry-run mode.
+
+Missing prerequisites, ambiguous instructions and necessary undocumented deviations are recorded as framework defects.
+
+The use of a new assistant session can demonstrate independence from conversation history.
+
+It does not, by itself, establish independent human security review.
+
+The existing limitation recorded in EXC-08 remains applicable.
+
+=== Readiness report
+
+The production pipeline readiness report must identify:
+
+* The implemented production mechanisms.
+* Coverage of applicable `PRD` requirements.
+* Automatic and human-controlled enforcement.
+* Verification and test evidence.
+* Credential-free production build and preflight outcomes.
+* Production environment configuration.
+* Authorization refusal evidence.
+* Dry-run results.
+* Framework defects and their dispositions.
+* Applicable exceptions and limitations.
+* Outstanding CTO decisions.
+* Operational behavior that has not yet been demonstrated.
+* Any prerequisites preventing actual production release authorization.
+
+The report must distinguish:
+
+* Implemented and verified.
+* Implemented but not operationally verified.
+* Partially implemented.
+* Not implemented.
+* Blocked by an unresolved decision.
+* Not applicable to the current verification scope.
+
+The report must not claim comprehensive production readiness merely because the credential-free tests pass.
+
+CTO acceptance of the readiness report is separate from authorization of a production release.
+
+== Implementation boundaries
+
+The production implementation must preserve the following established constraints:
+
+* Magic remains the sole routine build-number allocation mechanism.
+* Production inherits the specifically accepted staging version.
+* Production artifacts originate from one approved source.
+* Existing authorization and signing isolation guarantees remain applicable.
+* Temporary Apple credential management follows DEC-28.
+* Production signing and publication remain explicitly controlled.
+* Existing branch protection must not be weakened.
+* Temporary staging exceptions do not automatically extend to production.
+* Unresolved CTO decisions must not be silently resolved during implementation.
+
+Production-specific requirements should be implemented through the existing infrastructure wherever practicable.
+
+The production implementation is not an opportunity for unrelated repository restructuring, application modernization or architectural expansion.
+
+Any additional component must be justified by an established requirement or demonstrated implementation obstacle.
+
+== Final production acceptance
+
+The completed production framework must ultimately demonstrate that:
+
+* An authorized staging delivery can be identified and verified.
+* Its version information can be inherited reliably.
+* Production promotion uses the authorized source.
+* Production APK, AAB and IPA artifacts are mutually consistent.
+* Each artifact satisfies its applicable identity, signing and verification requirements.
+* Unauthorized operations fail closed.
+* Authorized delivery follows the established credential-management sequence.
+* Distribution occurs only to the approved destinations.
+* Persistent production APK availability is maintained.
+* Delivery outcomes remain durably retrievable.
+* Failure and interruption behavior is controlled.
+* Temporary credentials are removed and their absence verified.
+* The resulting infrastructure can be understood, maintained and reconstructed from the authoritative repository information.
+
+These properties are demonstrated progressively through implementation, credential-free verification and appropriately authorized operational delivery.
+
+No documentation statement, test result or readiness report substitutes for the explicit authorization required to perform an actual production release.
+
+== References
+
+* xref:ch02-established-decisions.adoc#ch02[Chapter 2]: Established architectural decisions.
+* xref:ch03-unresolved-decisions.adoc#ch03[Chapter 3]: Outstanding CTO decisions.
+* xref:ch04-exceptions-and-reconciliation.adoc#ch04[Chapter 4]: Exceptions and historical reconciliation.
+* xref:ch05-requirements-and-enforcement.adoc#ch05[Chapter 5]: General requirements and enforcement.
+* xref:ch06-document-hierarchy-and-mapping.adoc#ch06[Chapter 6]: Authoritative documentation organization.
+* xref:ch07-machine-readable-state.adoc#ch07[Chapter 7]: Operational data and durable build records.
+* xref:ch08-operator-credential-tool.adoc#ch08[Chapter 8]: Credential management and operator procedure.
+* xref:ch09-migration-sequence.adoc#ch09[Chapter 9]: Implementation sequence and cutover.
+* xref:ch11-build-and-release-architecture.adoc#ch11[Chapter 11]: Build architecture, version inheritance and feasibility investigations.
